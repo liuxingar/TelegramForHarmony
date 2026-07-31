@@ -43,7 +43,7 @@ export default function authServiceTest() {
     it('sends_parameters_on_wait_tdlib_parameters', 0, () => {
       const bridge = new FakeBridge();
       const client = new TdClient(bridge);
-      const auth = new AuthService(client, '/data/test/files');
+      const auth = new AuthService(client, '/data/test/files/tdlib', '/data/test/files');
       client.start();
       pushAuthState(bridge, 'authorizationStateWaitTdlibParameters');
       const sent: TdObject = lastSent(bridge.sent);
@@ -54,7 +54,7 @@ export default function authServiceTest() {
     it('maps_states_to_stages', 0, () => {
       const bridge = new FakeBridge();
       const client = new TdClient(bridge);
-      const auth = new AuthService(client, '/data/test/files');
+      const auth = new AuthService(client, '/data/test/files/tdlib', '/data/test/files');
       const stages: AuthStage[] = [];
       // onStageChange replays the current stage (Init) on registration.
       auth.onStageChange((s: AuthStage) => { stages.push(s); });
@@ -70,7 +70,7 @@ export default function authServiceTest() {
     it('submitPhone_sends_setAuthenticationPhoneNumber', 0, () => {
       const bridge = new FakeBridge();
       const client = new TdClient(bridge);
-      const auth = new AuthService(client, '/data/test/files');
+      const auth = new AuthService(client, '/data/test/files/tdlib', '/data/test/files');
       client.start();
       auth.submitPhone('+8613800138000');
       const sent: TdObject = lastSent(bridge.sent);

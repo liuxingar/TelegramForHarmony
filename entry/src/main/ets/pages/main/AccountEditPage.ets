@@ -2,10 +2,12 @@ import { router, promptAction } from '@kit.ArkUI';
 import { getTdClient } from '../../tdkit/Globals';
 import { TdObject, TdRequest, TdError } from '../../tdkit/TdTypes';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
 
 const CARD_BG: ResourceColor = $r('app.color.surface');
 const CARD_RADIUS: number = 14;
 const BIO_MAX: number = 140;
+const ACCOUNT_LOAD_TIMEOUT_MS: number = 8000;
 
 // 账号 edit page (Telegram-style): first/last name, bio (140 chars), and the
 // read-only personal-info card. ✓ in the header saves via setName/setBio.
@@ -20,64 +22,203 @@ struct AccountEditPage {
   @State phone: string = '';
   @State username: string = '';
   @State birthday: string = '';
+  @State loading: boolean = true;
+  @State loadError: string = '';
+  @State saveError: string = '';
+  @State skeletonBright: boolean = false;
   @State saving: boolean = false;
+  @State leavingPage: boolean = false;
+  @State discardDialogOpen: boolean = false;
   private origFirst: string = '';
   private origLast: string = '';
   private origBio: string = '';
+  private leaveTimer: number = -1;
+  private loadSequence: number = 0;
+  private skeletonTimer: number = -1;
 
   aboutToAppear(): void {
-    const req: TdRequest = { '@type': 'getMe' };
-    getTdClient().send(req).then((me: TdObject) => {
-      const myId = (me['id'] as number | undefined) ?? 0;
-      if (myId === 0) {
+    this.loadProfile();
+  }
+
+  aboutToDisappear(): void {
+    this.loadSequence++;
+    this.stopSkeletonPulse();
+    if (this.leaveTimer !== -1) {
+      clearTimeout(this.leaveTimer);
+      this.leaveTimer = -1;
+    }
+    this.leavingPage = false;
+    this.discardDialogOpen = false;
+  }
+
+  private async loadProfile(): Promise<void> {
+    const sequence = ++this.loadSequence;
+    this.loading = true;
+    this.loadError = '';
+    this.saveError = '';
+    this.startSkeletonPulse();
+    try {
+      const me = await getTdClient().send(
+        { '@type': 'getMe' } as TdRequest,
+        ACCOUNT_LOAD_TIMEOUT_MS
+      );
+      if (sequence !== this.loadSequence) {
         return;
       }
-      // getUser (not the getMe payload): same path the profile pages use —
-      // guarantees usernames and the rest are populated.
-      const ureq: TdRequest = { '@type': 'getUser' };
-      ureq['user_id'] = myId;
-      getTdClient().send(ureq).then((user: TdObject) => {
-        this.firstName = (user['first_name'] as string | undefined) ?? '';
-        this.lastName = (user['last_name'] as string | undefined) ?? '';
-        this.origFirst = this.firstName;
-        this.origLast = this.lastName;
-        this.phone = (user['phone_number'] as string | undefined) ?? '';
-        const un = user['usernames'] as TdObject | undefined;
-        const actives = un !== undefined ? ((un['active_usernames'] as string[] | undefined) ?? []) : [];
-        this.username = actives.length > 0 ? actives[0] : '';
-        console.info(`AccountEditPage: user loaded, username=${this.username}, hasUsernames=${un !== undefined}`);
-      }).catch((e: TdError) => {
-        console.error(`AccountEditPage.getUser failed: ${e.message}`);
-      });
-      const full: TdRequest = { '@type': 'getUserFullInfo' };
-      full['user_id'] = myId;
-      getTdClient().send(full).then((fi: TdObject) => {
-        const bioFt = fi['bio'] as TdObject | undefined;
-        this.bio = bioFt !== undefined ? ((bioFt['text'] as string | undefined) ?? '') : '';
-        this.origBio = this.bio;
-        const bd = fi['birthdate'] as TdObject | undefined;
-        if (bd !== undefined) {
-          const day = (bd['day'] as number | undefined) ?? 0;
-          const month = (bd['month'] as number | undefined) ?? 0;
-          this.birthday = (day > 0 && month > 0) ? `${month}月${day}日` : '';
-        }
-        console.info(`AccountEditPage: full loaded, bio=${this.bio.length} chars, birthday=${this.birthday}`);
-      }).catch((e: TdError) => {
-        console.error(`AccountEditPage.getUserFullInfo failed: ${e.message}`);
-      });
-    }).catch((e: TdError) => {
-      console.error(`AccountEditPage.getMe failed: ${e.message}`);
+      const myId = (me['id'] as number | undefined) ?? 0;
+      if (myId === 0) {
+        throw new Error('current user unavailable');
+      }
+      // getUser and getUserFullInfo must both succeed before editing is enabled.
+      // Otherwise an empty field could overwrite data that merely failed to load.
+      const userRequest: TdRequest = { '@type': 'getUser' };
+      userRequest['user_id'] = myId;
+      const fullRequest: TdRequest = { '@type': 'getUserFullInfo' };
+      fullRequest['user_id'] = myId;
+      const values: TdObject[] = await Promise.all([
+        getTdClient().send(userRequest, ACCOUNT_LOAD_TIMEOUT_MS),
+        getTdClient().send(fullRequest, ACCOUNT_LOAD_TIMEOUT_MS)
+      ]);
+      if (sequence !== this.loadSequence) {
+        return;
+      }
+      const user = values[0];
+      const fullInfo = values[1];
+      this.firstName = (user['first_name'] as string | undefined) ?? '';
+      this.lastName = (user['last_name'] as string | undefined) ?? '';
+      this.phone = (user['phone_number'] as string | undefined) ?? '';
+      const usernames = user['usernames'] as TdObject | undefined;
+      const activeUsernames = usernames !== undefined
+        ? ((usernames['active_usernames'] as string[] | undefined) ?? []) : [];
+      this.username = activeUsernames.length > 0 ? activeUsernames[0] : '';
+      const bioFormatted = fullInfo['bio'] as TdObject | undefined;
+      this.bio = bioFormatted !== undefined
+        ? ((bioFormatted['text'] as string | undefined) ?? '') : '';
+      const birthdate = fullInfo['birthdate'] as TdObject | undefined;
+      if (birthdate !== undefined) {
+        const day = (birthdate['day'] as number | undefined) ?? 0;
+        const month = (birthdate['month'] as number | undefined) ?? 0;
+        this.birthday = day > 0 && month > 0 ? `${month}月${day}日` : '';
+      } else {
+        this.birthday = '';
+      }
+      this.origFirst = this.firstName;
+      this.origLast = this.lastName;
+      this.origBio = this.bio;
+      this.loading = false;
+      this.stopSkeletonPulse();
+    } catch (caught) {
+      if (sequence !== this.loadSequence) {
+        return;
+      }
+      const error = caught as Error;
+      console.error(`AccountEditPage.loadProfile failed: ${error.message}`);
+      this.loading = false;
+      this.loadError = '账号资料加载失败';
+      this.stopSkeletonPulse();
+    }
+  }
+
+  private startSkeletonPulse(): void {
+    if (this.skeletonTimer !== -1 ||
+      powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 1) === 0) {
+      return;
+    }
+    this.skeletonTimer = setInterval((): void => {
+      this.skeletonBright = !this.skeletonBright;
+    }, 680);
+  }
+
+  private stopSkeletonPulse(): void {
+    if (this.skeletonTimer !== -1) {
+      clearInterval(this.skeletonTimer);
+      this.skeletonTimer = -1;
+    }
+    this.skeletonBright = false;
+  }
+
+  private hasUnsavedChanges(): boolean {
+    return this.firstName !== this.origFirst ||
+      this.lastName !== this.origLast ||
+      this.bio !== this.origBio;
+  }
+
+  private leavePage(): void {
+    if (this.leavingPage) {
+      return;
+    }
+    this.leavingPage = true;
+    this.leaveTimer = setTimeout((): void => {
+      this.leaveTimer = -1;
+      this.leavingPage = false;
+    }, 500);
+    router.back();
+  }
+
+  private requestBack(): void {
+    if (this.saving || this.leavingPage || this.discardDialogOpen) {
+      return;
+    }
+    if (!this.hasUnsavedChanges()) {
+      this.leavePage();
+      return;
+    }
+    this.discardDialogOpen = true;
+    promptAction.showDialog({
+      title: '放弃修改？',
+      message: '尚未保存的姓名或个人简介将会丢失。',
+      buttons: [
+        { text: '继续编辑', color: COLOR_TEXT_SECONDARY as string },
+        { text: '放弃修改', color: '#E64646' }
+      ]
+    }).then((result: promptAction.ShowDialogSuccessResponse): void => {
+      this.discardDialogOpen = false;
+      if (result.index === 1) {
+        this.leavePage();
+      }
+    }).catch((): void => {
+      this.discardDialogOpen = false;
     });
   }
 
+  @Styles
+  headerActionNormalStyle() {
+    .backgroundColor(Color.Transparent)
+    .opacity(1)
+    .scale({ x: 1, y: 1 })
+  }
+
+  @Styles
+  headerActionPressedStyle() {
+    .backgroundColor($r('app.color.surface_alt'))
+    .opacity(0.72)
+    .scale({ x: 0.92, y: 0.92 })
+  }
+
+  @Styles
+  retryActionNormalStyle() {
+    .backgroundColor('#143478F6')
+    .opacity(1)
+    .scale({ x: 1, y: 1 })
+  }
+
+  @Styles
+  retryActionPressedStyle() {
+    .backgroundColor('#243478F6')
+    .opacity(0.72)
+    .scale({ x: 0.96, y: 0.96 })
+  }
+
   private save(): void {
-    if (this.saving) {
+    if (this.loading || this.loadError !== '' || this.saving ||
+      this.leavingPage || this.discardDialogOpen) {
       return;
     }
     if (this.firstName.trim() === '') {
       promptAction.showToast({ message: '名字不能为空', duration: 1500 });
       return;
     }
+    this.saveError = '';
     this.saving = true;
     const jobs: Promise<TdObject>[] = [];
     if (this.firstName !== this.origFirst || this.lastName !== this.origLast) {
@@ -93,18 +234,180 @@ struct AccountEditPage {
     }
     if (jobs.length === 0) {
       this.saving = false;
-      router.back();
+      this.leavePage();
       return;
     }
     Promise.all(jobs).then(() => {
       this.saving = false;
       promptAction.showToast({ message: '已保存', duration: 1200 });
-      router.back();
+      this.origFirst = this.firstName;
+      this.origLast = this.lastName;
+      this.origBio = this.bio;
+      this.leavePage();
     }).catch((e: TdError) => {
       this.saving = false;
+      this.saveError = '保存未全部完成，请确认当前内容后重试';
       console.error(`AccountEditPage.save failed: ${e.message}`);
-      promptAction.showToast({ message: `保存失败：${e.message}`, duration: 2000 });
+      promptAction.showToast({ message: '保存失败，请检查网络后重试', duration: 2000 });
     });
+  }
+
+  @Builder
+  loadingState() {
+    Column({ space: 12 }) {
+      Row({ space: 14 }) {
+        Column({ space: 11 }) {
+          Rect({ width: 88, height: 11, radius: 5.5 }).fill($r('app.color.surface_alt'));
+          Rect({ width: '82%', height: 16, radius: 8 }).fill($r('app.color.surface_alt'));
+          Divider().color($r('app.color.divider')).strokeWidth(0.7);
+          Rect({ width: '68%', height: 16, radius: 8 }).fill($r('app.color.surface_alt'));
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1);
+        LoadingProgress().width(24).height(24).color(COLOR_PRIMARY);
+      }
+      .width('100%')
+      .height(132)
+      .padding({ left: 16, right: 16, top: 16, bottom: 16 })
+      .backgroundColor(CARD_BG)
+      .borderRadius(CARD_RADIUS)
+      .alignItems(VerticalAlign.Center);
+
+      Column({ space: 12 }) {
+        Rect({ width: '86%', height: 16, radius: 8 }).fill($r('app.color.surface_alt'));
+        Rect({ width: '46%', height: 10, radius: 5 }).fill($r('app.color.surface_alt'));
+      }
+      .width('100%')
+      .height(86)
+      .padding({ left: 16, right: 16 })
+      .backgroundColor(CARD_BG)
+      .borderRadius(CARD_RADIUS)
+      .alignItems(HorizontalAlign.Start)
+      .justifyContent(FlexAlign.Center);
+
+      Row({ space: 10 }) {
+        LoadingProgress().width(18).height(18).color(COLOR_PRIMARY);
+        Text('正在安全加载账号资料…')
+          .fontSize(13)
+          .fontColor(COLOR_TEXT_SECONDARY);
+      }
+      .height(38);
+    }
+    .width('calc(100% - 24vp)')
+    .margin({ left: 12, right: 12, top: 8 })
+    .opacity(this.skeletonBright ? 0.56 : 0.92)
+    .animation({
+      duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 640),
+      curve: Curve.EaseInOut
+    })
+    .accessibilityText('正在加载账号资料')
+    .transition(TransitionEffect.OPACITY.animation({
+      duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 160),
+      curve: Curve.EaseOut
+    }));
+  }
+
+  @Builder
+  loadErrorState() {
+    Column({ space: 9 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        Circle({ width: 62, height: 62 }).fill('#18E64646');
+        SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+          .fontSize(30)
+          .fontColor(['#E64646']);
+      }
+      Text(this.loadError)
+        .fontSize(18)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(COLOR_TEXT_PRIMARY);
+      Text('没有显示空白表单，避免误操作覆盖原资料')
+        .fontSize(13)
+        .fontColor(COLOR_TEXT_SECONDARY)
+        .textAlign(TextAlign.Center);
+      Row({ space: 6 }) {
+        SymbolGlyph($r('sys.symbol.arrow_clockwise'))
+          .fontSize(15)
+          .fontColor([COLOR_PRIMARY]);
+        Text('重新加载')
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(COLOR_PRIMARY);
+      }
+      .height(40)
+      .padding({ left: 17, right: 17 })
+      .margin({ top: 5 })
+      .borderRadius(20)
+      .stateStyles({
+        normal: this.retryActionNormalStyle,
+        pressed: this.retryActionPressedStyle
+      })
+      .enabled(!this.leavingPage)
+      .accessibilityText('重新加载账号资料')
+      .onClick((): void => { this.loadProfile(); });
+    }
+    .layoutWeight(1)
+    .width('calc(100% - 24vp)')
+    .margin({ left: 12, right: 12, top: 8, bottom: this.bottomSafe + 24 })
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor(CARD_BG)
+    .borderRadius(CARD_RADIUS)
+    .transition(TransitionEffect.OPACITY
+      .combine(TransitionEffect.scale({ x: 0.97, y: 0.97 }))
+      .animation({
+        duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+        curve: Curve.EaseOut
+      }));
+  }
+
+  @Builder
+  saveErrorBanner() {
+    Row({ space: 10 }) {
+      SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+        .fontSize(20)
+        .fontColor(['#E64646']);
+      Column({ space: 2 }) {
+        Text('保存失败')
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(COLOR_TEXT_PRIMARY);
+        Text(this.saveError)
+          .fontSize(12)
+          .fontColor(COLOR_TEXT_SECONDARY);
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1);
+      Row({ space: 4 }) {
+        SymbolGlyph($r('sys.symbol.arrow_clockwise'))
+          .fontSize(13)
+          .fontColor([COLOR_PRIMARY]);
+        Text('重试')
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(COLOR_PRIMARY);
+      }
+      .height(34)
+      .padding({ left: 10, right: 10 })
+      .borderRadius(17)
+      .stateStyles({
+        normal: this.retryActionNormalStyle,
+        pressed: this.retryActionPressedStyle
+      })
+      .enabled(!this.saving)
+      .accessibilityText('重新保存账号资料')
+      .onClick((): void => { this.save(); });
+    }
+    .width('100%')
+    .height(66)
+    .padding({ left: 13, right: 10 })
+    .backgroundColor('#10E64646')
+    .border({ width: 0.7, color: '#30E64646' })
+    .borderRadius(CARD_RADIUS)
+    .transition(TransitionEffect.OPACITY
+      .combine(TransitionEffect.translate({ y: -5 }))
+      .animation({
+        duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+        curve: Curve.EaseOut
+      }));
   }
 
   @Builder
@@ -229,80 +532,129 @@ struct AccountEditPage {
 
   build() {
     Column() {
-      Row({ space: 16 }) {
-        SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(26).fontColor([COLOR_TEXT_PRIMARY])
-          .onClick(() => { router.back(); });
+      Row({ space: 8 }) {
+        Row() {
+          SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(25).fontColor([COLOR_TEXT_PRIMARY]);
+        }
+        .width(44).height(44).borderRadius(22)
+        .justifyContent(FlexAlign.Center)
+        .stateStyles({
+          normal: this.headerActionNormalStyle,
+          pressed: this.headerActionPressedStyle
+        })
+        .enabled(!this.saving && !this.leavingPage && !this.discardDialogOpen)
+        .accessibilityText('返回设置')
+        .onClick((): void => { this.requestBack(); });
         Text('账号').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
           .layoutWeight(1);
         if (this.saving) {
           LoadingProgress().width(24).height(24).color(COLOR_PRIMARY);
         } else {
-          SymbolGlyph($r('sys.symbol.checkmark')).fontSize(24).fontColor([COLOR_PRIMARY])
-            .onClick(() => { this.save(); });
+          Row() {
+            SymbolGlyph($r('sys.symbol.checkmark')).fontSize(23).fontColor([COLOR_PRIMARY]);
+          }
+          .width(44).height(44).borderRadius(22)
+          .justifyContent(FlexAlign.Center)
+          .stateStyles({
+            normal: this.headerActionNormalStyle,
+            pressed: this.headerActionPressedStyle
+          })
+          .enabled(!this.loading && this.loadError === '' &&
+            !this.leavingPage && !this.discardDialogOpen)
+          .opacity(!this.loading && this.loadError === '' ? 1 : 0.34)
+          .accessibilityText('保存账号资料')
+          .onClick((): void => { this.save(); });
         }
       }
-      .width('100%').height(48).padding({ left: 16, right: 16 })
+      .width('100%').height(56).padding({ left: 8, right: 8 })
       .alignItems(VerticalAlign.Center);
 
-      Scroll() {
-        Column({ space: 0 }) {
-          // 你的姓名
-          Column() {
-            this.sectionLabel('你的姓名');
-            TextInput({ text: this.firstName, placeholder: '名字' })
-              .fontSize(17).backgroundColor(Color.Transparent)
-              .padding({ left: 16, right: 16, top: 10, bottom: 10 })
-              .onChange((v: string) => { this.firstName = v; });
-            Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 16, right: 16 });
-            TextInput({ text: this.lastName, placeholder: '姓' })
-              .fontSize(17).backgroundColor(Color.Transparent)
-              .padding({ left: 16, right: 16, top: 10, bottom: 10 })
-              .onChange((v: string) => { this.lastName = v; });
-          }
-          .width('100%').backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
-          .padding({ bottom: 4 })
-          .margin({ left: 12, right: 12, top: 8 });
-
-          // 个人简介
-          Column() {
-            Row() {
-              TextInput({ text: this.bio, placeholder: '个人简介' })
-                .fontSize(17).backgroundColor(Color.Transparent)
-                .padding({ left: 16, right: 8, top: 12, bottom: 12 })
-                .maxLength(BIO_MAX)
-                .layoutWeight(1)
-                .onChange((v: string) => { this.bio = v; });
-              Text(`${BIO_MAX - this.bio.length}`)
-                .fontSize(15).fontColor(COLOR_TEXT_SECONDARY).margin({ right: 16 });
-            }.width('100%').alignItems(VerticalAlign.Center);
-          }
-          .width('100%').backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
-          .margin({ left: 12, right: 12, top: 14 });
-          Text('关于您自己的文字介绍。')
-            .fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
-            .width('100%').padding({ left: 24, right: 24, top: 6 });
-
-          // 个人信息（只读）
-          Column() {
-            this.sectionLabel('个人信息');
-            this.phoneRow();
-            Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 64 });
-            this.usernameRow();
-            Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 64 });
-            this.birthdayRow();
-          }
-          .width('100%').backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
-          .padding({ bottom: 4 })
-          .margin({ left: 12, right: 12, top: 14 });
+      if (this.loading) {
+        Column() {
+          this.loadingState();
         }
+        .layoutWeight(1)
+        .width('100%');
+      } else if (this.loadError !== '') {
+        this.loadErrorState();
+      } else {
+        Scroll() {
+          Column({ space: 0 }) {
+            if (this.saveError !== '') {
+              Column() {
+                this.saveErrorBanner();
+              }
+              .width('100%')
+              .padding({ left: 12, right: 12, top: 8 });
+            }
+
+            // 你的姓名
+            Column() {
+              this.sectionLabel('你的姓名');
+              TextInput({ text: this.firstName, placeholder: '名字' })
+                .fontSize(17).backgroundColor(Color.Transparent)
+                .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+                .onChange((v: string) => {
+                  this.firstName = v;
+                  this.saveError = '';
+                });
+              Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 16, right: 16 });
+              TextInput({ text: this.lastName, placeholder: '姓' })
+                .fontSize(17).backgroundColor(Color.Transparent)
+                .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+                .onChange((v: string) => {
+                  this.lastName = v;
+                  this.saveError = '';
+                });
+            }
+            .width('100%').backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
+            .padding({ bottom: 4 })
+            .margin({ left: 12, right: 12, top: 8 });
+
+            // 个人简介
+            Column() {
+              Row() {
+                TextInput({ text: this.bio, placeholder: '个人简介' })
+                  .fontSize(17).backgroundColor(Color.Transparent)
+                  .padding({ left: 16, right: 8, top: 12, bottom: 12 })
+                  .maxLength(BIO_MAX)
+                  .layoutWeight(1)
+                  .onChange((v: string) => {
+                    this.bio = v;
+                    this.saveError = '';
+                  });
+                Text(`${BIO_MAX - this.bio.length}`)
+                  .fontSize(15).fontColor(COLOR_TEXT_SECONDARY).margin({ right: 16 });
+              }.width('100%').alignItems(VerticalAlign.Center);
+            }
+            .width('100%').backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
+            .margin({ left: 12, right: 12, top: 14 });
+            Text('关于您自己的文字介绍。')
+              .fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
+              .width('100%').padding({ left: 24, right: 24, top: 6 });
+
+            // 个人信息（只读）
+            Column() {
+              this.sectionLabel('个人信息');
+              this.phoneRow();
+              Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 64 });
+              this.usernameRow();
+              Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 64 });
+              this.birthdayRow();
+            }
+            .width('100%').backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
+            .padding({ bottom: 4 })
+            .margin({ left: 12, right: 12, top: 14 });
+          }
+          .width('100%')
+          .padding({ bottom: this.bottomSafe + 24 });
+        }
+        .layoutWeight(1)
         .width('100%')
-        .padding({ bottom: this.bottomSafe + 24 });
+        .align(Alignment.Top)
+        .edgeEffect(EdgeEffect.Spring)
+        .scrollBar(BarState.Off);
       }
-      .layoutWeight(1)
-      .width('100%')
-      .align(Alignment.Top)
-      .edgeEffect(EdgeEffect.Spring)
-      .scrollBar(BarState.Off);
     }
     .width('100%').height('100%')
     .backgroundColor($r('app.color.page_bg'))

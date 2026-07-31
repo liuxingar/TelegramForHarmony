@@ -19,6 +19,8 @@ export interface MemberItem {
 // Data assembly for the group/channel detail page (ChatProfilePage) — mirrors
 // ProfileStore's subscribe/notify + download patterns.
 export class ChatProfileStore {
+  loadState: string = 'loading'; // loading | ready | error
+  errorText: string = '';
   title: string = '';
   initials: string = '?';
   avatarPath: string = '';
@@ -30,6 +32,8 @@ export class ChatProfileStore {
   isMuted: boolean = false;
   canManageVideoChats: boolean = false;
   liveGroupCallId: number = 0;
+  membershipState: string = 'checking'; // checking | writable | joinable | blocked
+  joinByRequest: boolean = false;
   members: MemberItem[] = [];
 
   private client: TdClient;
@@ -141,7 +145,7 @@ export class ChatProfileStore {
   private loadChat(): void {
     const req: TdRequest = { '@type': 'getChat' };
     req['chat_id'] = this.chatId;
-    this.send(req, 'getChat', (chat: TdObject) => {
+    this.client.send(req).then((chat: TdObject): void => {
       this.title = (chat['title'] as string | undefined) ?? '';
       this.initials = this.title.length > 0 ? this.title.substring(0, 1).toUpperCase() : '?';
       const photo = chat['photo'] as TdObject | undefined;
@@ -159,6 +163,13 @@ export class ChatProfileStore {
         this.basicGroupId = ((type as TdObject)['basic_group_id'] as number | undefined) ?? 0;
         this.loadBasicGroup();
       }
+      this.loadState = 'ready';
+      this.errorText = '';
+      this.notify();
+    }).catch((e: TdError): void => {
+      console.error(`ChatProfileStore.getChat failed: ${e.message}`);
+      this.loadState = 'error';
+      this.errorText = '无法加载此频道或群组的详情';
       this.notify();
     });
   }
@@ -180,6 +191,16 @@ export class ChatProfileStore {
 
   private applyMemberStatus(status: TdObject | undefined): void {
     const type = (status?.['@type'] as string | undefined) ?? '';
+    if (type === 'chatMemberStatusLeft') {
+      this.membershipState = 'joinable';
+    } else if (type === 'chatMemberStatusRestricted') {
+      const isMember = (status?.['is_member'] as boolean | undefined) ?? false;
+      this.membershipState = isMember ? 'writable' : 'joinable';
+    } else if (type === 'chatMemberStatusBanned') {
+      this.membershipState = 'blocked';
+    } else if (type !== '') {
+      this.membershipState = 'writable';
+    }
     if (type === 'chatMemberStatusCreator') {
       this.canManageVideoChats = true;
       return;
@@ -220,6 +241,7 @@ export class ChatProfileStore {
       full['supergroup_id'] = this.supergroupId;
       this.send(full, 'getSupergroupFullInfo', (fi: TdObject) => {
         this.description = (fi['description'] as string | undefined) ?? '';
+        this.joinByRequest = (fi['join_by_request'] as boolean | undefined) ?? false;
         this.parsePhotoAnimation(fi['photo'] as TdObject | undefined);
         const memberCount = (fi['member_count'] as number | undefined) ?? 0;
         if (memberCount > 0) {

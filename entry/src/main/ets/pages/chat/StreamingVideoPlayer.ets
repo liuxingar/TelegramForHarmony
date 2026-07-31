@@ -32,6 +32,7 @@ const HEADSET_DEVICE_TYPES: audio.DeviceType[] = [
 const SPEEDS: string[] = ['0.5', '1.0', '1.5', '2.0'];
 const SPEED_LABELS: string[] = ['0.5x', '1.0x', '1.5x', '2.0x'];
 const DEFAULT_SPEED_IDX: number = 1;
+const QUICK_SEEK_MS: number = 15_000;
 let nextPlayerInstanceId: number = 1;
 
 // mm:ss (or h:mm:ss for videos over an hour) for the time labels.
@@ -63,11 +64,17 @@ export struct StreamingVideoPlayer {
   @Prop mimeType: string = '';
   @Prop videoWidth: number = 0;
   @Prop videoHeight: number = 0;
+  @Prop localPath: string = '';
+  @Prop posterPath: string = '';
   @Prop showControls: boolean = true;
+  @Prop landscape: boolean = false;
   @StorageProp('topSafeHeight') topSafe: number = 0;
+  @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   onBackgroundTap: () => void = (): void => {};
   onSwipeNext: () => void = (): void => {};
   onSwipePrev: () => void = (): void => {};
+  onOrientationChange: (landscape: boolean) => void =
+    (_landscape: boolean): void => {};
   private player: IjkMediaPlayer | null = null;
   private session: VideoStreamSession | null = null;
   private rangeServer: VideoRangeServer | null = null;
@@ -75,8 +82,18 @@ export struct StreamingVideoPlayer {
   private routingManager: audio.AudioRoutingManager | null = null;
   private deviceChangeCb: ((change: audio.DeviceChangeAction) => void) | null = null;
   private progressTimer: number = -1;
+  private seekFeedbackTimer: number = -1;
+  private speedFeedbackTimer: number = -1;
+  private retryTimer: number = -1;
+  private firstFrameTimer: number = -1;
+  private surfaceContext: object | null = null;
+  private active: boolean = true;
   private readonly playerInstanceId: number = nextPlayerInstanceId++;
   @State status: string = '正在缓冲...';
+  @State hasError: boolean = false;
+  @State errorDetail: string = '';
+  @State isPrepared: boolean = false;
+  @State videoVisible: boolean = false;
   @State bufferedPercent: number = 0;
   // Live download throughput (bytes/sec) shown in the control bar; 0 hides it
   // (fully downloaded or stalled). Sampled from the buffered-byte deltas.
@@ -93,8 +110,25 @@ export struct StreamingVideoPlayer {
   @State decodedAspectRatio: number = 0;
   @State viewportWidth: number = 1;
   @State viewportHeight: number = 1;
+  @State seekFeedbackSide: number = 0; // -1 = rewind, 1 = forward
+  @State seekFeedbackVisible: boolean = false;
+  @State speedFeedbackVisible: boolean = false;
+  @State speedFeedbackText: string = '';
+
+  aboutToAppear(): void {
+    this.active = true;
+    if (this.surfaceContext !== null && this.player === null) {
+      this.retryTimer = setTimeout((): void => {
+        this.retryTimer = -1;
+        if (this.active && this.surfaceContext !== null) {
+          this.initPlayer(this.surfaceContext);
+        }
+      }, 0);
+    }
+  }
 
   aboutToDisappear(): void {
+    this.active = false;
     this.release();
   }
 
@@ -135,6 +169,22 @@ export struct StreamingVideoPlayer {
   private release(): void {
     this.cleanupAudioDeviceListener();
     this.stopProgressPolling();
+    if (this.seekFeedbackTimer !== -1) {
+      clearTimeout(this.seekFeedbackTimer);
+      this.seekFeedbackTimer = -1;
+    }
+    if (this.speedFeedbackTimer !== -1) {
+      clearTimeout(this.speedFeedbackTimer);
+      this.speedFeedbackTimer = -1;
+    }
+    if (this.retryTimer !== -1) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = -1;
+    }
+    if (this.firstFrameTimer !== -1) {
+      clearTimeout(this.firstFrameTimer);
+      this.firstFrameTimer = -1;
+    }
     if (this.progressUnsub !== null) {
       this.progressUnsub();
       this.progressUnsub = null;
@@ -161,45 +211,62 @@ export struct StreamingVideoPlayer {
   }
 
   private async initPlayer(context: object): Promise<void> {
-    if (this.fileId === 0 || this.player !== null || this.session !== null) {
+    if (!this.active || this.player !== null || this.session !== null) {
       return;
     }
-    if (this.fileSize <= 0) {
-      this.status = '无法获取视频大小';
+    if (this.localPath === '' && this.fileId === 0) {
+      this.showError('视频文件不可用');
       return;
     }
-    this.status = '正在缓冲...';
+    if (this.localPath === '' && this.fileSize <= 0) {
+      this.showError('无法获取视频大小');
+      return;
+    }
+    this.surfaceContext = context;
+    this.hasError = false;
+    this.errorDetail = '';
+    this.isPrepared = false;
+    this.videoVisible = false;
+    this.status = '正在准备视频';
+    this.bufferedPercent = this.localPath !== '' ? 100 : 0;
+    this.downloadSpeed = 0;
+    this.lastBufferedBytes = 0;
+    this.lastSpeedSampleMs = 0;
     this.setupAudioDeviceListener();
-    const session = new VideoStreamSession(getTdClient(), this.fileId, this.fileSize);
-    this.session = session;
-    this.progressUnsub = session.subscribeProgress((buffered: number, total: number): void => {
-      this.bufferedPercent = total > 0 ? Math.min(100, Math.floor((buffered / total) * 100)) : 0;
-      // Throughput from the buffered-byte delta between samples (>=400ms apart
-      // to smooth out bursty TDLib updates). Fully-downloaded → 0 (hidden).
-      const now = Date.now();
-      if (total > 0 && buffered >= total) {
-        this.downloadSpeed = 0;
-      } else if (this.lastSpeedSampleMs === 0) {
-        this.lastSpeedSampleMs = now;
-        this.lastBufferedBytes = buffered;
-      } else {
-        const dtMs = now - this.lastSpeedSampleMs;
-        if (dtMs >= 400) {
-          const dBytes = buffered - this.lastBufferedBytes;
-          this.downloadSpeed = dBytes > 0 ? (dBytes / dtMs) * 1000 : 0;
-          this.lastSpeedSampleMs = now;
-          this.lastBufferedBytes = buffered;
-        }
-      }
-    });
-    session.start();
+    let sourceUrl: string = this.localPath;
+    let session: VideoStreamSession | null = null;
     try {
-      const rangeServer = new VideoRangeServer(session, this.fileId, this.fileSize, this.mimeType);
-      this.rangeServer = rangeServer;
-      const sourceUrl = await rangeServer.start();
-      if (this.session !== session) {
-        rangeServer.close();
-        return;
+      if (sourceUrl === '') {
+        session = new VideoStreamSession(getTdClient(), this.fileId, this.fileSize);
+        this.session = session;
+        this.progressUnsub = session.subscribeProgress((buffered: number, total: number): void => {
+          this.bufferedPercent = total > 0 ? Math.min(100, Math.floor((buffered / total) * 100)) : 0;
+          // Throughput from the buffered-byte delta between samples (>=400ms apart
+          // to smooth out bursty TDLib updates). Fully-downloaded → 0 (hidden).
+          const now = Date.now();
+          if (total > 0 && buffered >= total) {
+            this.downloadSpeed = 0;
+          } else if (this.lastSpeedSampleMs === 0) {
+            this.lastSpeedSampleMs = now;
+            this.lastBufferedBytes = buffered;
+          } else {
+            const dtMs = now - this.lastSpeedSampleMs;
+            if (dtMs >= 400) {
+              const dBytes = buffered - this.lastBufferedBytes;
+              this.downloadSpeed = dBytes > 0 ? (dBytes / dtMs) * 1000 : 0;
+              this.lastSpeedSampleMs = now;
+              this.lastBufferedBytes = buffered;
+            }
+          }
+        });
+        session.start();
+        const rangeServer = new VideoRangeServer(session, this.fileId, this.fileSize, this.mimeType);
+        this.rangeServer = rangeServer;
+        sourceUrl = await rangeServer.start();
+        if (!this.active || this.session !== session) {
+          rangeServer.close();
+          return;
+        }
       }
       const componentId = this.componentId();
       const player = new IjkMediaPlayer(componentId);
@@ -212,6 +279,8 @@ export struct StreamingVideoPlayer {
             return;
           }
           this.status = '';
+          this.hasError = false;
+          this.isPrepared = true;
           this.durationMs = Math.max(0, player.getDuration());
           player.setSpeed(SPEEDS[this.speedIdx]);
           player.start();
@@ -236,16 +305,27 @@ export struct StreamingVideoPlayer {
       const infoListener: OnInfoListener = {
         onInfo: (what: number, extra: number): void => {
           if (what === 701) {
-            this.status = '正在缓冲...';
+            this.status = '正在缓冲';
           } else if (what === 702 || what === 3) {
             this.status = '';
+            if (what === 3 && this.firstFrameTimer === -1) {
+              // IJK's rendering-start event can arrive one compositor frame
+              // before the Surface contains the decoded image. Leave the
+              // poster in place through that gap.
+              this.firstFrameTimer = setTimeout((): void => {
+                this.firstFrameTimer = -1;
+                if (this.player === player) {
+                  this.videoVisible = true;
+                }
+              }, 80);
+            }
           }
         }
       };
       const errorListener: OnErrorListener = {
         onError: (what: number, extra: number): void => {
-          this.status = '播放失败';
           this.isPlaying = false;
+          this.showError('播放失败，请稍后重试');
           console.error(`StreamingVideoPlayer error: what=${what}, extra=${extra}`);
         }
       };
@@ -269,14 +349,46 @@ export struct StreamingVideoPlayer {
       player.setDataSource(sourceUrl);
       player.prepareAsync();
     } catch (e) {
-      this.status = '播放失败';
       console.error(`StreamingVideoPlayer.init failed: ${e}`);
       this.release();
+      this.showError('视频加载失败，请检查网络后重试');
     }
   }
 
+  private showError(detail: string): void {
+    this.status = '';
+    this.hasError = true;
+    this.errorDetail = detail;
+    this.isPrepared = false;
+    this.videoVisible = false;
+    this.isPlaying = false;
+  }
+
+  private retry(): void {
+    if (this.surfaceContext === null || !this.active) {
+      return;
+    }
+    const context = this.surfaceContext;
+    this.release();
+    this.hasError = false;
+    this.errorDetail = '';
+    this.status = '正在重新连接';
+    this.isCompleted = false;
+    this.currentTimeMs = 0;
+    this.retryTimer = setTimeout((): void => {
+      this.retryTimer = -1;
+      if (this.active) {
+        this.initPlayer(context);
+      }
+    }, 100);
+  }
+
   private togglePlay(): void {
-    if (this.player === null) {
+    if (this.player === null || this.hasError || !this.isPrepared) {
+      return;
+    }
+    if (this.isCompleted) {
+      this.replay();
       return;
     }
     if (this.isPlaying) {
@@ -299,6 +411,42 @@ export struct StreamingVideoPlayer {
     this.isPlaying = true;
   }
 
+  // Common media-viewer convention: double tap either half to jump exactly
+  // 15 seconds. Clamp at the media boundaries and keep the existing
+  // play/pause state, so an inspection seek never unexpectedly starts audio.
+  private seekBy(deltaMs: number): void {
+    if (this.player === null || !this.isPrepared || this.durationMs <= 0 || this.hasError) {
+      return;
+    }
+    const base = this.dragging ? this.dragValueMs : this.currentTimeMs;
+    const target = Math.max(0, Math.min(this.durationMs, base + deltaMs));
+    this.dragging = false;
+    this.currentTimeMs = target;
+    this.player.seekTo(`${Math.floor(target)}`);
+    if (target < this.durationMs) {
+      this.isCompleted = false;
+    }
+    this.showSeekFeedback(deltaMs < 0 ? -1 : 1);
+  }
+
+  private showSeekFeedback(side: number): void {
+    if (this.seekFeedbackTimer !== -1) {
+      clearTimeout(this.seekFeedbackTimer);
+      this.seekFeedbackTimer = -1;
+    }
+    this.seekFeedbackSide = side;
+    this.seekFeedbackVisible = false;
+    animateTo({ duration: 120, curve: Curve.EaseOut }, () => {
+      this.seekFeedbackVisible = true;
+    });
+    this.seekFeedbackTimer = setTimeout((): void => {
+      this.seekFeedbackTimer = -1;
+      animateTo({ duration: 180, curve: Curve.EaseOut }, () => {
+        this.seekFeedbackVisible = false;
+      });
+    }, 520);
+  }
+
   // Drag the seek bar: track the dragged position live (without fighting the
   // player's own timeUpdate events); commit the seek only once the user
   // releases (End) or taps a new spot (Click).
@@ -316,10 +464,43 @@ export struct StreamingVideoPlayer {
   }
 
   private cycleSpeed(): void {
-    this.speedIdx = (this.speedIdx + 1) % SPEEDS.length;
-    if (this.player !== null) {
-      this.player.setSpeed(SPEEDS[this.speedIdx]);
+    const nextIdx: number = (this.speedIdx + 1) % SPEEDS.length;
+    let applied: boolean = true;
+    if (this.player !== null && this.isPrepared) {
+      try {
+        this.player.setSpeed(SPEEDS[nextIdx]);
+        const nativeSpeed: number = this.player.getSpeed();
+        console.info(`StreamingVideoPlayer speed requested=${SPEEDS[nextIdx]}, native=${nativeSpeed}`);
+        applied = nativeSpeed <= 0 || Math.abs(nativeSpeed - Number(SPEEDS[nextIdx])) < 0.08;
+      } catch (caught) {
+        applied = false;
+        console.error(`StreamingVideoPlayer.setSpeed failed: ${caught}`);
+      }
     }
+    // Keep the chosen value even while preparing. onPrepared applies the
+    // latest selection, so tapping during an initial buffer is never lost.
+    this.speedIdx = nextIdx;
+    this.showSpeedFeedback(applied
+      ? `播放速度 ${SPEED_LABELS[nextIdx]}`
+      : `倍速切换失败`);
+  }
+
+  private showSpeedFeedback(text: string): void {
+    if (this.speedFeedbackTimer !== -1) {
+      clearTimeout(this.speedFeedbackTimer);
+      this.speedFeedbackTimer = -1;
+    }
+    this.speedFeedbackText = text;
+    this.speedFeedbackVisible = false;
+    animateTo({ duration: 120, curve: Curve.EaseOut }, () => {
+      this.speedFeedbackVisible = true;
+    });
+    this.speedFeedbackTimer = setTimeout((): void => {
+      this.speedFeedbackTimer = -1;
+      animateTo({ duration: 180, curve: Curve.EaseOut }, () => {
+        this.speedFeedbackVisible = false;
+      });
+    }, 850);
   }
 
   private onSwipeSwitch(offsetX: number): void {
@@ -402,18 +583,134 @@ export struct StreamingVideoPlayer {
     return viewportAspect > aspect ? this.viewportHeight : this.viewportWidth / aspect;
   }
 
+  private posterSrc(): string {
+    return this.posterPath.startsWith('/') ? `file://${this.posterPath}` : this.posterPath;
+  }
+
+  @Styles
+  controlNormalStyle() {
+    .opacity(1)
+    .scale({ x: 1, y: 1 })
+  }
+
+  @Styles
+  controlPressedStyle() {
+    .opacity(0.68)
+    .scale({ x: 0.9, y: 0.9 })
+  }
+
   @Builder
-  ghostButton(label: string, width: number, onTap?: () => void) {
+  tapZone(forward: boolean) {
+    Column()
+      .width('50%')
+      .height('100%')
+      .backgroundColor(Color.Transparent)
+      .accessibilityText(forward ? '双击快进15秒' : '双击快退15秒')
+      .gesture(
+        GestureGroup(GestureMode.Exclusive,
+          TapGesture({ count: 2, fingers: 1 })
+            .onAction((): void => { this.seekBy(forward ? QUICK_SEEK_MS : -QUICK_SEEK_MS); }),
+          TapGesture({ count: 1, fingers: 1 })
+            .onAction((): void => { this.onBackgroundTap(); })
+        )
+      );
+  }
+
+  @Builder
+  seekFeedback() {
     Row() {
-      Text(label).fontSize(14).fontColor(CONTROL_ACCENT).fontWeight(FontWeight.Medium);
-    }
-    .width(width).height(30).justifyContent(FlexAlign.Center)
-    .opacity(onTap !== undefined ? 1 : 0.72)
-    .onClick(() => {
-      if (onTap !== undefined) {
-        onTap();
+      Column({ space: 3 }) {
+        if (this.seekFeedbackSide < 0) {
+          SymbolGlyph($r('sys.symbol.gobackward_15'))
+            .fontSize(36).fontColor([Color.White]);
+        } else {
+          SymbolGlyph($r('sys.symbol.goforward_15'))
+            .fontSize(36).fontColor([Color.White]);
+        }
+        Text(this.seekFeedbackSide < 0 ? '后退 15 秒' : '快进 15 秒')
+          .fontSize(12)
+          .fontColor(Color.White)
+          .fontWeight(FontWeight.Medium);
       }
-    });
+      .width(96)
+      .height(96)
+      .justifyContent(FlexAlign.Center)
+      .backgroundColor('#66000000')
+      .borderRadius(48)
+      .opacity(this.seekFeedbackVisible && this.seekFeedbackSide < 0 ? 1 : 0)
+      .scale({
+        x: this.seekFeedbackVisible && this.seekFeedbackSide < 0 ? 1 : 0.82,
+        y: this.seekFeedbackVisible && this.seekFeedbackSide < 0 ? 1 : 0.82
+      });
+      Blank().layoutWeight(1);
+      Column({ space: 3 }) {
+        if (this.seekFeedbackSide < 0) {
+          SymbolGlyph($r('sys.symbol.gobackward_15'))
+            .fontSize(36).fontColor([Color.White]);
+        } else {
+          SymbolGlyph($r('sys.symbol.goforward_15'))
+            .fontSize(36).fontColor([Color.White]);
+        }
+        Text(this.seekFeedbackSide < 0 ? '后退 15 秒' : '快进 15 秒')
+          .fontSize(12)
+          .fontColor(Color.White)
+          .fontWeight(FontWeight.Medium);
+      }
+      .width(96)
+      .height(96)
+      .justifyContent(FlexAlign.Center)
+      .backgroundColor('#66000000')
+      .borderRadius(48)
+      .opacity(this.seekFeedbackVisible && this.seekFeedbackSide > 0 ? 1 : 0)
+      .scale({
+        x: this.seekFeedbackVisible && this.seekFeedbackSide > 0 ? 1 : 0.82,
+        y: this.seekFeedbackVisible && this.seekFeedbackSide > 0 ? 1 : 0.82
+      });
+    }
+    .width('100%')
+    .padding({ left: 24, right: 24 })
+    .hitTestBehavior(HitTestMode.None);
+  }
+
+  @Builder
+  symbolControl(symbol: string, width: number, symbolSize: number, onTap: () => void) {
+    Row() {
+      SymbolGlyph($r(symbol))
+        .fontSize(symbolSize)
+        .fontColor([CONTROL_ACCENT]);
+    }
+    .width(width)
+    .height(34)
+    .justifyContent(FlexAlign.Center)
+    .borderRadius(17)
+    .stateStyles({
+      normal: this.controlNormalStyle,
+      pressed: this.controlPressedStyle
+    })
+    .animation({ duration: 120, curve: Curve.EaseOut })
+    .onClick(onTap);
+  }
+
+  @Builder
+  speedControl() {
+    Row() {
+      Text(SPEED_LABELS[this.speedIdx])
+        .fontSize(15)
+        .fontColor(CONTROL_ACCENT)
+        .fontWeight(FontWeight.Bold);
+    }
+    .width(48)
+    .height(36)
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor(this.speedIdx === DEFAULT_SPEED_IDX ? Color.Transparent : '#24FFFFFF')
+    .borderRadius(18)
+    .stateStyles({
+      normal: this.controlNormalStyle,
+      pressed: this.controlPressedStyle
+    })
+    .animation({ duration: 120, curve: Curve.EaseOut })
+    .accessibilityText(`当前${SPEED_LABELS[this.speedIdx]}倍速，点击切换`)
+    .onClick((): void => { this.cycleSpeed(); });
   }
 
   @Builder
@@ -432,47 +729,133 @@ export struct StreamingVideoPlayer {
       }
     }
     .width(56).height(42)
+    .borderRadius(21)
+    .stateStyles({
+      normal: this.controlNormalStyle,
+      pressed: this.controlPressedStyle
+    })
+    .animation({ duration: 120, curve: Curve.EaseOut })
     .onClick(() => { this.togglePlay(); });
   }
 
   build() {
     Stack() {
+      if (this.posterPath !== '') {
+        Image(this.posterSrc())
+          .width(this.surfaceWidth())
+          .height(this.surfaceHeight())
+          .objectFit(ImageFit.Contain)
+          .opacity(this.hasError ? 0.54 : 0.88);
+      }
       XComponent({ id: this.componentId(), type: XComponentType.SURFACE, libraryname: 'ijkplayer_napi' })
         .width(this.surfaceWidth()).height(this.surfaceHeight())
+        .opacity(this.videoVisible ? 1 : 0)
+        .animation({ duration: 180, curve: Curve.EaseOut })
         .onLoad((context: object) => {
+          this.surfaceContext = context;
           this.initPlayer(context);
         })
         .onDestroy(() => {
           this.release();
-        })
-        .onClick(() => { this.onBackgroundTap(); });
-      // Controls hidden → a full-size transparent tap catcher brings them
-      // back. The SURFACE XComponent's own onClick can be swallowed by the
-      // native layer, which left the chrome un-summonable after hiding it.
+          this.surfaceContext = null;
+        });
+      // Controls hidden → both halves remain interactive. Exclusive recognition
+      // delays the single tap just enough to distinguish the double-tap seek.
       if (!this.showControls) {
-        Column()
-          .width('100%').height('100%')
-          .onClick(() => { this.onBackgroundTap(); });
+        Row() {
+          this.tapZone(false);
+          this.tapZone(true);
+        }
+        .width('100%')
+        .height('100%');
       }
-      // Actual stall (buffering): centered ring, same visual language as the
-      // photo viewer's loading indicator. The steady background download
-      // progress lives unobtrusively in the control bar instead.
-      if (this.status !== '') {
-        Column({ space: 4 }) {
-          Stack() {
-            Progress({ value: this.bufferedPercent, total: 100, type: ProgressType.Ring })
-              .width(44).height(44).color(Color.White);
-            Text(`${this.bufferedPercent}%`).fontSize(10).fontColor(Color.White);
+      // Actual prepare/stall state: centered and explicit, while the poster
+      // remains visible underneath instead of flashing a featureless black frame.
+      if (this.status !== '' && !this.hasError) {
+        Column({ space: 8 }) {
+          if (this.bufferedPercent > 0 && this.bufferedPercent < 100) {
+            Stack() {
+              Progress({ value: this.bufferedPercent, total: 100, type: ProgressType.Ring })
+                .width(44).height(44).color(Color.White);
+              Text(`${this.bufferedPercent}%`).fontSize(10).fontColor(Color.White);
+            }
+          } else {
+            LoadingProgress().width(38).height(38).color(Color.White);
           }
-          Text(this.status).fontSize(11).fontColor(Color.White);
+          Text(this.status)
+            .fontSize(13)
+            .fontColor(Color.White)
+            .fontWeight(FontWeight.Medium);
         }
         .alignItems(HorizontalAlign.Center)
-        .padding(10).backgroundColor('#00000066').borderRadius(14);
+        .padding({ left: 18, right: 18, top: 15, bottom: 15 })
+        .backgroundColor('#70000000')
+        .borderRadius(16)
+        .transition(TransitionEffect.OPACITY
+          .combine(TransitionEffect.scale({ x: 0.9, y: 0.9 }))
+          .animation({ duration: 180, curve: Curve.EaseOut }));
+      }
+      if (this.hasError) {
+        Column({ space: 8 }) {
+          SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+            .fontSize(30)
+            .fontColor([Color.White]);
+          Text('视频播放失败')
+            .fontSize(14)
+            .fontColor(Color.White)
+            .fontWeight(FontWeight.Medium);
+          Text(this.errorDetail)
+            .fontSize(11)
+            .fontColor(CONTROL_TEXT_SOFT)
+            .maxLines(2)
+            .textAlign(TextAlign.Center);
+          Row({ space: 5 }) {
+            SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(13).fontColor([Color.White]);
+            Text('重试').fontSize(13).fontColor(Color.White).fontWeight(FontWeight.Medium);
+          }
+          .height(34)
+          .padding({ left: 15, right: 15 })
+          .backgroundColor('#29FFFFFF')
+          .borderRadius(17)
+          .stateStyles({
+            normal: this.controlNormalStyle,
+            pressed: this.controlPressedStyle
+          })
+          .animation({ duration: 120, curve: Curve.EaseOut })
+          .onClick((): void => { this.retry(); });
+        }
+        .constraintSize({ minWidth: 180, maxWidth: 248 })
+        .padding({ left: 20, right: 20, top: 17, bottom: 16 })
+        .backgroundColor('#78000000')
+        .borderRadius(18)
+        .transition(TransitionEffect.OPACITY
+          .combine(TransitionEffect.scale({ x: 0.9, y: 0.9 }))
+          .animation({ duration: 180, curve: Curve.EaseOut }));
+      }
+      this.seekFeedback();
+      if (this.speedFeedbackVisible) {
+        Row() {
+          Text(this.speedFeedbackText)
+            .fontSize(14)
+            .fontColor(Color.White)
+            .fontWeight(FontWeight.Medium);
+        }
+        .height(38)
+        .padding({ left: 16, right: 16 })
+        .backgroundColor('#78000000')
+        .borderRadius(19)
+        .opacity(this.speedFeedbackVisible ? 1 : 0)
+        .scale({
+          x: this.speedFeedbackVisible ? 1 : 0.88,
+          y: this.speedFeedbackVisible ? 1 : 0.88
+        })
+        .hitTestBehavior(HitTestMode.None);
       }
       if (this.isCompleted) {
         Stack() {
           Row({ space: 8 }) {
-            Text('↻').fontSize(30).fontColor(Color.White).fontWeight(FontWeight.Medium);
+            SymbolGlyph($r('sys.symbol.arrow_clockwise'))
+              .fontSize(25).fontColor([Color.White]);
             Text('重播').fontSize(18).fontColor(Color.White).fontWeight(FontWeight.Medium);
           }
           .padding({ left: 20, right: 20, top: 14, bottom: 14 })
@@ -480,15 +863,21 @@ export struct StreamingVideoPlayer {
           .borderRadius(20);
         }
         .constraintSize({ minWidth: 140, minHeight: 64 })
+        .stateStyles({
+          normal: this.controlNormalStyle,
+          pressed: this.controlPressedStyle
+        })
+        .animation({ duration: 120, curve: Curve.EaseOut })
         .onClick(() => { this.replay(); });
       }
-      if (this.showControls) {
+      if (this.showControls && !this.hasError) {
         Column() {
-          // The blank area above the bar handles background taps itself (toggle
-          // chrome) — no Transparent pass-through, so the bar's buttons keep
-          // their events instead of leaking to the XComponent underneath.
-          Blank().layoutWeight(1)
-            .onClick(() => { this.onBackgroundTap(); });
+          Row() {
+            this.tapZone(false);
+            this.tapZone(true);
+          }
+          .width('100%')
+          .layoutWeight(1);
           Column({ space: 10 }) {
             Row() {
               // Live download speed on the left (mirrors the play control on the
@@ -505,8 +894,18 @@ export struct StreamingVideoPlayer {
               .alignItems(VerticalAlign.Center);
               this.playControl();
               Row({ space: 8 }) {
-                this.ghostButton('↻', 30, () => { this.replay(); });
-                this.ghostButton(SPEED_LABELS[this.speedIdx], 42, () => { this.cycleSpeed(); });
+                this.symbolControl('sys.symbol.arrow_clockwise', 34, 19, () => { this.replay(); });
+                this.speedControl();
+                this.symbolControl(
+                  this.landscape
+                    ? 'sys.symbol.rectangle_portrait_rotate'
+                    : 'sys.symbol.rectangle_rotate',
+                  40,
+                  25,
+                  () => {
+                    this.onOrientationChange(!this.landscape);
+                  }
+                );
               }
               .layoutWeight(1)
               .justifyContent(FlexAlign.End)
@@ -545,14 +944,25 @@ export struct StreamingVideoPlayer {
               Text(formatMs(this.durationMs)).fontSize(11).fontColor(CONTROL_TEXT_SOFT).fontWeight(FontWeight.Medium);
             }.width('100%').alignItems(VerticalAlign.Center);
           }
-          .margin({ left: 12, right: 12, bottom: 18 })
+          .margin({
+            left: 12,
+            right: 12,
+            bottom: Math.max(14, this.bottomSafe + 8)
+          })
           .padding({ left: 14, right: 14, top: 12, bottom: 12 })
           .backgroundColor(CONTROL_BAR_BG)
-          .borderRadius(18);
+          .borderRadius(18)
+          .transition(TransitionEffect.OPACITY
+            .combine(TransitionEffect.translate({ y: 10 }))
+            .animation({ duration: 180, curve: Curve.EaseOut }));
           // NOTE: no hitTestBehavior on this wrapper or the bar. Block suppresses
           // hit-testing of CHILDREN (killed every button), and Transparent leaks
           // gesture events through to the XComponent (buttons lose to its onClick).
-        }.width('100%').height('100%');
+        }
+        .width('100%')
+        .height('100%')
+        .transition(TransitionEffect.OPACITY
+          .animation({ duration: 160, curve: Curve.EaseOut }));
       }
     }
     .width('100%').height('100%').backgroundColor(Color.Black)

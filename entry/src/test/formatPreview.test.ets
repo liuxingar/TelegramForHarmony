@@ -51,7 +51,16 @@ export default function formatPreviewTest() {
     });
     it('unknown_fallback', 0, () => {
       const c: TdObject = { '@type': 'messageSomeFutureType' };
-      expect(formatPreview(msg(c))).assertEqual('[通知]');
+      expect(formatPreview(msg(c))).assertEqual('暂不支持的消息');
+    });
+    it('custom_service_action_keeps_server_text', 0, () => {
+      const c: TdObject = { '@type': 'messageCustomServiceAction' };
+      c['text'] = '群组规则已更新';
+      expect(formatPreview(msg(c))).assertEqual('群组规则已更新');
+    });
+    it('expired_media_is_understandable', 0, () => {
+      const c: TdObject = { '@type': 'messageExpiredPhoto' };
+      expect(formatPreview(msg(c))).assertEqual('照片已过期');
     });
     it('video_no_caption', 0, () => {
       const c: TdObject = { '@type': 'messageVideo' };

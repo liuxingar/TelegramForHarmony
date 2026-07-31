@@ -13,10 +13,12 @@ export interface MentionItem {
 export interface CommandItem {
   command: string;     // without the leading '/'
   description: string;
+  botUserId: number;   // 0 only for malformed/legacy data
+  botUsername: string; // group commands send as /command@bot; private chat keeps this empty
 }
 
 const MENTION_LIMIT: number = 12;
-const BOT_LIMIT: number = 10;
+const BOT_LIMIT: number = 50;
 
 function displayNameOf(user: TdObject): string {
   const first = (user['first_name'] as string | undefined) ?? '';
@@ -91,7 +93,7 @@ export function searchMentions(client: TdClient, chatId: number, query: string):
   });
 }
 
-function commandsOfFullInfo(full: TdObject): CommandItem[] {
+function commandsOfFullInfo(full: TdObject, botUserId: number, botUsername: string): CommandItem[] {
   const items: CommandItem[] = [];
   const botInfo = full['bot_info'] as TdObject | undefined;
   const cmds = botInfo !== undefined ? (botInfo['commands'] as TdObject[] | undefined) : undefined;
@@ -101,21 +103,28 @@ function commandsOfFullInfo(full: TdObject): CommandItem[] {
   for (const c of cmds) {
     const command = (c['command'] as string | undefined) ?? '';
     if (command !== '') {
-      items.push({ command, description: (c['description'] as string | undefined) ?? '' });
+      items.push({
+        command,
+        description: (c['description'] as string | undefined) ?? '',
+        botUserId,
+        botUsername
+      });
     }
   }
   return items;
 }
 
-function getFullInfoCommands(client: TdClient, userId: number): Promise<CommandItem[]> {
+function getFullInfoCommands(client: TdClient, userId: number,
+  botUsername: string = ''): Promise<CommandItem[]> {
   const req: TdRequest = { '@type': 'getUserFullInfo' };
   req['user_id'] = userId;
-  return client.send(req).then((full: TdObject) => commandsOfFullInfo(full))
-    .catch((e: TdError) => {
-      console.error(`getUserFullInfo(${userId}) for commands failed: ${e.message}`);
-      const empty: CommandItem[] = [];
-      return empty;
-    });
+  return client.send(req).then((full: TdObject) =>
+    commandsOfFullInfo(full, userId, botUsername));
+}
+
+function getGroupBotCommands(client: TdClient, userId: number): Promise<CommandItem[]> {
+  return getUser(client, userId).then((user: TdObject) =>
+    getFullInfoCommands(client, userId, usernameOf(user)));
 }
 
 // Bot commands available in this chat. Private bot chat: the peer's own
@@ -131,19 +140,29 @@ export function loadBotCommands(client: TdClient, chatId: number, peerUserId: nu
   req['filter'] = { '@type': 'chatMembersFilterBots' } as TdObject;
   return client.send(req).then((res: TdObject) => {
     const ids = memberUserIds(res);
-    const fetches: Array<Promise<CommandItem[]>> = ids.map((uid: number) => getFullInfoCommands(client, uid));
+    // One inaccessible bot must not hide commands from every other bot in the
+    // group; the member-list request itself still rejects so the UI can show a
+    // real loading error instead of an indistinguishable empty catalog.
+    const fetches: Array<Promise<CommandItem[]>> = ids.map((uid: number) =>
+      getGroupBotCommands(client, uid).catch((e: TdError) => {
+        console.error(`get bot commands ${uid} failed: ${e.message}`);
+        const empty: CommandItem[] = [];
+        return empty;
+      }));
     return Promise.all(fetches).then((lists: CommandItem[][]) => {
       const merged: CommandItem[] = [];
+      const seen: Set<string> = new Set<string>();
       for (const list of lists) {
         for (const item of list) {
+          const key = `${item.command.toLowerCase()}@${item.botUsername.toLowerCase()}`;
+          if (seen.has(key)) {
+            continue;
+          }
+          seen.add(key);
           merged.push(item);
         }
       }
       return merged;
     });
-  }).catch((e: TdError) => {
-    console.error(`loadBotCommands failed: ${e.message}`);
-    const empty: CommandItem[] = [];
-    return empty;
   });
 }

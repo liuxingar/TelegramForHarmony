@@ -3,6 +3,11 @@ import { TdError, TdObject, TdRequest } from '../tdkit/TdTypes';
 import { formatLastSeen } from '../util/formatLastSeen';
 import { ContactItem } from './ContactsStore';
 
+const SEARCH_REQUEST_TIMEOUT_MS: number = 4500;
+const RESOLVE_REQUEST_TIMEOUT_MS: number = 3500;
+const PUBLIC_SEARCH_BUDGET_MS: number = 8000;
+const MAX_CANDIDATES: number = 24;
+
 function chatIds(result: TdObject): number[] {
   return (result['chat_ids'] as number[] | undefined) ?? [];
 }
@@ -14,7 +19,7 @@ async function runChatSearch(client: TdClient, type: string, query: string): Pro
     request['limit'] = 30;
   }
   try {
-    return chatIds(await client.send(request));
+    return chatIds(await client.send(request, SEARCH_REQUEST_TIMEOUT_MS));
   } catch (error) {
     const caught = error as TdError;
     console.warn(`PublicUserSearch.${type} failed: ${caught.message}`);
@@ -51,7 +56,7 @@ async function resolvePrivateUser(client: TdClient, chatId: number): Promise<Con
   try {
     const chatRequest: TdRequest = { '@type': 'getChat' };
     chatRequest['chat_id'] = chatId;
-    const chat = await client.send(chatRequest);
+    const chat = await client.send(chatRequest, RESOLVE_REQUEST_TIMEOUT_MS);
     const type = chat['type'] as TdObject | undefined;
     if (type === undefined || type['@type'] !== 'chatTypePrivate') {
       return null;
@@ -62,7 +67,7 @@ async function resolvePrivateUser(client: TdClient, chatId: number): Promise<Con
     }
     const userRequest: TdRequest = { '@type': 'getUser' };
     userRequest['user_id'] = userId;
-    const user = await client.send(userRequest);
+    const user = await client.send(userRequest, RESOLVE_REQUEST_TIMEOUT_MS);
     const first = (user['first_name'] as string | undefined) ?? '';
     const last = (user['last_name'] as string | undefined) ?? '';
     const name = `${first}${last !== '' ? ` ${last}` : ''}`.trim();
@@ -88,28 +93,74 @@ async function resolvePrivateUser(client: TdClient, chatId: number): Promise<Con
   }
 }
 
-// Telegram can only discover strangers who have a public username/searchable
-// chat. Combine public search with server-side chat search, then keep private
-// user chats and expose them in the same shape as the local contact list.
-export async function searchPublicUsers(client: TdClient, rawQuery: string): Promise<ContactItem[]> {
-  const query = rawQuery.trim().replace(/^@/, '');
-  if (query.length < 2) {
-    return [];
-  }
-  const publicIds = await runChatSearch(client, 'searchPublicChats', query);
-  const serverIds = await runChatSearch(client, 'searchChatsOnServer', query);
+function withinBudget<T>(work: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+  return new Promise<T>((resolve): void => {
+    let settled = false;
+    const timerId = setTimeout((): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      console.warn(`PublicUserSearch exceeded ${timeoutMs}ms budget`);
+      resolve(fallback);
+    }, timeoutMs);
+    work.then((value: T): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timerId);
+      resolve(value);
+    }).catch((error: Object): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timerId);
+      console.warn(`PublicUserSearch failed: ${JSON.stringify(error)}`);
+      resolve(fallback);
+    });
+  });
+}
+
+async function runPublicUserSearch(client: TdClient, query: string): Promise<ContactItem[]> {
+  // Both TDLib searches are independent. Running them together avoids waiting
+  // for two full request timeouts when the network is unavailable.
+  const searchResults = await Promise.all([
+    runChatSearch(client, 'searchPublicChats', query),
+    runChatSearch(client, 'searchChatsOnServer', query)
+  ]);
+  const publicIds = searchResults[0];
+  const serverIds = searchResults[1];
   const ids: number[] = [];
   for (const id of [...publicIds, ...serverIds]) {
     if (ids.indexOf(id) < 0) {
       ids.push(id);
     }
   }
+
+  // Candidate chats are independent too. The previous serial loop could take
+  // minutes (getChat + getUser per candidate, each with a 15s timeout).
+  const candidates = ids.slice(0, MAX_CANDIDATES);
+  const resolved = await Promise.all(
+    candidates.map((id: number): Promise<ContactItem | null> => resolvePrivateUser(client, id))
+  );
   const users: ContactItem[] = [];
-  for (const id of ids.slice(0, 30)) {
-    const user = await resolvePrivateUser(client, id);
+  for (const user of resolved) {
     if (user !== null && !users.some((item: ContactItem): boolean => item.id === user.id)) {
       users.push(user);
     }
   }
   return users;
+}
+
+// Telegram can only discover strangers who have a public username/searchable
+// chat. Combine public search with server-side chat search, then keep private
+// user chats and expose them in the same shape as the local contact list.
+export function searchPublicUsers(client: TdClient, rawQuery: string): Promise<ContactItem[]> {
+  const query = rawQuery.trim().replace(/^@/, '');
+  if (query.length < 2) {
+    return Promise.resolve([]);
+  }
+  return withinBudget(runPublicUserSearch(client, query), PUBLIC_SEARCH_BUDGET_MS, []);
 }

@@ -1,7 +1,7 @@
 import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window, KeyboardAvoidMode } from '@kit.ArkUI';
-import { initTdKit } from '../tdkit/Globals';
+import { initTdKit, setTdOnlineState } from '../tdkit/Globals';
 import { initSettings, refreshPowerSavingState } from '../store/AppSettings';
 
 const DOMAIN = 0x0000;
@@ -38,6 +38,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onDestroy(): void {
+    setTdOnlineState(false);
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onDestroy');
   }
 
@@ -100,12 +101,14 @@ export default class EntryAbility extends UIAbility {
     refreshPowerSavingState();
     AppStorage.setOrCreate('appIsForeground', true);
     AppStorage.setOrCreate('appForegroundEpoch', Date.now());
+    setTdOnlineState(true);
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
   }
 
   onBackground(): void {
     // Ability has back to background
     AppStorage.setOrCreate('appIsForeground', false);
+    setTdOnlineState(false);
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onBackground');
   }
 }

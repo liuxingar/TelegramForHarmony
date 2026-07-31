@@ -4,6 +4,7 @@ import { promptAction, window } from '@kit.ArkUI';
 const EXIT_RED: string = '#E64646';
 const LEAVE_BLUE: string = '#3E8BFF';
 const SECONDARY_TEXT: string = '#8E8E93';
+let mediaOrientationRequestSeq: number = 0;
 
 export function confirmLeaveLiveStream(onConfirm: () => void): void {
   promptAction.showDialog({
@@ -59,5 +60,27 @@ export function setLiveStreamFullscreen(
     });
   }).catch((caught: Error): void => {
     console.error(`LiveViewerUi.getLastWindow failed: ${caught.message}`);
+  });
+}
+
+// The media viewer already owns the whole page, so this control changes only
+// screen orientation. It intentionally leaves system bars and viewer chrome
+// alone; closing the viewer always calls it with landscape=false.
+export function setMediaViewerOrientation(
+  context: common.UIAbilityContext, landscape: boolean
+): void {
+  const requestSeq: number = ++mediaOrientationRequestSeq;
+  window.getLastWindow(context).then((mainWindow: window.Window): void => {
+    if (requestSeq !== mediaOrientationRequestSeq) {
+      return;
+    }
+    const orientation: window.Orientation = landscape
+      ? window.Orientation.AUTO_ROTATION_LANDSCAPE
+      : window.Orientation.PORTRAIT;
+    mainWindow.setPreferredOrientation(orientation).catch((caught: Error): void => {
+      console.error(`LiveViewerUi.setMediaOrientation failed: ${caught.message}`);
+    });
+  }).catch((caught: Error): void => {
+    console.error(`LiveViewerUi.getMediaWindow failed: ${caught.message}`);
   });
 }

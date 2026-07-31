@@ -1,7 +1,7 @@
 import { TdObject } from '../tdkit/TdTypes';
 import { UserStore } from './UserStore';
 import { buttonStyleOf } from './ReplyKeyboard';
-import { formatMsgContent, MsgContent } from '../util/formatMsgContent';
+import { formatMsgContent, MsgContent, PollOptionInfo } from '../util/formatMsgContent';
 import { SERVICE_LABELS } from '../util/formatPreview';
 
 export interface MessageEntry {
@@ -13,14 +13,26 @@ export interface MessageEntry {
   senderInitials: string;
   senderAvatarPath: string;
   date: number;
+  editDate: number;       // TDLib edit_date; 0 means the message was never edited
   contentType: string;
   text: string;
   photoFileId: number;
   photoPath: string;
   photoProgress: number; // 0-100 download progress of the inline thumbnail
+  photoFailed: boolean;  // bounded thumbnail retries exhausted; tap retries
   photoWidth: number;
   photoHeight: number;
   placeholderLabel: string;
+  // Semantic category used only to decorate centered service-message pills.
+  // The message keeps the same timeline position regardless of category.
+  systemKind: string;
+  // Kept so names that arrive after history can refresh member/call notices
+  // without retaining the full raw TDLib message.
+  systemType: string;
+  systemUserIds: number[];
+  // Unknown/future TDLib content stays a normal left/right bubble, but gets a
+  // deliberate readable fallback instead of a blank or raw type name.
+  isUnsupportedMessage: boolean;
   // True only for a live messageVideoChatStarted service message — the bubble
   // becomes tappable (opens the live viewer) when the chat's video chat is
   // still active. Ended/scheduled video-chat pills stay display-only.
@@ -31,6 +43,11 @@ export interface MessageEntry {
   sendState: string;
   albumId: string;
   textEntities: TdObject[];
+  // Unique custom-emoji ids referenced inside a mixed text message. Paths are
+  // parallel and fill asynchronously with a static WEBP/thumbnail suitable
+  // for ArkUI ImageSpan; the Unicode alternative remains the loading fallback.
+  inlineCustomEmojiIds: string[];
+  inlineCustomEmojiPaths: string[];
   forwardFrom: string;   // display name of the forward origin ('' = not forwarded)
   forwardChatId: number; // origin channel/chat id to resolve a title for (0 = none/resolved)
   // Tappable origin of a forward: the original post (channel/chat) or its
@@ -53,6 +70,7 @@ export interface MessageEntry {
   photoFullFileId: number;      // full-resolution photo file id (0 = no upgrade available)
   photoFullPath: string;        // local path once the full-resolution photo is downloaded (on tap)
   photoFullProgress: number;    // 0-100 download progress of the full-resolution photo
+  photoFullFailed: boolean;     // last on-demand full-resolution request failed; viewer may retry
   videoFileId: number;          // full-resolution video file id (0 = not a video)
   videoFileSize: number;        // bytes (0 = unknown)
   videoMimeType: string;        // source mime type from TDLib, e.g. video/mp4
@@ -61,10 +79,82 @@ export interface MessageEntry {
   isAnimation: boolean;         // Telegram GIF/messageAnimation
   videoPath: string;            // local path once the full video is downloaded
   videoProgress: number;        // 0-100 download progress of the full video file
+  videoFailed: boolean;         // last full-video download failed; save/retry UI may recover
+  mediaDownloadActive: boolean; // full media request is currently active
+  voiceWaveform: string;        // base64 packed waveform, '' when unavailable
+  voiceListened: boolean;       // incoming voice note has been opened/listened
+  audioTitle: string;           // music metadata; '' falls back to file name
+  audioPerformer: string;       // music artist/performer; '' = unknown
   stickerFileId: number;        // animated (TGS) sticker source file id, 0 otherwise
   customEmojiId: string;        // single custom-emoji message, pending sticker resolution
   stickerFormat: string;        // 'webp' | 'tgs' | 'webm', '' for non-stickers
-  stickerPath: string;          // local path of the downloaded TGS file
+  isEmojiSticker: boolean;      // obeys chat Emoji playback policy
+  stickerPath: string;          // local path of the downloaded TGS/WEBM source
+  stickerProgress: number;      // 0-100 source download progress
+  stickerFailed: boolean;       // source download failed; tap retries
+  stickerDownloadActive: boolean;
+  contactPhone: string;
+  contactFirstName: string;
+  contactLastName: string;
+  contactVcard: string;
+  contactUserId: number;
+  contactAvatarPath: string;
+  locationLatitude: number;
+  locationLongitude: number;
+  locationAccuracy: number;
+  locationValid: boolean;
+  locationLivePeriod: number;
+  locationExpiresIn: number;
+  locationHeading: number;
+  locationProximityRadius: number;
+  venueTitle: string;
+  venueAddress: string;
+  venueProvider: string;
+  venueId: string;
+  venueType: string;
+  pollId: string;
+  pollQuestion: string;
+  pollOptions: PollOptionInfo[];
+  pollTotalVoterCount: number;
+  pollIsAnonymous: boolean;
+  pollIsQuiz: boolean;
+  pollAllowMultiple: boolean;
+  pollCorrectOptionId: number;
+  pollExplanation: string;
+  pollOpenPeriod: number;
+  pollCloseDate: number;
+  pollIsClosed: boolean;
+  pollVotePending: boolean;
+  pollVoteError: string;
+  diceEmoji: string;
+  diceValue: number;
+  diceSuccessFrame: number;
+  diceHasFinalState: boolean;
+  gameId: string;
+  gameShortName: string;
+  gameTitle: string;
+  gameDescription: string;
+  gameText: string;
+  paidMediaLocked: boolean;
+  paidMediaStarCount: number;
+  paidMediaCount: number;
+  paidMediaKind: string;
+  giftKind: string;
+  giftTitle: string;
+  giftValue: string;
+  giftStatus: string;
+  giftCode: string;
+  giftRefunded: boolean;
+  giveawayState: string;
+  giveawayWinnerCount: number;
+  giveawayPrize: string;
+  giveawayDescription: string;
+  giveawaySelectionDate: number;
+  giveawayUnclaimedCount: number;
+  giveawayMessageId: number;
+  giveawayBoostedChatId: number;
+  giveawayRefunded: boolean;
+  giveawayOnlyNewMembers: boolean;
 }
 
 export interface ReactionInfo {
@@ -79,6 +169,7 @@ export interface InlineBtn {
   text: string;
   url: string;
   callbackData: string; // base64 payload for inlineKeyboardButtonTypeCallback
+  isGame: boolean;      // inlineKeyboardButtonTypeCallbackGame
   style: string;        // 'primary' | 'success' | 'danger' | '' (default look)
 }
 
@@ -98,6 +189,7 @@ export function parseInlineKeyboard(replyMarkup: TdObject | undefined): InlineBt
         text: (b['text'] as string | undefined) ?? '',
         url: tt === 'inlineKeyboardButtonTypeUrl' ? ((t!['url'] as string | undefined) ?? '') : '',
         callbackData: tt === 'inlineKeyboardButtonTypeCallback' ? ((t!['data'] as string | undefined) ?? '') : '',
+        isGame: tt === 'inlineKeyboardButtonTypeCallbackGame',
         style: buttonStyleOf(b)
       });
     }
@@ -113,13 +205,19 @@ export function cloneMessage(m: MessageEntry): MessageEntry {
     id: m.id, isOutgoing: m.isOutgoing, senderName: m.senderName,
     senderId: m.senderId, senderIsUser: m.senderIsUser,
     senderInitials: m.senderInitials, senderAvatarPath: m.senderAvatarPath, date: m.date,
+    editDate: m.editDate,
     contentType: m.contentType, text: m.text, photoFileId: m.photoFileId, photoPath: m.photoPath,
-    photoProgress: m.photoProgress,
+    photoProgress: m.photoProgress, photoFailed: m.photoFailed,
     photoWidth: m.photoWidth, photoHeight: m.photoHeight,
-    placeholderLabel: m.placeholderLabel, isVideoChatStarted: m.isVideoChatStarted,
+    placeholderLabel: m.placeholderLabel, systemKind: m.systemKind,
+    systemType: m.systemType, systemUserIds: m.systemUserIds.slice(),
+    isUnsupportedMessage: m.isUnsupportedMessage,
+    isVideoChatStarted: m.isVideoChatStarted,
     replyToMessageId: m.replyToMessageId,
     replySenderName: m.replySenderName, replyText: m.replyText, sendState: m.sendState,
     albumId: m.albumId, textEntities: m.textEntities,
+    inlineCustomEmojiIds: m.inlineCustomEmojiIds.slice(),
+    inlineCustomEmojiPaths: m.inlineCustomEmojiPaths.slice(),
     forwardFrom: m.forwardFrom, forwardChatId: m.forwardChatId,
     forwardOriginChatId: m.forwardOriginChatId, forwardOriginMsgId: m.forwardOriginMsgId,
     forwardOriginUserId: m.forwardOriginUserId,
@@ -130,11 +228,57 @@ export function cloneMessage(m: MessageEntry): MessageEntry {
     linkPhotoPath: m.linkPhotoPath, linkUrl: m.linkUrl,
     reactions: m.reactions,
     inlineButtons: m.inlineButtons,
-    photoFullFileId: m.photoFullFileId, photoFullPath: m.photoFullPath, photoFullProgress: m.photoFullProgress,
+    photoFullFileId: m.photoFullFileId, photoFullPath: m.photoFullPath,
+    photoFullProgress: m.photoFullProgress, photoFullFailed: m.photoFullFailed,
     videoFileId: m.videoFileId, videoFileSize: m.videoFileSize, videoMimeType: m.videoMimeType,
     videoFileName: m.videoFileName, videoDuration: m.videoDuration, isAnimation: m.isAnimation,
-    videoPath: m.videoPath, videoProgress: m.videoProgress,
-    stickerFileId: m.stickerFileId, stickerFormat: m.stickerFormat, stickerPath: m.stickerPath,
+    videoPath: m.videoPath, videoProgress: m.videoProgress, videoFailed: m.videoFailed,
+    mediaDownloadActive: m.mediaDownloadActive,
+    voiceWaveform: m.voiceWaveform, voiceListened: m.voiceListened,
+    audioTitle: m.audioTitle, audioPerformer: m.audioPerformer,
+    stickerFileId: m.stickerFileId, stickerFormat: m.stickerFormat,
+    isEmojiSticker: m.isEmojiSticker, stickerPath: m.stickerPath,
+    stickerProgress: m.stickerProgress, stickerFailed: m.stickerFailed,
+    stickerDownloadActive: m.stickerDownloadActive,
+    contactPhone: m.contactPhone, contactFirstName: m.contactFirstName,
+    contactLastName: m.contactLastName, contactVcard: m.contactVcard,
+    contactUserId: m.contactUserId, contactAvatarPath: m.contactAvatarPath,
+    locationLatitude: m.locationLatitude, locationLongitude: m.locationLongitude,
+    locationAccuracy: m.locationAccuracy, locationValid: m.locationValid,
+    locationLivePeriod: m.locationLivePeriod, locationExpiresIn: m.locationExpiresIn,
+    locationHeading: m.locationHeading, locationProximityRadius: m.locationProximityRadius,
+    venueTitle: m.venueTitle, venueAddress: m.venueAddress, venueProvider: m.venueProvider,
+    venueId: m.venueId, venueType: m.venueType,
+    pollId: m.pollId, pollQuestion: m.pollQuestion,
+    pollOptions: m.pollOptions.map((option: PollOptionInfo): PollOptionInfo => ({
+      text: option.text,
+      voterCount: option.voterCount,
+      votePercentage: option.votePercentage,
+      isChosen: option.isChosen,
+      isBeingChosen: option.isBeingChosen
+    })),
+    pollTotalVoterCount: m.pollTotalVoterCount,
+    pollIsAnonymous: m.pollIsAnonymous, pollIsQuiz: m.pollIsQuiz,
+    pollAllowMultiple: m.pollAllowMultiple, pollCorrectOptionId: m.pollCorrectOptionId,
+    pollExplanation: m.pollExplanation, pollOpenPeriod: m.pollOpenPeriod,
+    pollCloseDate: m.pollCloseDate, pollIsClosed: m.pollIsClosed,
+    pollVotePending: m.pollVotePending, pollVoteError: m.pollVoteError,
+    diceEmoji: m.diceEmoji, diceValue: m.diceValue,
+    diceSuccessFrame: m.diceSuccessFrame, diceHasFinalState: m.diceHasFinalState,
+    gameId: m.gameId, gameShortName: m.gameShortName, gameTitle: m.gameTitle,
+    gameDescription: m.gameDescription, gameText: m.gameText,
+    paidMediaLocked: m.paidMediaLocked, paidMediaStarCount: m.paidMediaStarCount,
+    paidMediaCount: m.paidMediaCount, paidMediaKind: m.paidMediaKind,
+    giftKind: m.giftKind, giftTitle: m.giftTitle, giftValue: m.giftValue,
+    giftStatus: m.giftStatus, giftCode: m.giftCode, giftRefunded: m.giftRefunded,
+    giveawayState: m.giveawayState, giveawayWinnerCount: m.giveawayWinnerCount,
+    giveawayPrize: m.giveawayPrize, giveawayDescription: m.giveawayDescription,
+    giveawaySelectionDate: m.giveawaySelectionDate,
+    giveawayUnclaimedCount: m.giveawayUnclaimedCount,
+    giveawayMessageId: m.giveawayMessageId,
+    giveawayBoostedChatId: m.giveawayBoostedChatId,
+    giveawayRefunded: m.giveawayRefunded,
+    giveawayOnlyNewMembers: m.giveawayOnlyNewMembers,
     customEmojiId: m.customEmojiId
   };
 }
@@ -224,80 +368,393 @@ export function commentInfoFromInteraction(ii: TdObject | undefined): CommentInf
   return { count, replierIds: ids };
 }
 
-// Service/system messages (chat title/photo changes, member joins, pinned
-// notices, ...) rendered as a centered pill instead of a normal bubble.
-// Returns '' when the content type isn't a recognized system message.
-function systemMessageLabel(message: TdObject, users: UserStore): string {
-  const content = message['content'] as TdObject | undefined;
-  const type = content !== undefined ? (content['@type'] as string | undefined) : undefined;
+interface SystemMessageInfo {
+  label: string;
+  kind: string;
+}
+
+function emptySystemMessage(): SystemMessageInfo {
+  return { label: '', kind: 'info' };
+}
+
+function actorName(message: TdObject, users: UserStore): string {
+  if ((message['is_outgoing'] as boolean | undefined) ?? false) {
+    return '你';
+  }
   const actor = senderName(message, users);
-  const who = actor !== '' ? actor : '有人';
-  if (type === 'messageChatChangeTitle') {
-    const title = (content!['title'] as string | undefined) ?? '';
-    return `${who} 将群组改名为"${title}"`;
+  return actor !== '' ? actor : '有人';
+}
+
+function userNames(ids: number[], users: UserStore): string {
+  const names: string[] = [];
+  for (const id of ids) {
+    const name = users.displayName(id);
+    if (name !== '') {
+      names.push(name);
+    } else {
+      users.ensure(id);
+    }
   }
-  if (type === 'messageChatChangePhoto') {
-    return `${who} 更新了群组头像`;
-  }
-  if (type === 'messageChatDeletePhoto') {
-    return `${who} 删除了群组头像`;
+  return names.join('、');
+}
+
+function systemUserIdsOf(content: TdObject | undefined, type: string): number[] {
+  if (content === undefined) {
+    return [];
   }
   if (type === 'messageChatAddMembers') {
-    const ids = (content!['member_user_ids'] as number[] | undefined) ?? [];
-    const names = ids.map((id: number) => users.displayName(id)).join('、');
-    return names !== '' ? `${who} 邀请了 ${names}` : `${who} 邀请了新成员`;
+    return ((content['member_user_ids'] as number[] | undefined) ?? []).slice();
+  }
+  if (type === 'messageInviteVideoChatParticipants') {
+    return ((content['user_ids'] as number[] | undefined) ?? []).slice();
   }
   if (type === 'messageChatDeleteMember') {
-    const uid = content!['user_id'] as number | undefined;
+    const id = (content['user_id'] as number | undefined) ?? 0;
+    return id > 0 ? [id] : [];
+  }
+  return [];
+}
+
+// A service row can arrive before updateUser for an invited/removed member.
+// Refresh only the name-bearing variants when that user record appears.
+export function refreshSystemUserLabel(entry: MessageEntry, users: UserStore): MessageEntry {
+  if (entry.contentType !== 'system' || entry.systemUserIds.length === 0) {
+    return entry;
+  }
+  const who = entry.isOutgoing ? '你' : (entry.senderName !== '' ? entry.senderName : '有人');
+  let nextLabel = entry.placeholderLabel;
+  if (entry.systemType === 'messageChatAddMembers') {
+    if (entry.systemUserIds.length === 1 && entry.systemUserIds[0] === entry.senderId) {
+      nextLabel = `${who} 加入了群组`;
+    } else {
+      const names = userNames(entry.systemUserIds, users);
+      nextLabel = names !== '' ? `${who} 邀请了 ${names}` : `${who} 邀请了新成员`;
+    }
+  } else if (entry.systemType === 'messageChatDeleteMember') {
+    const targetId = entry.systemUserIds[0];
+    if (targetId === entry.senderId) {
+      nextLabel = `${who} 退出了群组`;
+    } else {
+      const name = users.displayName(targetId);
+      if (name === '') {
+        users.ensure(targetId);
+      }
+      nextLabel = name !== '' ? `${who} 移除了 ${name}` : `${who} 移除了一名成员`;
+    }
+  } else if (entry.systemType === 'messageInviteVideoChatParticipants') {
+    const names = userNames(entry.systemUserIds, users);
+    nextLabel = names !== '' ? `${who} 邀请 ${names} 加入视频通话` : `${who} 邀请成员加入视频通话`;
+  }
+  if (nextLabel === entry.placeholderLabel) {
+    return entry;
+  }
+  const next = cloneMessage(entry);
+  next.placeholderLabel = nextLabel;
+  return next;
+}
+
+function compactDuration(totalSeconds: number): string {
+  const total = Math.max(0, Math.floor(totalSeconds));
+  if (total < 60) {
+    return `${total} 秒`;
+  }
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (hours > 0) {
+    return minutes > 0 ? `${hours} 小时 ${minutes} 分钟` : `${hours} 小时`;
+  }
+  return `${minutes} 分钟`;
+}
+
+function autoDeleteDuration(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  if (seconds >= 86400 && seconds % 86400 === 0) {
+    return `${seconds / 86400} 天`;
+  }
+  if (seconds >= 3600 && seconds % 3600 === 0) {
+    return `${seconds / 3600} 小时`;
+  }
+  if (seconds >= 60 && seconds % 60 === 0) {
+    return `${seconds / 60} 分钟`;
+  }
+  return compactDuration(seconds);
+}
+
+function scheduledDateLabel(unixSeconds: number): string {
+  if (unixSeconds <= 0) {
+    return '';
+  }
+  const date = new Date(unixSeconds * 1000);
+  const minute = date.getMinutes() < 10 ? `0${date.getMinutes()}` : `${date.getMinutes()}`;
+  return `${date.getMonth() + 1}月${date.getDate()}日 ${date.getHours()}:${minute}`;
+}
+
+function senderUserName(sender: TdObject | undefined, users: UserStore): string {
+  if (sender === undefined || sender['@type'] !== 'messageSenderUser') {
+    return '';
+  }
+  const id = (sender['user_id'] as number | undefined) ?? 0;
+  return id > 0 ? users.displayName(id) : '';
+}
+
+function systemKindOf(type: string): string {
+  if (type === 'messagePinMessage') {
+    return 'pin';
+  }
+  if (type.indexOf('VideoChat') >= 0 || type === 'messageCall') {
+    return 'call';
+  }
+  if (type.indexOf('Member') >= 0 || type.indexOf('Join') >= 0 ||
+    type.indexOf('Owner') >= 0 || type === 'messageContactRegistered') {
+    return 'people';
+  }
+  if (type.indexOf('AutoDelete') >= 0) {
+    return 'timer';
+  }
+  if (type.indexOf('ForumTopic') >= 0) {
+    return 'topic';
+  }
+  if (type.indexOf('Gift') >= 0 || type.indexOf('Giveaway') >= 0 ||
+    type.indexOf('Paid') >= 0 || type.indexOf('Payment') >= 0) {
+    return 'payment';
+  }
+  if (type.indexOf('ProtectedContent') >= 0 || type === 'messageScreenshotTaken' ||
+    type === 'messagePassportDataSent' || type === 'messagePassportDataReceived') {
+    return 'security';
+  }
+  return 'info';
+}
+
+// Service/system messages (chat title/photo changes, member joins, pinned
+// notices, ...) rendered as a centered pill instead of a normal bubble.
+// Returns an empty label when the content type isn't a recognized service row.
+function systemMessageInfo(message: TdObject, users: UserStore): SystemMessageInfo {
+  const content = message['content'] as TdObject | undefined;
+  const type = content !== undefined ? (content['@type'] as string | undefined) : undefined;
+  if (content === undefined || type === undefined) {
+    return emptySystemMessage();
+  }
+  // These content types have dedicated cards. Let formatMsgContent own them
+  // instead of collapsing their actionable state into a generic system pill.
+  const richSpecialTypes: string[] = [
+    'messagePaidMedia', 'messageGiftedPremium', 'messageGiftedStars',
+    'messageGiftedTon', 'messagePremiumGiftCode', 'messageGift',
+    'messageUpgradedGift', 'messageGiveaway',
+    'messageGiveawayWinners', 'messageGiveawayCompleted',
+    'messageGiveawayPrizeStars'
+  ];
+  if (richSpecialTypes.indexOf(type) >= 0) {
+    return emptySystemMessage();
+  }
+  const who = actorName(message, users);
+  const kind = systemKindOf(type);
+  if (type === 'messageChatChangeTitle') {
+    const title = ((content['title'] as string | undefined) ?? '').trim();
+    return { label: title !== '' ? `${who} 将群组改名为“${title}”` : `${who} 更改了群名称`, kind };
+  }
+  if (type === 'messageChatChangePhoto') {
+    return { label: `${who} 更新了群组头像`, kind };
+  }
+  if (type === 'messageChatDeletePhoto') {
+    return { label: `${who} 删除了群组头像`, kind };
+  }
+  if (type === 'messageChatAddMembers') {
+    const ids = (content['member_user_ids'] as number[] | undefined) ?? [];
+    const actorId = senderIdOf(message);
+    if (ids.length === 1 && actorId > 0 && ids[0] === actorId) {
+      return { label: `${who} 加入了群组`, kind };
+    }
+    const names = userNames(ids, users);
+    return { label: names !== '' ? `${who} 邀请了 ${names}` : `${who} 邀请了新成员`, kind };
+  }
+  if (type === 'messageChatDeleteMember') {
+    const uid = content['user_id'] as number | undefined;
     const name = uid !== undefined ? users.displayName(uid) : '';
-    return name !== '' ? `${who} 移除了 ${name}` : `${who} 移除了一名成员`;
+    if (uid !== undefined && uid > 0 && uid === senderIdOf(message)) {
+      return { label: `${who} 退出了群组`, kind };
+    }
+    return { label: name !== '' ? `${who} 移除了 ${name}` : `${who} 移除了一名成员`, kind };
   }
   if (type === 'messageChatJoinByLink') {
-    return `${who} 通过邀请链接加入群组`;
+    return { label: `${who} 通过邀请链接加入群组`, kind };
   }
   if (type === 'messageChatSetMessageAutoDeleteTime') {
-    const secs = (content!['message_auto_delete_time'] as number | undefined) ?? 0;
+    const secs = (content['message_auto_delete_time'] as number | undefined) ?? 0;
+    const fromUserId = (content['from_user_id'] as number | undefined) ?? 0;
     if (secs <= 0) {
-      return `${who} 关闭了自动删除`;
+      return { label: `${who} 关闭了自动删除`, kind };
     }
-    const label = secs >= 86400 ? `${Math.round(secs / 86400)} 天`
-      : (secs >= 3600 ? `${Math.round(secs / 3600)} 小时` : `${Math.round(secs / 60)} 分钟`);
-    return `${who} 将消息自动删除时间设为 ${label}`;
+    const duration = autoDeleteDuration(secs);
+    const fromName = fromUserId > 0 ? users.displayName(fromUserId) : '';
+    if (fromName !== '' && fromUserId !== senderIdOf(message)) {
+      return { label: `已应用 ${fromName} 的默认自动删除设置：${duration}`, kind };
+    }
+    return { label: `${who} 将消息自动删除时间设为 ${duration}`, kind };
   }
   if (type === 'messageChatJoinByRequest') {
-    return `${who} 加入了群组`;
+    return { label: `${who} 的入群请求已通过`, kind };
   }
   if (type === 'messageChatUpgradeTo' || type === 'messageChatUpgradeFrom') {
-    return '群组已升级为超级群组';
+    return { label: '群组已升级为超级群组', kind };
   }
   if (type === 'messagePinMessage') {
-    return `${who} 置顶了一条消息`;
+    return { label: `${who} 置顶了一条消息`, kind };
   }
   if (type === 'messageBasicGroupChatCreate' || type === 'messageSupergroupChatCreate') {
-    const title = (content!['title'] as string | undefined) ?? '';
-    return `${who} 创建了群组"${title}"`;
+    const title = ((content['title'] as string | undefined) ?? '').trim();
+    return { label: title !== '' ? `${who} 创建了群组“${title}”` : `${who} 创建了群组`, kind };
+  }
+  if (type === 'messageContactRegistered') {
+    return { label: `${who} 加入了 Telegram`, kind };
+  }
+  if (type === 'messageChatSetTheme') {
+    const themeName = ((content['theme_name'] as string | undefined) ?? '').trim();
+    return {
+      label: themeName !== '' ? `${who} 将聊天主题设为“${themeName}”` : `${who} 关闭了聊天主题`,
+      kind
+    };
+  }
+  if (type === 'messageChatSetBackground') {
+    return { label: `${who} 更改了聊天背景`, kind };
+  }
+  if (type === 'messageScreenshotTaken') {
+    return { label: `${who} 截取了屏幕截图`, kind };
+  }
+  if (type === 'messageChatHasProtectedContentDisableRequested') {
+    return { label: `${who} 请求关闭内容保护`, kind };
+  }
+  if (type === 'messageChatHasProtectedContentToggled') {
+    const oldProtected = (content['old_has_protected_content'] as boolean | undefined) ?? false;
+    const newProtected = (content['new_has_protected_content'] as boolean | undefined) ?? false;
+    const requestId = (content['request_message_id'] as number | undefined) ?? 0;
+    if (requestId !== 0 && oldProtected === newProtected) {
+      return { label: '关闭内容保护的请求未获批准', kind };
+    }
+    return { label: `${who}${newProtected ? '开启' : '关闭'}了内容保护`, kind };
+  }
+  if (type === 'messageChatBoost') {
+    const count = Math.max(0, (content['boost_count'] as number | undefined) ?? 0);
+    return {
+      label: count > 1 ? `${who} 为频道助力了 ${count} 次` : `${who} 为频道助力`,
+      kind: 'payment'
+    };
+  }
+  if (type === 'messageForumTopicCreated') {
+    const name = ((content['name'] as string | undefined) ?? '').trim();
+    return { label: name !== '' ? `${who} 创建了话题“${name}”` : `${who} 创建了话题`, kind };
+  }
+  if (type === 'messageForumTopicEdited') {
+    const name = ((content['name'] as string | undefined) ?? '').trim();
+    return {
+      label: name !== '' ? `${who} 将话题改名为“${name}”` : `${who} 更改了话题图标`,
+      kind
+    };
+  }
+  if (type === 'messageForumTopicIsClosedToggled') {
+    const closed = (content['is_closed'] as boolean | undefined) ?? false;
+    return { label: `${who}${closed ? '关闭' : '重新打开'}了话题`, kind };
+  }
+  if (type === 'messageForumTopicIsHiddenToggled') {
+    const hidden = (content['is_hidden'] as boolean | undefined) ?? false;
+    return { label: `${who}${hidden ? '隐藏' : '显示'}了通用话题`, kind };
+  }
+  if (type === 'messageVideoChatScheduled') {
+    const scheduled = scheduledDateLabel((content['start_date'] as number | undefined) ?? 0);
+    return {
+      label: scheduled !== '' ? `${who} 安排了视频通话 · ${scheduled}` : `${who} 安排了视频通话`,
+      kind
+    };
+  }
+  if (type === 'messageVideoChatStarted') {
+    return { label: `${who} 发起了视频通话`, kind };
+  }
+  if (type === 'messageVideoChatEnded') {
+    const duration = (content['duration'] as number | undefined) ?? 0;
+    return {
+      label: duration > 0 ? `视频通话已结束 · ${compactDuration(duration)}` : '视频通话已结束',
+      kind
+    };
+  }
+  if (type === 'messageInviteVideoChatParticipants') {
+    const names = userNames((content['user_ids'] as number[] | undefined) ?? [], users);
+    return {
+      label: names !== '' ? `${who} 邀请 ${names} 加入视频通话` : `${who} 邀请成员加入视频通话`,
+      kind
+    };
+  }
+  if (type === 'messageCall') {
+    const duration = (content['duration'] as number | undefined) ?? 0;
+    const video = (content['is_video'] as boolean | undefined) ?? false;
+    const reason = content['discard_reason'] as TdObject | undefined;
+    const reasonType = reason !== undefined ? ((reason['@type'] as string | undefined) ?? '') : '';
+    const callLabel = video ? '视频通话' : '语音通话';
+    if (duration > 0) {
+      return { label: `${callLabel} · ${compactDuration(duration)}`, kind };
+    }
+    if (reasonType === 'callDiscardReasonMissed' || reasonType === 'callDiscardReasonDeclined') {
+      return {
+        label: ((message['is_outgoing'] as boolean | undefined) ?? false)
+          ? `未接通的${callLabel}` : `未接${video ? '视频来电' : '来电'}`,
+        kind
+      };
+    }
+    return { label: callLabel, kind };
+  }
+  if (type === 'messageProximityAlertTriggered') {
+    const traveler = senderUserName(content['traveler_id'] as TdObject | undefined, users);
+    const watcher = senderUserName(content['watcher_id'] as TdObject | undefined, users);
+    const distance = Math.max(0, (content['distance'] as number | undefined) ?? 0);
+    if (traveler !== '' && watcher !== '') {
+      return {
+        label: `${traveler} 距离 ${watcher} ${distance > 0 ? `${distance} 米` : '很近'}`,
+        kind: 'people'
+      };
+    }
+    return { label: '触发了附近提醒', kind: 'people' };
+  }
+  if (type === 'messageCustomServiceAction') {
+    const text = ((content['text'] as string | undefined) ?? '').trim();
+    return { label: text !== '' ? text : '聊天状态已更新', kind };
+  }
+  if (type === 'messagePaidMessagePriceChanged') {
+    const stars = Math.max(0, (content['paid_message_star_count'] as number | undefined) ?? 0);
+    return {
+      label: stars > 0 ? `每条消息需支付 ${stars} 颗星星` : '已关闭付费消息',
+      kind
+    };
+  }
+  if (type === 'messagePaidMessagesRefunded') {
+    const count = Math.max(0, (content['message_count'] as number | undefined) ?? 0);
+    const stars = Math.max(0, (content['star_count'] as number | undefined) ?? 0);
+    if (count > 0 && stars > 0) {
+      return { label: `${count} 条付费消息已退款 · ${stars} 颗星星`, kind };
+    }
+    return { label: stars > 0 ? `已退还 ${stars} 颗星星` : '付费消息已退款', kind };
   }
   // Channel direct-message (paid DM) settings — show the concrete star price /
   // enabled state, matching the official client's wording.
   if (type === 'messageDirectMessagePriceChanged') {
-    const enabled = (content!['is_enabled'] as boolean | undefined) ?? false;
-    const stars = (content!['paid_message_star_count'] as number | undefined) ?? 0;
+    const enabled = (content['is_enabled'] as boolean | undefined) ?? false;
+    const stars = (content['paid_message_star_count'] as number | undefined) ?? 0;
     if (!enabled) {
-      return '频道已关闭私信。';
+      return { label: '频道已关闭私信', kind };
     }
-    return stars > 0 ? `此频道允许每条 ${stars} 颗星星的私信。` : '频道已启用私信。';
+    return {
+      label: stars > 0 ? `此频道允许每条 ${stars} 颗星星的私信` : '频道已启用私信',
+      kind
+    };
   }
   // Fallback for other service messages (video chats, gifts, giveaways, forum
   // topics, payments, …) → shown as a centered pill.
-  const svc: string | undefined = type !== undefined ? SERVICE_LABELS[type] : undefined;
+  const svc: string | undefined = SERVICE_LABELS[type];
   if (svc !== undefined) {
-    return svc;
+    return { label: svc, kind };
   }
-  return '';
+  return emptySystemMessage();
 }
 
 // Content types intentionally hidden from the timeline. Empty by default — all
-// service messages are now surfaced as centered pills via systemMessageLabel /
+// service messages are now surfaced as centered pills via systemMessageInfo /
 // SERVICE_LABELS instead of being hidden.
 const HIDDEN_CONTENT_TYPES: string[] = [];
 
@@ -400,20 +857,37 @@ function replyId(message: TdObject): number {
   return (r['message_id'] as number | undefined) ?? 0;
 }
 
+function inlineCustomEmojiIds(entities: TdObject[]): string[] {
+  const ids: string[] = [];
+  for (const entity of entities) {
+    const type = entity['type'] as TdObject | undefined;
+    if (type === undefined || type['@type'] !== 'textEntityTypeCustomEmoji') {
+      continue;
+    }
+    const id = `${type['custom_emoji_id'] ?? ''}`;
+    if (id !== '' && ids.indexOf(id) < 0) {
+      ids.push(id);
+    }
+  }
+  return ids;
+}
+
 export function buildMessageEntry(message: TdObject, users: UserStore): MessageEntry {
   const c: MsgContent = formatMsgContent(message);
   const isOutgoing = (message['is_outgoing'] as boolean | undefined) ?? false;
   const name = senderName(message, users);
   const fwd: FwdOrigin = forwardOrigin(message, users);
   const cmt: CommentInfo = commentInfo(message);
-  const sysLabel = systemMessageLabel(message, users);
+  const sys = systemMessageInfo(message, users);
   const hidden = isHiddenContent(message);
   const rawContent = message['content'] as TdObject | undefined;
+  const rawType = rawContent !== undefined
+    ? ((rawContent['@type'] as string | undefined) ?? '') : '';
   const isVideoChatStarted = !hidden && rawContent !== undefined
     && rawContent['@type'] === 'messageVideoChatStarted';
   // Log genuinely unhandled content types — not hidden, not given a description
   // (still the bare 'Message' fallback) — so missing types surface in hilog.
-  if (!hidden && c.contentType === 'other' && c.placeholderLabel === 'Message') {
+  if (!hidden && c.contentType === 'other') {
     const rc = message['content'] as TdObject | undefined;
     const rt = rc !== undefined ? ((rc['@type'] as string | undefined) ?? 'unknown') : 'unknown';
     console.warn(`[UNHANDLED_MSG] type=${rt} id=${(message['id'] as number | undefined) ?? 0}`);
@@ -427,14 +901,21 @@ export function buildMessageEntry(message: TdObject, users: UserStore): MessageE
     senderInitials: name.length > 0 ? name.substring(0, 1).toUpperCase() : '?',
     senderAvatarPath: '',
     date: (message['date'] as number | undefined) ?? 0,
-    contentType: hidden ? 'hidden' : (sysLabel !== '' ? 'system' : c.contentType),
+    editDate: (message['edit_date'] as number | undefined) ?? 0,
+    contentType: hidden ? 'hidden' : (sys.label !== '' ? 'system' : c.contentType),
     text: c.text,
     photoFileId: c.photoFileId,
-    photoPath: '',
-    photoProgress: 0,
+    photoPath: c.photoLocalPath ?? '',
+    photoProgress: c.photoLocalPath !== undefined && c.photoLocalPath !== ''
+      ? 100 : (c.photoInitialProgress ?? 0),
+    photoFailed: false,
     photoWidth: c.photoWidth,
     photoHeight: c.photoHeight,
-    placeholderLabel: sysLabel !== '' ? sysLabel : c.placeholderLabel,
+    placeholderLabel: sys.label !== '' ? sys.label : c.placeholderLabel,
+    systemKind: sys.kind,
+    systemType: sys.label !== '' ? rawType : '',
+    systemUserIds: sys.label !== '' ? systemUserIdsOf(rawContent, rawType) : [],
+    isUnsupportedMessage: !hidden && sys.label === '' && c.contentType === 'other',
     isVideoChatStarted,
     replyToMessageId: replyId(message),
     replySenderName: '',
@@ -442,6 +923,8 @@ export function buildMessageEntry(message: TdObject, users: UserStore): MessageE
     sendState: isOutgoing ? outgoingState(message) : 'none',
     albumId: albumIdOf(message),
     textEntities: c.entities,
+    inlineCustomEmojiIds: inlineCustomEmojiIds(c.entities),
+    inlineCustomEmojiPaths: [],
     forwardFrom: fwd.name,
     forwardChatId: fwd.chatId,
     forwardOriginChatId: fwd.originChatId,
@@ -462,17 +945,92 @@ export function buildMessageEntry(message: TdObject, users: UserStore): MessageE
     photoFullFileId: c.photoFullFileId,
     photoFullPath: '',
     photoFullProgress: 0,
+    photoFullFailed: false,
     videoFileId: c.videoFileId,
     videoFileSize: c.videoFileSize,
     videoMimeType: c.videoMimeType,
     videoFileName: c.videoFileName,
     videoDuration: c.videoDuration,
     isAnimation: c.isAnimation ?? false,
-    videoPath: '',
-    videoProgress: 0,
+    videoPath: c.videoLocalPath ?? '',
+    videoProgress: c.videoLocalPath !== undefined && c.videoLocalPath !== ''
+      ? 100 : (c.videoInitialProgress ?? 0),
+    videoFailed: false,
+    mediaDownloadActive: c.videoInitialActive ?? false,
+    voiceWaveform: c.voiceWaveform ?? '',
+    voiceListened: isOutgoing || (c.voiceListened ?? false),
+    audioTitle: c.audioTitle ?? '',
+    audioPerformer: c.audioPerformer ?? '',
     stickerFileId: c.stickerFileId ?? 0,
     stickerFormat: c.stickerFormat ?? '',
-    stickerPath: '',
+    isEmojiSticker: c.isEmojiSticker ?? false,
+    stickerPath: c.stickerLocalPath ?? '',
+    stickerProgress: c.stickerLocalPath !== undefined && c.stickerLocalPath !== ''
+      ? 100 : (c.stickerInitialProgress ?? 0),
+    stickerFailed: false,
+    stickerDownloadActive: c.stickerInitialActive ?? false,
+    contactPhone: c.contactPhone ?? '',
+    contactFirstName: c.contactFirstName ?? '',
+    contactLastName: c.contactLastName ?? '',
+    contactVcard: c.contactVcard ?? '',
+    contactUserId: c.contactUserId ?? 0,
+    contactAvatarPath: '',
+    locationLatitude: c.locationLatitude ?? 0,
+    locationLongitude: c.locationLongitude ?? 0,
+    locationAccuracy: c.locationAccuracy ?? 0,
+    locationValid: c.locationValid ?? false,
+    locationLivePeriod: c.locationLivePeriod ?? 0,
+    locationExpiresIn: c.locationExpiresIn ?? 0,
+    locationHeading: c.locationHeading ?? 0,
+    locationProximityRadius: c.locationProximityRadius ?? 0,
+    venueTitle: c.venueTitle ?? '',
+    venueAddress: c.venueAddress ?? '',
+    venueProvider: c.venueProvider ?? '',
+    venueId: c.venueId ?? '',
+    venueType: c.venueType ?? '',
+    pollId: c.pollId ?? '',
+    pollQuestion: c.pollQuestion ?? '',
+    pollOptions: c.pollOptions ?? [],
+    pollTotalVoterCount: c.pollTotalVoterCount ?? 0,
+    pollIsAnonymous: c.pollIsAnonymous ?? true,
+    pollIsQuiz: c.pollIsQuiz ?? false,
+    pollAllowMultiple: c.pollAllowMultiple ?? false,
+    pollCorrectOptionId: c.pollCorrectOptionId ?? -1,
+    pollExplanation: c.pollExplanation ?? '',
+    pollOpenPeriod: c.pollOpenPeriod ?? 0,
+    pollCloseDate: c.pollCloseDate ?? 0,
+    pollIsClosed: c.pollIsClosed ?? false,
+    pollVotePending: false,
+    pollVoteError: '',
+    diceEmoji: c.diceEmoji ?? '',
+    diceValue: c.diceValue ?? 0,
+    diceSuccessFrame: c.diceSuccessFrame ?? 0,
+    diceHasFinalState: c.diceHasFinalState ?? false,
+    gameId: c.gameId ?? '',
+    gameShortName: c.gameShortName ?? '',
+    gameTitle: c.gameTitle ?? '',
+    gameDescription: c.gameDescription ?? '',
+    gameText: c.gameText ?? '',
+    paidMediaLocked: c.paidMediaLocked ?? false,
+    paidMediaStarCount: c.paidMediaStarCount ?? 0,
+    paidMediaCount: c.paidMediaCount ?? 0,
+    paidMediaKind: c.paidMediaKind ?? '',
+    giftKind: c.giftKind ?? '',
+    giftTitle: c.giftTitle ?? '',
+    giftValue: c.giftValue ?? '',
+    giftStatus: c.giftStatus ?? '',
+    giftCode: c.giftCode ?? '',
+    giftRefunded: c.giftRefunded ?? false,
+    giveawayState: c.giveawayState ?? '',
+    giveawayWinnerCount: c.giveawayWinnerCount ?? 0,
+    giveawayPrize: c.giveawayPrize ?? '',
+    giveawayDescription: c.giveawayDescription ?? '',
+    giveawaySelectionDate: c.giveawaySelectionDate ?? 0,
+    giveawayUnclaimedCount: c.giveawayUnclaimedCount ?? 0,
+    giveawayMessageId: c.giveawayMessageId ?? 0,
+    giveawayBoostedChatId: c.giveawayBoostedChatId ?? 0,
+    giveawayRefunded: c.giveawayRefunded ?? false,
+    giveawayOnlyNewMembers: c.giveawayOnlyNewMembers ?? false,
     customEmojiId: c.customEmojiId ?? ''
   };
 }

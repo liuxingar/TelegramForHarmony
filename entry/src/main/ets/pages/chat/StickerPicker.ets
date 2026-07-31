@@ -2,6 +2,9 @@ import { getTdClient } from '../../tdkit/Globals';
 import { TgsStickerView } from './TgsStickerView';
 import { SmartLoopVideo } from '../common/SmartLoopVideo';
 import { TdObject, TdRequest, TdError } from '../../tdkit/TdTypes';
+import {
+  KEY_POWER_ACTIVE, KEY_POWER_EMOJI, KEY_POWER_STICKERS, KEY_POWER_STICKER_AUTOPLAY, KEY_REDUCE_ANIM
+} from '../../store/AppSettings';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
 
 export interface StickerItem {
@@ -62,6 +65,7 @@ interface StickerSetTab {
   iconPath: string; // pack cover thumbnail for the tab strip ('' = text fallback)
   iconText: string; // emoji glyph tab icon (classic unicode packs)
   loaded: boolean;
+  failed: boolean;
   stickers: StickerItem[];
 }
 
@@ -89,12 +93,28 @@ export struct StickerPicker {
   // false = static thumbnails only (no Lottie/ijkplayer cells) — used by the
   // avatar picker dialog where a grid full of players stutters.
   animate: boolean = true;
+  @StorageProp(KEY_POWER_ACTIVE) @Watch('onPlaybackSettingsChanged') powerSaving: boolean = false;
+  @StorageProp(KEY_REDUCE_ANIM) @Watch('onPlaybackSettingsChanged') reduceAnimations: boolean = false;
+  @StorageProp(KEY_POWER_STICKERS) @Watch('onPlaybackSettingsChanged') stickersEnabled: boolean = true;
+  @StorageProp(KEY_POWER_STICKER_AUTOPLAY) @Watch('onPlaybackSettingsChanged') stickerAutoplay: boolean = true;
+  @StorageProp(KEY_POWER_EMOJI) @Watch('onPlaybackSettingsChanged') emojiEnabled: boolean = true;
   @State sets: StickerSetTab[] = [];
   @State curSet: number = 0;
   @State loading: boolean = true;
+  @State loadError: string = '';
+  @State searchLoading: boolean = false;
+  @State searchError: string = '';
+  @State contentError: string = '';
+  private initialized: boolean = false;
+  private loadSeq: number = 0;
+  private sourceLoading: Set<number> = new Set<number>();
   private gridData: StickerDataSource = new StickerDataSource();
 
   aboutToAppear(): void {
+    if (this.initialized) {
+      return;
+    }
+    this.initialized = true;
     if (this.classicPacks.length > 0) {
       this.sets = this.classicPacks.map((c: ClassicPack, i: number): StickerSetTab => ({
         id: `classic_${i}`,
@@ -102,6 +122,7 @@ export struct StickerPicker {
         iconPath: '',
         iconText: c.icon,
         loaded: true,
+        failed: false,
         stickers: c.emoji.map((ch: string): StickerItem => ({
           fileId: 0, width: 0, height: 0, thumbPath: '', thumbFileId: 0, emoji: ch, format: 'unicode', srcPath: '', customEmojiId: ''
         }))
@@ -118,10 +139,44 @@ export struct StickerPicker {
     } as TdObject;
   }
 
+  private playbackEnabled(): boolean {
+    if (!this.animate || this.powerSaving || this.reduceAnimations) {
+      return false;
+    }
+    return this.stickerType === 'custom_emoji'
+      ? this.emojiEnabled
+      : this.stickersEnabled && this.stickerAutoplay;
+  }
+
+  private onPlaybackSettingsChanged(): void {
+    if (!this.playbackEnabled()) {
+      return;
+    }
+    for (const set of this.sets) {
+      if (!set.loaded || set.id.startsWith('classic_')) {
+        continue;
+      }
+      for (const sticker of set.stickers) {
+        if ((sticker.format === 'tgs' || sticker.format === 'webm') &&
+          sticker.srcPath === '' && !this.sourceLoading.has(sticker.fileId)) {
+          this.downloadSource(set.id, sticker.fileId);
+        }
+      }
+    }
+  }
+
   private loadSets(): void {
+    const seq: number = ++this.loadSeq;
+    this.loadError = '';
+    if (this.sets.length === 0) {
+      this.loading = true;
+    }
     const req: TdRequest = { '@type': 'getInstalledStickerSets' };
     req['sticker_type'] = this.typeObj();
     getTdClient().send(req).then((res: TdObject) => {
+      if (seq !== this.loadSeq) {
+        return;
+      }
       const raw = (res['sets'] as TdObject[] | undefined) ?? [];
       const tabs: StickerSetTab[] = [];
       for (const s of raw.slice(0, SET_LIMIT)) {
@@ -132,11 +187,14 @@ export struct StickerPicker {
           iconPath: '',
           iconText: '',
           loaded: false,
+          failed: false,
           stickers: []
         });
-        this.resolveTabIcon(id, s);
       }
       this.sets = [...this.sets, ...tabs];
+      for (const s of raw.slice(0, SET_LIMIT)) {
+        this.resolveTabIcon(`${s['id']}`, s);
+      }
       this.loading = false;
       if (this.classicPacks.length === 0 && tabs.length > 0) {
         this.selectSet(0);
@@ -147,8 +205,14 @@ export struct StickerPicker {
         this.loadTrending();
       }
     }).catch((e: TdError) => {
+      if (seq !== this.loadSeq) {
+        return;
+      }
       console.error(`StickerPicker.getInstalledStickerSets failed: ${e.message}`);
       this.loading = false;
+      if (this.sets.length === 0) {
+        this.loadError = this.stickerType === 'custom_emoji' ? '表情包加载失败' : '贴纸包加载失败';
+      }
       if (this.includeTrending) {
         this.loadTrending();
       }
@@ -177,6 +241,7 @@ export struct StickerPicker {
           iconPath: '',
           iconText: '',
           loaded: false,
+          failed: false,
           stickers: []
         });
         this.resolveTabIcon(id, s);
@@ -184,6 +249,13 @@ export struct StickerPicker {
       if (extra.length > 0) {
         const hadNone = this.sets.length === 0;
         this.sets = [...this.sets, ...extra];
+        const extraIds = new Set<string>(extra.map((t: StickerSetTab) => t.id));
+        for (const s of raw) {
+          const id = `${s['id']}`;
+          if (extraIds.has(id)) {
+            this.resolveTabIcon(id, s);
+          }
+        }
         this.loading = false;
         if (hadNone) {
           this.selectSet(0);
@@ -231,7 +303,10 @@ export struct StickerPicker {
         return;
       }
       this.sets = this.sets.map((t: StickerSetTab): StickerSetTab => t.id === setId
-        ? { id: t.id, title: t.title, iconPath: path, iconText: t.iconText, loaded: t.loaded, stickers: t.stickers } : t);
+        ? {
+          id: t.id, title: t.title, iconPath: path, iconText: t.iconText,
+          loaded: t.loaded, failed: t.failed, stickers: t.stickers
+        } : t);
     }).catch((e: TdError) => {
       console.error(`StickerPicker.resolveTabIcon failed: ${e.message}`);
     });
@@ -245,9 +320,18 @@ export struct StickerPicker {
 
   private onSearchChanged(v: string): void {
     this.searchQuery = v;
+    this.searchError = '';
     if (this.searchTimer !== -1) {
       clearTimeout(this.searchTimer);
     }
+    if (v.trim() === '') {
+      this.searchSeq++;
+      this.searchLoading = false;
+      this.searchItems = [];
+      this.refreshGrid();
+      return;
+    }
+    this.searchLoading = true;
     this.searchTimer = setTimeout(() => {
       this.searchTimer = -1;
       this.runStickerSearch();
@@ -258,6 +342,8 @@ export struct StickerPicker {
     const q = this.searchQuery.trim();
     const seq = ++this.searchSeq;
     if (q === '') {
+      this.searchLoading = false;
+      this.searchError = '';
       this.searchItems = [];
       this.refreshGrid();
       return;
@@ -299,17 +385,34 @@ export struct StickerPicker {
           emoji: (st['emoji'] as string | undefined) ?? '',
           format, srcPath: '', customEmojiId: ceId
         });
-        this.downloadSearchThumb(fileId, st['thumbnail'] as TdObject | undefined);
       }
       this.searchItems = items;
+      this.searchLoading = false;
+      this.searchError = '';
       this.refreshGrid();
+      // Publish results before downloading thumbnails so a fast completion
+      // cannot patch the previous empty array.
+      for (const st of raw) {
+        const file = st['sticker'] as TdObject | undefined;
+        const fileId = file !== undefined ? ((file['id'] as number | undefined) ?? 0) : 0;
+        if (fileId !== 0) {
+          this.downloadSearchThumb(fileId, st['thumbnail'] as TdObject | undefined, seq);
+        }
+      }
     }).catch((e: TdError) => {
+      if (seq !== this.searchSeq) {
+        return;
+      }
       console.error(`StickerPicker.searchStickers failed: ${e.message}`);
+      this.searchLoading = false;
+      this.searchError = '搜索失败';
+      this.searchItems = [];
+      this.refreshGrid();
     });
   }
 
-  private downloadSearchThumb(stickerFileId: number, thumb: TdObject | undefined): void {
-    const file = thumb !== undefined ? (thumb['file'] as TdObject | undefined) : undefined;
+  private downloadSearchThumb(stickerFileId: number, thumb: TdObject | undefined, seq: number): void {
+    const file = this.rasterThumbFile(thumb);
     const fileId = file !== undefined ? ((file['id'] as number | undefined) ?? 0) : 0;
     if (fileId === 0) {
       return;
@@ -319,6 +422,9 @@ export struct StickerPicker {
     req['priority'] = 1;
     req['synchronous'] = true;
     getTdClient().send(req).then((f: TdObject) => {
+      if (seq !== this.searchSeq) {
+        return;
+      }
       const local = f['local'] as TdObject | undefined;
       const path = local !== undefined ? ((local['path'] as string | undefined) ?? '') : '';
       if (path === '') {
@@ -344,9 +450,10 @@ export struct StickerPicker {
   private anchor: number = 0;
   private flatEntries: FlatEntry[] = [];
   private gridScroller: Scroller = new Scroller();
-  private loadingSet: boolean = false;
+  @State loadingSet: boolean = false;
 
   private selectSet(idx: number): void {
+    this.contentError = '';
     this.curSet = idx;
     this.anchor = idx;
     this.refreshGrid();
@@ -359,7 +466,7 @@ export struct StickerPicker {
   // Load the next unloaded pack after the anchor (keeps the flat list contiguous).
   private loadNextSet(): void {
     for (let i = this.anchor; i < this.sets.length; i++) {
-      if (!this.sets[i].loaded) {
+      if (!this.sets[i].loaded && !this.sets[i].failed) {
         this.loadSetContents(i);
         return;
       }
@@ -408,7 +515,15 @@ export struct StickerPicker {
       return;
     }
     this.loadingSet = true;
+    this.contentError = '';
     const setId = this.sets[idx].id;
+    this.sets = this.sets.map((t: StickerSetTab): StickerSetTab =>
+      t.id === setId
+        ? {
+          id: t.id, title: t.title, iconPath: t.iconPath, iconText: t.iconText,
+          loaded: t.loaded, failed: false, stickers: t.stickers
+        }
+        : t);
     const req: TdRequest = { '@type': 'getStickerSet' };
     req['set_id'] = setId;
     getTdClient().send(req).then((res: TdObject) => {
@@ -441,7 +556,7 @@ export struct StickerPicker {
           customEmojiId: ceId
         });
         this.downloadThumb(setId, fileId, st['thumbnail'] as TdObject | undefined);
-        if (this.animate && (format === 'tgs' || format === 'webm')) {
+        if (this.playbackEnabled() && (format === 'tgs' || format === 'webm')) {
           this.downloadSource(setId, fileId);
         }
       }
@@ -453,11 +568,25 @@ export struct StickerPicker {
       }
       console.info(`StickerPicker: set ${setId} loaded ${items.length} stickers (tgs=${tgs} webm=${webm} webp=${webp})`);
       this.sets = this.sets.map((t: StickerSetTab): StickerSetTab =>
-        t.id === setId ? { id: t.id, title: t.title, iconPath: t.iconPath, iconText: t.iconText, loaded: true, stickers: items } : t);
+        t.id === setId
+          ? {
+            id: t.id, title: t.title, iconPath: t.iconPath, iconText: t.iconText,
+            loaded: true, failed: false, stickers: items
+          }
+          : t);
       this.loadingSet = false;
+      this.contentError = '';
       this.refreshGrid();
     }).catch((e: TdError) => {
       this.loadingSet = false;
+      this.contentError = '贴纸包加载失败';
+      this.sets = this.sets.map((t: StickerSetTab): StickerSetTab =>
+        t.id === setId
+          ? {
+            id: t.id, title: t.title, iconPath: t.iconPath, iconText: t.iconText,
+            loaded: false, failed: true, stickers: t.stickers
+          }
+          : t);
       console.error(`StickerPicker.getStickerSet failed: ${e.message}`);
     });
   }
@@ -502,7 +631,10 @@ export struct StickerPicker {
       }
       const stickers = t.stickers.map((s: StickerItem): StickerItem =>
         s.fileId === stickerFileId ? patch(s) : s);
-      return { id: t.id, title: t.title, iconPath: t.iconPath, iconText: t.iconText, loaded: t.loaded, stickers };
+      return {
+        id: t.id, title: t.title, iconPath: t.iconPath, iconText: t.iconText,
+        loaded: t.loaded, failed: t.failed, stickers
+      };
     });
     this.refreshGrid();
   }
@@ -528,20 +660,18 @@ export struct StickerPicker {
     }, 80);
   }
 
-  aboutToDisappear(): void {
-    if (this.refreshTimer !== -1) {
-      clearTimeout(this.refreshTimer);
-      this.refreshTimer = -1;
-    }
-  }
-
   // Sticker source download (small) → animate the grid cell (Lottie / ijk).
   private downloadSource(setId: string, stickerFileId: number): void {
+    if (this.sourceLoading.has(stickerFileId)) {
+      return;
+    }
+    this.sourceLoading.add(stickerFileId);
     const req: TdRequest = { '@type': 'downloadFile' };
     req['file_id'] = stickerFileId;
     req['priority'] = 1;
     req['synchronous'] = true;
     getTdClient().send(req).then((f: TdObject) => {
+      this.sourceLoading.delete(stickerFileId);
       const local = f['local'] as TdObject | undefined;
       const path = local !== undefined ? ((local['path'] as string | undefined) ?? '') : '';
       if (path === '') {
@@ -553,6 +683,7 @@ export struct StickerPicker {
         srcPath: path, customEmojiId: s.customEmojiId
       }));
     }).catch((e: TdError) => {
+      this.sourceLoading.delete(stickerFileId);
       console.error(`StickerPicker.downloadSource failed: ${e.message}`);
     });
   }
@@ -562,43 +693,118 @@ export struct StickerPicker {
     return this.stickerType === 'custom_emoji' ? 38 : 62;
   }
 
+  private playbackCategory(): string {
+    return this.stickerType === 'custom_emoji' ? 'emojiPicker' : 'sticker';
+  }
+
+  private retryInitialLoad(): void {
+    this.loadError = '';
+    this.loading = true;
+    this.sets = this.sets.filter((t: StickerSetTab): boolean => t.id.startsWith('classic_'));
+    this.refreshGrid();
+    this.loadSets();
+  }
+
+  private retryCurrentSet(): void {
+    if (this.curSet >= 0 && this.curSet < this.sets.length) {
+      this.loadSetContents(this.curSet);
+    }
+  }
+
+  @Styles
+  stickerCellNormalStyle() {
+    .opacity(1)
+    .scale({ x: 1, y: 1 })
+  }
+
+  @Styles
+  stickerCellPressedStyle() {
+    .opacity(0.72)
+    .scale({ x: 0.9, y: 0.9 })
+  }
+
   @Builder
   stickerCell(s: StickerItem) {
-    if (this.animate && s.format === 'tgs' && s.srcPath !== '') {
-      Column() {
-        TgsStickerView({ tgsPath: s.srcPath, thumbPath: s.thumbPath, boxWidth: this.cellPx(), boxHeight: this.cellPx() });
+    Stack() {
+      if (this.animate && s.format === 'tgs' && s.srcPath !== '') {
+        Column() {
+          TgsStickerView({
+            tgsPath: s.srcPath, thumbPath: s.thumbPath,
+            boxWidth: this.cellPx(), boxHeight: this.cellPx(),
+            powerCategory: this.playbackCategory()
+          });
+        }
+        .width('100%').height('100%')
+        .justifyContent(FlexAlign.Center);
+      } else if (this.animate && s.format === 'webm' && s.srcPath !== '') {
+        Column() {
+          SmartLoopVideo({
+            videoPath: s.srcPath, thumbPath: s.thumbPath,
+            boxWidth: this.cellPx(), boxHeight: this.cellPx(),
+            powerCategory: this.playbackCategory()
+          });
+        }
+        .width('100%').height('100%')
+        .justifyContent(FlexAlign.Center);
+      } else if (s.thumbPath !== '') {
+        Image(`file://${s.thumbPath}`)
+          .width('100%').height('100%').objectFit(ImageFit.Contain);
+      } else {
+        Text(s.emoji)
+          .fontSize(this.stickerType === 'custom_emoji' ? 26 : 30)
+          .textAlign(TextAlign.Center)
+          .width('100%').height('100%');
       }
-      .width('100%').aspectRatio(1)
-      .justifyContent(FlexAlign.Center)
-      .onClick(() => { this.onPick(s); });
-    } else if (this.animate && s.format === 'webm' && s.srcPath !== '') {
-      Column() {
-        SmartLoopVideo({ videoPath: s.srcPath, thumbPath: s.thumbPath, boxWidth: this.cellPx(), boxHeight: this.cellPx() });
-      }
-      .width('100%').aspectRatio(1)
-      .justifyContent(FlexAlign.Center)
-      .onClick(() => { this.onPick(s); });
-    } else if (s.thumbPath !== '') {
-      Image(`file://${s.thumbPath}`)
-        .width('100%').aspectRatio(1).objectFit(ImageFit.Contain)
-        .onClick(() => { this.onPick(s); });
-    } else {
-      Text(s.emoji).fontSize(this.stickerType === 'custom_emoji' ? 26 : 30).textAlign(TextAlign.Center)
-        .width('100%').aspectRatio(1)
-        .onClick(() => { this.onPick(s); });
     }
+    .width('100%').aspectRatio(1)
+    .stateStyles({
+      normal: this.stickerCellNormalStyle,
+      pressed: this.stickerCellPressedStyle
+    })
+    .animation({
+      duration: this.reduceAnimations || this.powerSaving ? 0 : 110,
+      curve: Curve.EaseOut
+    })
+    .onClick(() => { this.onPick(s); });
+  }
+
+  @Builder
+  stateMessage(symbol: Resource, title: string, detail: string, retry: boolean) {
+    Column({ space: 8 }) {
+      SymbolGlyph(symbol).fontSize(28).fontColor([COLOR_TEXT_SECONDARY]);
+      Text(title).fontSize(15).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+      Text(detail).fontSize(13).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center);
+      if (retry) {
+        Text('重新加载')
+          .fontSize(14).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
+          .padding({ left: 16, right: 16, top: 7, bottom: 7 })
+          .backgroundColor($r('app.color.selected_pill')).borderRadius(16)
+          .onClick(() => { this.retryInitialLoad(); });
+      }
+    }
+    .layoutWeight(1).width('100%')
+    .justifyContent(FlexAlign.Center);
   }
 
   build() {
     Column() {
       if (this.loading) {
         Column() {
-          LoadingProgress().width(32).height(32).color(COLOR_TEXT_SECONDARY);
-        }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
+          LoadingProgress().width(28).height(28).color(COLOR_PRIMARY);
+          Text(this.stickerType === 'custom_emoji' ? '正在加载表情' : '正在加载贴纸')
+            .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).margin({ top: 8 });
+        }
+        .layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
+      } else if (this.loadError !== '') {
+        this.stateMessage($r('sys.symbol.exclamationmark_circle'), this.loadError,
+          '检查网络后重试', true);
       } else if (this.sets.length === 0) {
-        Column() {
-          Text('没有已安装的贴纸包').fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
-        }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
+        this.stateMessage(
+          this.stickerType === 'custom_emoji' ? $r('sys.symbol.face_smiling') : $r('sys.symbol.gift'),
+          this.stickerType === 'custom_emoji' ? '暂无可用表情包' : '没有已安装的贴纸包',
+          this.stickerType === 'custom_emoji' ? '经典表情仍可正常使用' : '安装贴纸包后会显示在这里',
+          false
+        );
       } else {
         // Pack tabs: cover thumbnails (official-style), title initial fallback.
         Scroll(this.tabScroller) {
@@ -627,14 +833,17 @@ export struct StickerPicker {
                 this.selectSet(idx);
               });
             }, (t: StickerSetTab) => `${t.id}_${t.iconPath}`);
-          }.padding({ left: 8, right: 8 });
+          }.padding({ left: 16, right: 16 });
         }
         .scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
         .width('100%').height(44);
         // Search bar (searches public packs by emoji/keyword).
         Row({ space: 6 }) {
           SymbolGlyph($r('sys.symbol.magnifyingglass')).fontSize(15).fontColor([COLOR_TEXT_SECONDARY]);
-          TextInput({ text: this.searchQuery, placeholder: '搜索' })
+          TextInput({
+            text: this.searchQuery,
+            placeholder: this.stickerType === 'custom_emoji' ? '搜索表情' : '搜索贴纸'
+          })
             .fontSize(14).layoutWeight(1).height(30)
             .backgroundColor(Color.Transparent).padding(0)
             .placeholderColor(COLOR_TEXT_SECONDARY)
@@ -642,8 +851,11 @@ export struct StickerPicker {
           if (this.searchQuery !== '') {
             SymbolGlyph($r('sys.symbol.xmark')).fontSize(14).fontColor([COLOR_TEXT_SECONDARY])
               .onClick(() => {
+                this.searchSeq++;
                 this.searchQuery = '';
                 this.searchItems = [];
+                this.searchLoading = false;
+                this.searchError = '';
                 this.refreshGrid();
               });
           }
@@ -652,36 +864,79 @@ export struct StickerPicker {
         .padding({ left: 12, right: 12 })
         .backgroundColor($r('app.color.surface_alt')).borderRadius(17)
         .alignItems(VerticalAlign.Center)
-        .margin({ top: 2, bottom: 4 });
+        .margin({ top: 4, bottom: 4 });
+        if (this.contentError !== '' && this.searchQuery.trim() === '') {
+          Row({ space: 8 }) {
+            SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+              .fontSize(15).fontColor([COLOR_TEXT_SECONDARY]);
+            Text(this.contentError).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+            Blank().layoutWeight(1);
+            Text('重试').fontSize(13).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
+              .onClick(() => { this.retryCurrentSet(); });
+          }
+          .width('100%').height(30).padding({ left: 14, right: 14 })
+          .backgroundColor($r('app.color.surface_alt'));
+        } else if (this.loadingSet && this.searchQuery.trim() === '') {
+          Row({ space: 7 }) {
+            LoadingProgress().width(15).height(15).color(COLOR_PRIMARY);
+            Text('正在加载贴纸包').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+          }
+          .width('100%').height(26).padding({ left: 14, right: 14 });
+        }
         // Continuous grid: every loaded pack in one scroll, section headers
         // between packs; the tab strip follows the pack at the viewport top.
-        Grid(this.gridScroller) {
-          // LazyForEach: only visible cells mount, so at most a screenful of
-          // Lottie canvases animate at once.
-          LazyForEach(this.gridData, (e: FlatEntry) => {
-            if (e.kind === 'header') {
-              GridItem() {
-                Text(e.title)
-                  .fontSize(13).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_SECONDARY)
-                  .width('100%')
-                  .padding({ top: 8, bottom: 2 });
+        if (this.searchLoading) {
+          Column() {
+            LoadingProgress().width(24).height(24).color(COLOR_PRIMARY);
+            Text('正在搜索').fontSize(13).fontColor(COLOR_TEXT_SECONDARY).margin({ top: 7 });
+          }
+          .layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
+        } else if (this.searchError !== '') {
+          Column({ space: 8 }) {
+            SymbolGlyph($r('sys.symbol.exclamationmark_circle')).fontSize(24)
+              .fontColor([COLOR_TEXT_SECONDARY]);
+            Text(this.searchError).fontSize(14).fontColor(COLOR_TEXT_PRIMARY);
+            Text('重试').fontSize(14).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
+              .onClick(() => { this.runStickerSearch(); });
+          }
+          .layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
+        } else if (this.searchQuery.trim() !== '' && this.searchItems.length === 0) {
+          Column({ space: 7 }) {
+            SymbolGlyph($r('sys.symbol.magnifyingglass')).fontSize(24)
+              .fontColor([COLOR_TEXT_SECONDARY]);
+            Text('没有找到结果').fontSize(14).fontColor(COLOR_TEXT_PRIMARY);
+            Text('换个关键词或表情试试').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+          }
+          .layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
+        } else {
+          Grid(this.gridScroller) {
+            // LazyForEach: only visible cells mount, so at most a screenful of
+            // Lottie canvases animate at once.
+            LazyForEach(this.gridData, (e: FlatEntry) => {
+              if (e.kind === 'header') {
+                GridItem() {
+                  Text(e.title)
+                    .fontSize(13).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_SECONDARY)
+                    .width('100%')
+                    .padding({ top: 8, bottom: 2 });
+                }
+                .columnStart(0).columnEnd(this.stickerType === 'custom_emoji' ? 7 : 4);
+              } else if (e.sticker !== null) {
+                GridItem() {
+                  this.stickerCell(e.sticker);
+                }
               }
-              .columnStart(0).columnEnd(this.stickerType === 'custom_emoji' ? 7 : 4);
-            } else if (e.sticker !== null) {
-              GridItem() {
-                this.stickerCell(e.sticker);
-              }
-            }
-          }, (e: FlatEntry) => e.kind === 'header'
-            ? `h_${e.setIdx}_${e.title}`
-            : `${e.sticker!.fileId}_${e.sticker!.emoji}_${e.sticker!.thumbPath}_${e.sticker!.srcPath}`);
+            }, (e: FlatEntry) => e.kind === 'header'
+              ? `h_${e.setIdx}_${e.title}`
+              : `${e.sticker!.fileId}_${e.sticker!.emoji}_${e.sticker!.thumbPath}_${e.sticker!.srcPath}`);
+          }
+          .columnsTemplate(this.stickerType === 'custom_emoji'
+            ? '1fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr' : '1fr 1fr 1fr 1fr 1fr')
+          .columnsGap(6).rowsGap(6)
+          .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+          .layoutWeight(1).width('100%')
+          .onScrollIndex((first: number, last: number) => { this.onGridScrolled(first, last); });
         }
-        .columnsTemplate(this.stickerType === 'custom_emoji'
-          ? '1fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr' : '1fr 1fr 1fr 1fr 1fr')
-        .columnsGap(6).rowsGap(6)
-        .padding({ left: 10, right: 10, top: 4, bottom: 4 })
-        .layoutWeight(1).width('100%')
-        .onScrollIndex((first: number, last: number) => { this.onGridScrolled(first, last); });
       }
     }
     .width('100%').height('100%');

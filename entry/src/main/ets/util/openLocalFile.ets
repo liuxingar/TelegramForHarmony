@@ -2,9 +2,15 @@ import { common, Want, wantConstant } from '@kit.AbilityKit';
 import { fileUri } from '@kit.CoreFileKit';
 
 // Open a downloaded local file with whatever system app handles its type.
-export function openLocalFile(context: common.UIAbilityContext, path: string, mimeType: string): void {
+// Resolves false when the source is invalid or no installed ability accepts it,
+// so callers can show a useful failure state instead of silently doing nothing.
+export async function openLocalFile(
+  context: common.UIAbilityContext,
+  path: string,
+  mimeType: string
+): Promise<boolean> {
   if (path === '' || context === undefined) {
-    return;
+    return false;
   }
   try {
     const uri = fileUri.getUriFromPath(path);
@@ -16,10 +22,10 @@ export function openLocalFile(context: common.UIAbilityContext, path: string, mi
     if (mimeType !== '') {
       want.type = mimeType;
     }
-    context.startAbility(want).catch((e: Object) => {
-      console.error(`openLocalFile failed for ${path}: ${JSON.stringify(e)}`);
-    });
+    await context.startAbility(want);
+    return true;
   } catch (e) {
-    console.error(`openLocalFile uri conversion failed for ${path}: ${e}`);
+    console.error(`openLocalFile failed for ${path}: ${JSON.stringify(e)}`);
+    return false;
   }
 }

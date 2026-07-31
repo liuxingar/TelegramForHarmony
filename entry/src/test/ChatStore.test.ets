@@ -146,6 +146,18 @@ export default function chatStoreTest() {
       pushNewChat(b, 2, 'B', [mainPos('200', false)], null, 0);
       expect(calls).assertEqual(2); // no more after unsubscribe
     });
+    it('subscribe_changes_replays_notifies_and_unsubscribes', 0, () => {
+      const store = make();
+      const b = bridgeOf(store);
+      let calls = 0;
+      const off = store.subscribeChanges((): void => { calls += 1; });
+      expect(calls).assertEqual(1);
+      pushNewChat(b, 1, 'A', [folderPos(5, '100', false)], null, 0);
+      expect(calls).assertEqual(2);
+      off();
+      pushNewChat(b, 2, 'B', [folderPos(5, '200', false)], null, 0);
+      expect(calls).assertEqual(2);
+    });
     it('load_sends_loadChats', 0, () => {
       const store = make();
       const b = bridgeOf(store);
@@ -185,6 +197,11 @@ export default function chatStoreTest() {
       expect(store.photoFileIdOf(1)).assertEqual(88);
       store.setAvatarPath(1, '/data/a.jpg');
       expect(store.getChats()[0].avatarPath).assertEqual('/data/a.jpg');
+      const revision = store.getChats()[0].revision;
+      // A later full chat refresh must not erase an already resolved avatar.
+      b.onReceive(JSON.stringify(u));
+      expect(store.getChats()[0].avatarPath).assertEqual('/data/a.jpg');
+      expect(store.getChats()[0].revision).assertEqual(revision + 1);
     });
     it('update_does_not_mutate_prior_snapshot', 0, () => {
       const store = make();
@@ -196,6 +213,8 @@ export default function chatStoreTest() {
       b.onReceive(JSON.stringify(ur));
       expect(before.unreadCount).assertEqual(5);            // 旧快照不被改写(不可变)
       expect(store.getChats()[0].unreadCount).assertEqual(0); // 新快照已更新
+      expect(before.revision).assertEqual(0);
+      expect(store.getChats()[0].revision).assertEqual(1);
     });
     it('notification_settings_unmute', 0, () => {
       const store = make();
@@ -213,6 +232,20 @@ export default function chatStoreTest() {
       store.loadMore();
       const sent = JSON.parse(b.sent[b.sent.length - 1]) as TdObject;
       expect(sent['@type']).assertEqual('loadChats');
+    });
+    it('concurrent_initial_load_is_deduplicated', 0, () => {
+      const store = make();
+      const b = bridgeOf(store);
+      store.ensureLoaded('folder:5');
+      store.ensureLoaded('folder:5');
+      let count = 0;
+      for (const json of b.sent) {
+        const sent = JSON.parse(json) as TdObject;
+        if (sent['@type'] === 'loadChats') {
+          count += 1;
+        }
+      }
+      expect(count).assertEqual(1);
     });
     it('chat_in_main_and_folder_independent_order', 0, () => {
       const store = make();
@@ -249,6 +282,16 @@ export default function chatStoreTest() {
       expect(store.unreadChatCount('folder:5')).assertEqual(1);
       expect(store.unreadChatCount('main')).assertEqual(0);
     });
+    it('unread_chat_count_includes_manually_marked_unread', 0, () => {
+      const store = make();
+      const b = bridgeOf(store);
+      pushNewChat(b, 1, 'A', [folderPos(5, '100', false)], null, 0);
+      const u: TdObject = { '@type': 'updateChatIsMarkedAsUnread' };
+      u['chat_id'] = 1;
+      u['is_marked_as_unread'] = true;
+      b.onReceive(JSON.stringify(u));
+      expect(store.unreadChatCount('folder:5')).assertEqual(1);
+    });
     it('position_update_adds_to_folder', 0, () => {
       const store = make();
       const b = bridgeOf(store);
@@ -265,6 +308,46 @@ export default function chatStoreTest() {
       b.onReceive(JSON.stringify(u));
       expect(store.getChats('main')[0].unreadCount).assertEqual(0);
       expect(store.getChats('folder:5')[0].unreadCount).assertEqual(0);
+    });
+    it('chat_background_update_is_cached', 0, () => {
+      const store = make();
+      const b = bridgeOf(store);
+      pushNewChat(b, 1, 'A', [mainPos('100', false)], null, 0);
+      const fill: TdObject = { '@type': 'backgroundFillSolid' };
+      fill['color'] = 0x123456;
+      const type: TdObject = { '@type': 'backgroundTypeFill' };
+      type['fill'] = fill;
+      const background: TdObject = { '@type': 'background' };
+      background['type'] = type;
+      const chatBackground: TdObject = { '@type': 'chatBackground' };
+      chatBackground['background'] = background;
+      const update: TdObject = { '@type': 'updateChatBackground' };
+      update['chat_id'] = 1;
+      update['background'] = chatBackground;
+      b.onReceive(JSON.stringify(update));
+      const entry = store.entryOf(1);
+      expect(entry !== undefined && entry.background !== null).assertTrue();
+      expect(entry?.revision).assertEqual(1);
+    });
+    it('default_background_updates_are_cached_per_color_scheme', 0, () => {
+      const store = make();
+      const b = bridgeOf(store);
+      const light: TdObject = { '@type': 'background' };
+      light['id'] = '101';
+      const dark: TdObject = { '@type': 'background' };
+      dark['id'] = '202';
+      const lightUpdate: TdObject = { '@type': 'updateDefaultBackground' };
+      lightUpdate['for_dark_theme'] = false;
+      lightUpdate['background'] = light;
+      b.onReceive(JSON.stringify(lightUpdate));
+      const darkUpdate: TdObject = { '@type': 'updateDefaultBackground' };
+      darkUpdate['for_dark_theme'] = true;
+      darkUpdate['background'] = dark;
+      b.onReceive(JSON.stringify(darkUpdate));
+      expect(store.defaultBackgroundKnown(false)).assertTrue();
+      expect(store.defaultBackgroundKnown(true)).assertTrue();
+      expect(store.defaultBackground(false)?.['id']).assertEqual('101');
+      expect(store.defaultBackground(true)?.['id']).assertEqual('202');
     });
     it('subscribe_listkey_replays_only_that_list', 0, () => {
       const store = make();

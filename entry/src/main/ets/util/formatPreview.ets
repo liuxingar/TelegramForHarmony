@@ -35,6 +35,10 @@ export const SERVICE_LABELS: Record<string, string> = {
   'messageContactRegistered': '加入了 Telegram',
   'messageChatSetTheme': '更改了聊天主题',
   'messageChatSetBackground': '更改了聊天背景',
+  'messageChatHasProtectedContentDisableRequested': '请求关闭内容保护',
+  'messageChatHasProtectedContentToggled': '更改了内容保护设置',
+  'messageChatOwnerChanged': '群组所有者已变更',
+  'messageChatOwnerLeft': '群组所有者已退出',
   'messageScreenshotTaken': '截取了屏幕截图',
   'messageChatBoost': '助力了该频道',
   // Forum topics
@@ -75,6 +79,7 @@ export const SERVICE_LABELS: Record<string, string> = {
   'messageDirectMessagePriceChanged': '更改了私信设置',
   'messagePaidMessagePriceChanged': '更改了付费消息价格',
   'messagePaidMessagesRefunded': '付费消息已退款',
+  'messageCustomServiceAction': '聊天状态已更新',
   'messageCall': '📞 通话'
 };
 
@@ -85,7 +90,11 @@ function embeddedText(content: TdObject): string {
   if (capText !== '') {
     return capText;
   }
-  const txt = content['text'] as TdObject | undefined;
+  const rawText = content['text'];
+  if (typeof rawText === 'string') {
+    return rawText;
+  }
+  const txt = rawText as TdObject | undefined;
   return txt !== undefined ? ((txt['text'] as string | undefined) ?? '') : '';
 }
 
@@ -155,6 +164,21 @@ export function formatPreview(message: TdObject | null): string {
   if (type === 'messageCall') {
     return '📞 通话';
   }
+  if (type === 'messageExpiredPhoto') {
+    return '照片已过期';
+  }
+  if (type === 'messageExpiredVideo') {
+    return '视频已过期';
+  }
+  if (type === 'messageExpiredVideoNote') {
+    return '视频消息已过期';
+  }
+  if (type === 'messageExpiredVoiceNote') {
+    return '语音消息已过期';
+  }
+  if (type === 'messageUnsupported') {
+    return '暂不支持的消息';
+  }
   if (type === 'messageStory') {
     return '📖 故事';
   }
@@ -165,7 +189,41 @@ export function formatPreview(message: TdObject | null): string {
     return '🧾 账单';
   }
   if (type === 'messagePaidMedia') {
-    return '🖼 付费内容';
+    const stars = Math.max(0, (content['star_count'] as number | undefined) ?? 0);
+    return stars > 0 ? `🔒 ${stars} ⭐ 付费内容` : '🔒 付费内容';
+  }
+  if (type === 'messageGiftedStars') {
+    const stars = Math.max(0, (content['star_count'] as number | undefined) ?? 0);
+    return stars > 0 ? `⭐ 赠送了 ${stars} 颗星星` : '⭐ 赠送了星星';
+  }
+  if (type === 'messageGiftedTon') {
+    return '💎 赠送了 TON';
+  }
+  if (type === 'messageGiftedPremium') {
+    const months = Math.max(0, (content['month_count'] as number | undefined) ?? 0);
+    return months > 0 ? `💎 赠送了 ${months} 个月 Premium` : '💎 赠送了 Telegram Premium';
+  }
+  if (type === 'messagePremiumGiftCode') {
+    return '💎 Premium 兑换码';
+  }
+  if (type === 'messageGift') {
+    return ((content['was_refunded'] as boolean | undefined) ?? false)
+      ? '↩️ 礼物已退款' : '🎁 Telegram 礼物';
+  }
+  if (type === 'messageUpgradedGift') {
+    const gift = content['gift'] as TdObject | undefined;
+    const title = gift !== undefined ? ((gift['title'] as string | undefined) ?? '') : '';
+    return title !== '' ? `🎁 ${title}` : '🎁 Telegram 珍藏礼物';
+  }
+  if (type === 'messageGiveaway') {
+    return '🎉 频道抽奖';
+  }
+  if (type === 'messageGiveawayWinners' || type === 'messageGiveawayCompleted') {
+    return '🏆 抽奖结果';
+  }
+  if (type === 'messageGiveawayPrizeStars') {
+    const stars = Math.max(0, (content['star_count'] as number | undefined) ?? 0);
+    return stars > 0 ? `🏆 获得 ${stars} 颗星星` : '🏆 获得抽奖奖品';
   }
   if (type === 'messageAnimatedEmoji') {
     const emoji = (content!['emoji'] as string | undefined) ?? '';
@@ -173,14 +231,19 @@ export function formatPreview(message: TdObject | null): string {
       return emoji;
     }
   }
+  if (type === 'messageCustomServiceAction') {
+    const text = ((content['text'] as string | undefined) ?? '').trim();
+    return text !== '' ? text : '聊天状态已更新';
+  }
   const svc: string | undefined = SERVICE_LABELS[type];
   if (svc !== undefined) {
     return svc;
   }
-  // Last resort: any embedded text/caption, else a generic label — never 'Message'.
+  // Last resort: any embedded text/caption, else a readable compatibility
+  // label. Never expose a raw TDLib type or the old ambiguous "[通知]".
   const embedded = embeddedText(content);
   if (embedded !== '') {
     return embedded;
   }
-  return '[通知]';
+  return '暂不支持的消息';
 }

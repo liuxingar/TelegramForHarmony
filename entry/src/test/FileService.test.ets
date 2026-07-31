@@ -23,12 +23,17 @@ function pushCompletedFile(bridge: FakeBridge, fileId: number, path: string): vo
   bridge.onReceive(JSON.stringify(u));
 }
 
-function seedChat(bridge: FakeBridge, id: number): void {
+function seedChat(bridge: FakeBridge, id: number, photoFileId: number = 0): void {
   const list: TdObject = { '@type': 'chatListMain' };
   const pos: TdObject = { '@type': 'chatPosition' };
   pos['list'] = list; pos['order'] = '100'; pos['is_pinned'] = false;
   const chat: TdObject = { '@type': 'chat' };
   chat['id'] = id; chat['title'] = 'X'; chat['positions'] = [pos]; chat['unread_count'] = 0;
+  if (photoFileId !== 0) {
+    const small: TdObject = { '@type': 'file' }; small['id'] = photoFileId;
+    const photo: TdObject = { '@type': 'chatPhotoInfo' }; photo['small'] = small;
+    chat['photo'] = photo;
+  }
   const u: TdObject = { '@type': 'updateNewChat' }; u['chat'] = chat;
   bridge.onReceive(JSON.stringify(u));
 }
@@ -42,7 +47,7 @@ export default function fileServiceTest() {
       const store = new ChatStore(client, users);
       const files = new FileService(client, store);
       client.start();
-      seedChat(bridge, 1);
+      seedChat(bridge, 1, 55);
       files.requestAvatar(1, 55);
       pushCompletedFile(bridge, 55, '/data/avatar_55.jpg');
       expect(store.getChats()[0].avatarPath).assertEqual('/data/avatar_55.jpg');
@@ -54,11 +59,32 @@ export default function fileServiceTest() {
       const store = new ChatStore(client, users);
       const files = new FileService(client, store);
       client.start();
-      seedChat(bridge, 1);
+      seedChat(bridge, 1, 55);
       files.requestAvatar(1, 55);
       const after1 = bridge.sent.length;
       files.requestAvatar(1, 55);
       expect(bridge.sent.length).assertEqual(after1);
+    });
+    it('shared_file_updates_every_chat_and_late_subscriber', 0, () => {
+      const bridge = new FakeBridge();
+      const client = new TdClient(bridge);
+      const users = new UserStore(client);
+      const store = new ChatStore(client, users);
+      const files = new FileService(client, store);
+      client.start();
+      seedChat(bridge, 1, 55);
+      seedChat(bridge, 2, 55);
+      files.requestAvatar(1, 55);
+      files.requestAvatar(2, 55);
+      pushCompletedFile(bridge, 55, '/data/avatar_55.jpg');
+      expect(store.entryOf(1)?.avatarPath).assertEqual('/data/avatar_55.jpg');
+      expect(store.entryOf(2)?.avatarPath).assertEqual('/data/avatar_55.jpg');
+
+      seedChat(bridge, 3, 55);
+      const sentBefore = bridge.sent.length;
+      files.requestAvatar(3, 55);
+      expect(store.entryOf(3)?.avatarPath).assertEqual('/data/avatar_55.jpg');
+      expect(bridge.sent.length).assertEqual(sentBefore);
     });
   });
 }

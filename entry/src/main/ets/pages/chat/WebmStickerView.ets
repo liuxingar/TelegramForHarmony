@@ -2,7 +2,7 @@ import { IjkMediaPlayer, OnPreparedListener, OnErrorListener, OnCompletionListen
 import {
   KEY_POWER_ACTIVE, KEY_POWER_AUTOPLAY_GIF, KEY_POWER_AUTOPLAY_VIDEO, KEY_POWER_EMOJI,
   KEY_POWER_EMOJI_CHAT, KEY_POWER_EMOJI_REACTIONS, KEY_POWER_EMOJI_STATUS,
-  KEY_POWER_STICKERS, KEY_POWER_STICKER_AUTOPLAY, KEY_POWER_STICKER_LOOP
+  KEY_POWER_STICKERS, KEY_POWER_STICKER_AUTOPLAY, KEY_POWER_STICKER_LOOP, KEY_REDUCE_ANIM
 } from '../../store/AppSettings';
 
 let nextWebmStickerId: number = 1;
@@ -82,6 +82,7 @@ export struct WebmStickerView {
   @Prop boxWidth: number = 160;
   @Prop boxHeight: number = 160;
   @Prop powerCategory: string = 'sticker';
+  @Prop forcePlay: boolean = false;
   @StorageProp(KEY_POWER_ACTIVE) powerSaving: boolean = false;
   @StorageProp(KEY_POWER_STICKERS) stickersEnabled: boolean = true;
   @StorageProp(KEY_POWER_EMOJI) emojiEnabled: boolean = true;
@@ -92,6 +93,9 @@ export struct WebmStickerView {
   @StorageProp(KEY_POWER_EMOJI_CHAT) emojiChat: boolean = true;
   @StorageProp(KEY_POWER_EMOJI_REACTIONS) emojiReactions: boolean = true;
   @StorageProp(KEY_POWER_EMOJI_STATUS) emojiStatus: boolean = true;
+  @StorageProp(KEY_REDUCE_ANIM) reduceAnimations: boolean = false;
+  onWorking: () => void = (): void => {};
+  onFailed: () => void = (): void => {};
   @State failed: boolean = false;
   private player: IjkMediaPlayer | null = null;
   private readonly instanceId: number = nextWebmStickerId++;
@@ -154,9 +158,9 @@ export struct WebmStickerView {
     }
   }
 
-  private initPlayer(context: object): void {
+  private initPlayer(context: object): boolean {
     if (this.destroyed || this.player !== null || this.webmPath === '' || this.powerSuspended()) {
-      return;
+      return false;
     }
     try {
       const componentId = this.componentId();
@@ -172,6 +176,7 @@ export struct WebmStickerView {
           player.setVolume('0', '0'); // stickers are always silent
           player.setLoopCount(this.loopEnabled());  // safety net if the pre-EOF rewind misses
           player.start();
+          this.onWorking();
           this.durationMs = Math.max(0, player.getDuration());
           this.startLoopWatch();
         }
@@ -197,6 +202,7 @@ export struct WebmStickerView {
         onError: (what: number, extra: number): void => {
           console.error(`WebmStickerView error: what=${what}, extra=${extra}`);
           this.failed = true;
+          this.onFailed();
         }
       };
       player.setOnPreparedListener(preparedListener);
@@ -211,16 +217,25 @@ export struct WebmStickerView {
       player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, 'fflags', 'fastseek');
       player.setDataSource(this.webmPath);
       player.prepareAsync();
+      return true;
     } catch (e) {
       console.error(`WebmStickerView.init failed: ${e}`);
       this.failed = true;
+      this.onFailed();
       this.release();
+      return false;
     }
   }
 
   private powerSuspended(): boolean {
-    if (this.powerSaving) {
+    if (this.forcePlay) {
+      return false;
+    }
+    if (this.powerSaving || this.reduceAnimations) {
       return true;
+    }
+    if (this.powerCategory === 'emojiPicker') {
+      return !this.emojiEnabled;
     }
     if (this.powerCategory === 'gif') {
       return !this.autoplayGif;
@@ -265,10 +280,11 @@ export struct WebmStickerView {
             if (this.destroyed) {
               return; // cell died while queued (rapid tab switching)
             }
-            this.initPlayer(context);
-            livePlayers++;
-            if (livePlayers > 24) {
-              console.warn(`WebmStickerView: ${livePlayers} live players`);
+            if (this.initPlayer(context)) {
+              livePlayers++;
+              if (livePlayers > 24) {
+                console.warn(`WebmStickerView: ${livePlayers} live players`);
+              }
             }
           });
         })

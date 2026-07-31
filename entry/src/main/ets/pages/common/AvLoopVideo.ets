@@ -68,6 +68,7 @@ export struct AvLoopVideo {
           p.setVolume(0);
           p.play().catch((e: Object) => {
             console.error(`AvLoopVideo.play failed: ${JSON.stringify(e)}`);
+            this.onFailed();
           });
         } else if (state === 'playing') {
           console.info(`AvLoopVideo playing: ${this.videoPath}`);
@@ -84,9 +85,11 @@ export struct AvLoopVideo {
         p.url = `fd://${f.fd}`;
       } catch (e) {
         console.error(`AvLoopVideo open(${this.videoPath}) failed: ${e}`);
+        this.onFailed();
       }
     }).catch((e: Object) => {
       console.error(`AvLoopVideo.createAVPlayer failed: ${JSON.stringify(e)}`);
+      this.onFailed();
     });
   }
 

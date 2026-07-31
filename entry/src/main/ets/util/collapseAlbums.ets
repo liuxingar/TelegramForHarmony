@@ -1,4 +1,4 @@
-import { MessageEntry } from '../store/MessageEntry';
+import { MessageEntry, cloneMessage } from '../store/MessageEntry';
 import { TdObject } from '../tdkit/TdTypes';
 import { formatDateSeparator, sameDay } from './formatDateSeparator';
 
@@ -9,9 +9,11 @@ export interface AlbumGroup {
   head: MessageEntry;      // carries sender/name/time/status for the row
   memberIds: number[];     // message ids in this row (1 for a normal message)
   photoPaths: string[];    // album photo/video-thumbnail paths (empty for a non-album row)
+  photoFileIds: number[];  // thumbnail file ids; 0 means the media has no downloadable cover
   photoRatios: number[];   // width/height per photo, parallel to photoPaths (masonry layout)
   photoIsVideo: boolean[]; // parallel to photoPaths — true for video members (play icon overlay)
   photoProgress: number[]; // parallel to photoPaths — thumbnail download progress (0-100)
+  photoFailed: boolean[];  // parallel to photoPaths — tap the failed cell to retry
   caption: string;         // album caption (from whichever member carries text)
   captionEntities: TdObject[]; // the caption's TDLib entities (links/mentions/hashtags)
   dateLabel: string;       // date pill shown above this row when the day changes ('' = none)
@@ -24,6 +26,10 @@ export interface AlbumGroup {
 function sameRun(a: MessageEntry, b: MessageEntry): boolean {
   return a.senderId !== 0 && a.senderId === b.senderId
     && a.isOutgoing === b.isOutgoing
+    // A sender returning much later is a new visual run even on the same day.
+    // Without the time bound, messages hours apart lose their name/avatar and
+    // are incorrectly drawn as one continuous bubble stack.
+    && Math.abs(a.date - b.date) <= 300
     && a.contentType !== 'system' && b.contentType !== 'system';
 }
 
@@ -34,20 +40,76 @@ function aspectRatio(m: MessageEntry): number {
   return m.photoWidth / m.photoHeight;
 }
 
+function albumHead(members: MessageEntry[]): MessageEntry {
+  const head = cloneMessage(members[0]);
+  const last = members[members.length - 1];
+  // The first message remains the album's stable action/reply target, while
+  // the visible time and delivery state describe the whole album.
+  head.date = last.date;
+  for (const member of members) {
+    head.editDate = Math.max(head.editDate, member.editDate);
+  }
+  if (!head.isOutgoing) {
+    return head;
+  }
+  if (members.some((m: MessageEntry): boolean => m.sendState === 'failed')) {
+    head.sendState = 'failed';
+  } else if (members.some((m: MessageEntry): boolean => m.sendState === 'sending')) {
+    head.sendState = 'sending';
+  } else if (members.every((m: MessageEntry): boolean => m.sendState === 'read')) {
+    head.sendState = 'read';
+  } else {
+    head.sendState = 'sent';
+  }
+  return head;
+}
+
 // Signature of the mutable fields a bubble renders that aren't already part of
 // the key. Keys MUST change whenever rendered content changes: the LazyForEach
 // data source diffs by key and skips notifications for key-equal rows.
 function mutableSig(m: MessageEntry): string {
   // videoPath: voice/file/video rows change rendering once the file lands.
   // senderName: chat-sender (posting-as-channel) names resolve async.
-  let s = `${m.commentCount}_${m.forwardFrom}_${m.senderName}_${m.contentType}_${m.stickerFormat}_${m.videoPath !== '' ? 'v' : ''}_${m.stickerPath !== '' ? 's' : ''}`;
+  let s = `${m.commentCount}_${m.forwardFrom}_${m.senderName}_${m.contentType}_${m.stickerFormat}` +
+    `_${m.placeholderLabel}_${m.systemKind}_${m.isUnsupportedMessage}` +
+    `_${m.photoFileId}_${m.videoFileId}_${m.videoDuration}_${m.videoProgress}_${m.videoFailed}` +
+    `_${m.videoPath !== '' ? 'v' : ''}_${m.stickerPath !== '' ? 's' : ''}` +
+    `_${m.stickerProgress}_${m.stickerFailed}_${m.stickerDownloadActive}_${m.isEmojiSticker}` +
+    `_${m.editDate}` +
+    `_${m.inlineCustomEmojiPaths.join('|')}_${m.voiceListened}_${m.voiceWaveform}` +
+    `_${m.mediaDownloadActive}_${m.audioTitle}_${m.audioPerformer}` +
+    `_${m.contactPhone}_${m.contactFirstName}_${m.contactLastName}_${m.contactUserId}` +
+    `_${m.contactAvatarPath !== '' ? 'ca' : ''}_${m.locationLatitude}_${m.locationLongitude}` +
+    `_${m.locationValid}_${m.locationLivePeriod}_${m.locationExpiresIn}` +
+    `_${m.venueTitle}_${m.venueAddress}_${m.pollId}_${m.pollQuestion}` +
+    `_${m.pollTotalVoterCount}_${m.pollIsClosed}_${m.pollVotePending}_${m.pollVoteError}` +
+    `_${m.pollCorrectOptionId}_${m.pollExplanation}_${m.pollCloseDate}` +
+    `_${m.diceEmoji}_${m.diceValue}_${m.diceHasFinalState}` +
+    `_${m.gameId}_${m.gameTitle}_${m.gameDescription}_${m.gameText}` +
+    `_${m.paidMediaLocked}_${m.paidMediaStarCount}_${m.paidMediaCount}_${m.paidMediaKind}` +
+    `_${m.giftKind}_${m.giftTitle}_${m.giftValue}_${m.giftStatus}_${m.giftRefunded}` +
+    `_${m.giveawayState}_${m.giveawayWinnerCount}_${m.giveawayPrize}` +
+    `_${m.giveawayDescription}_${m.giveawaySelectionDate}_${m.giveawayUnclaimedCount}` +
+    `_${m.giveawayMessageId}_${m.giveawayRefunded}_${m.giveawayOnlyNewMembers}`;
+  for (const option of m.pollOptions) {
+    s += `~${option.text}:${option.voterCount}:${option.votePercentage}` +
+      `:${option.isChosen ? 'c' : ''}:${option.isBeingChosen ? 'p' : ''}`;
+  }
   for (const r of m.reactions) {
     s += `|${r.emoji}${r.count}${r.isChosen ? 'c' : ''}`;
   }
   for (const row of m.inlineButtons) {
     for (const b of row) {
-      s += `#${b.text}`;
+      s += `#${b.text}:${b.url}:${b.callbackData}:${b.isGame}`;
     }
+  }
+  for (const entity of m.textEntities) {
+    const type = entity['type'] as TdObject | undefined;
+    const typeName = type !== undefined ? ((type['@type'] as string | undefined) ?? '') : '';
+    const url = type !== undefined ? ((type['url'] as string | undefined) ?? '') : '';
+    const customEmojiId = type !== undefined ? `${type['custom_emoji_id'] ?? ''}` : '';
+    s += `@${(entity['offset'] as number | undefined) ?? 0}` +
+      `:${(entity['length'] as number | undefined) ?? 0}:${typeName}:${url}:${customEmojiId}`;
   }
   return s;
 }
@@ -60,38 +122,54 @@ export function collapseAlbums(list: MessageEntry[]): AlbumGroup[] {
   let prevDate = 0;
   while (i < list.length) {
     const m = list[i];
+    // Hidden TDLib notices have no visual row. Excluding them here (rather
+    // than rendering a zero-height bubble later) keeps the next visible
+    // message's date separator and run-boundary calculations correct.
+    if (m.contentType === 'hidden') {
+      i += 1;
+      continue;
+    }
     // Date pill above the first row of each calendar day (and the window's first row).
     const dateLabel: string = (prevDate === 0 || !sameDay(m.date, prevDate)) ? formatDateSeparator(m.date) : '';
     prevDate = m.date;
     if (m.albumId !== '' && (m.contentType === 'photo' || m.contentType === 'video')) {
       const memberIds: number[] = [];
       const photoPaths: string[] = [];
+      const photoFileIds: number[] = [];
       const photoRatios: number[] = [];
       const photoIsVideo: boolean[] = [];
       const photoProgress: number[] = [];
+      const photoFailed: boolean[] = [];
+      const albumMembers: MessageEntry[] = [];
       let caption = '';
       let captionEntities: TdObject[] = [];
       let j = i;
       while (j < list.length && list[j].albumId === m.albumId && (list[j].contentType === 'photo' || list[j].contentType === 'video')) {
         memberIds.push(list[j].id);
+        albumMembers.push(list[j]);
         photoPaths.push(list[j].photoPath);
+        photoFileIds.push(list[j].photoFileId);
         photoRatios.push(aspectRatio(list[j]));
         photoIsVideo.push(list[j].contentType === 'video');
         photoProgress.push(list[j].photoProgress);
+        photoFailed.push(list[j].photoFailed);
         if (list[j].text !== '') {
           caption = list[j].text;
           captionEntities = list[j].textEntities;
         }
         j += 1;
       }
+      const displayHead = albumHead(albumMembers);
       groups.push({
-        key: `a_${m.albumId}_${m.id}_${photoPaths.join('|')}_${photoProgress.join(',')}_${caption}_${dateLabel}_${mutableSig(m)}`,
-        head: m,
+        key: `a_${m.albumId}_${m.id}_${memberIds.join(',')}_${photoFileIds.join(',')}_${photoPaths.join('|')}_${photoProgress.join(',')}_${photoFailed.join(',')}_${albumMembers.map((item: MessageEntry): string => item.sendState).join(',')}_${caption}_${captionEntities.map((entity: TdObject): string => JSON.stringify(entity)).join('|')}_${dateLabel}_${mutableSig(displayHead)}`,
+        head: displayHead,
         memberIds,
         photoPaths,
+        photoFileIds,
         photoRatios,
         photoIsVideo,
         photoProgress,
+        photoFailed,
         caption,
         captionEntities,
         dateLabel,
@@ -101,13 +179,15 @@ export function collapseAlbums(list: MessageEntry[]): AlbumGroup[] {
       i = j;
     } else {
       groups.push({
-        key: `${m.id}_${m.sendState}_${m.photoPath}_${m.photoProgress}_${m.text}_${m.replyText}_${m.senderAvatarPath}_${dateLabel}_${mutableSig(m)}`,
+        key: `${m.id}_${m.sendState}_${m.photoPath}_${m.photoProgress}_${m.photoFailed}_${m.text}_${m.replyText}_${m.senderAvatarPath}_${dateLabel}_${mutableSig(m)}`,
         head: m,
         memberIds: [m.id],
         photoPaths: [],
+        photoFileIds: [],
         photoRatios: [],
         photoIsVideo: [],
         photoProgress: [],
+        photoFailed: [],
         caption: '',
         captionEntities: [],
         dateLabel,

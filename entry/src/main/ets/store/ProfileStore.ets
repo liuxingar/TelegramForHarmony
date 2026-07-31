@@ -6,6 +6,7 @@ import { formatPreview } from '../util/formatPreview';
 
 const DL_PRIORITY: number = 1;
 const WEEK_MINUTES: number = 7 * 24 * 60;
+const STATUS_REFRESH_INTERVAL_MS: number = 30 * 1000;
 
 export interface CommonGroup {
   id: number;
@@ -19,6 +20,11 @@ export interface StoryItem {
   thumbPath: string;
   duration: number; // seconds, 0 for photos
   isVideo: boolean;
+}
+
+interface ParsedStory {
+  item: StoryItem;
+  thumbFileId: number;
 }
 
 export interface GiftItem {
@@ -44,6 +50,14 @@ export class ProfileStore {
   private unsubs: Array<() => void> = [];
   // file id → apply(path) for every thumbnail/avatar this store downloads
   private fileApply: Map<number, (path: string) => void> = new Map();
+  private avatarVersion: number = 0;
+  private avatarAnimationVersion: number = 0;
+  private statusEmojiVersion: number = 0;
+  private storiesVersion: number = 0;
+  private archivedStoriesVersion: number = 0;
+  private userStatus: TdObject | undefined = undefined;
+  private statusRefreshTimer: number = -1;
+  private active: boolean = false;
 
   name: string = '';
   initials: string = '?';
@@ -72,6 +86,12 @@ export class ProfileStore {
   chPreview: string = '';
   groups: CommonGroup[] = [];
   stories: StoryItem[] = [];
+  storiesLoading: boolean = true;
+  storiesError: string = '';
+  archivedStories: StoryItem[] = [];
+  archivedStoriesLoading: boolean = false;
+  archivedStoriesLoaded: boolean = false;
+  archivedStoriesError: string = '';
   gifts: GiftItem[] = [];
   availableGifts: AvailGift[] = [];
   private availableLoaded: boolean = false;
@@ -88,6 +108,7 @@ export class ProfileStore {
   }
 
   open(): void {
+    this.active = true;
     this.unsubs.push(this.client.onUpdate('updateFile', (u: TdObject) => {
       const f = u['file'] as TdObject | undefined;
       if (f !== undefined) {
@@ -96,8 +117,7 @@ export class ProfileStore {
     }));
     this.unsubs.push(this.client.onUpdate('updateUserStatus', (u: TdObject) => {
       if ((u['user_id'] as number | undefined) === this.userId) {
-        this.statusText = formatUserStatus(u['status'] as TdObject | undefined, Math.floor(Date.now() / 1000));
-        this.notify();
+        this.applyUserStatus(u['status'] as TdObject | undefined, true);
       }
     }));
     this.loadUser();
@@ -107,10 +127,14 @@ export class ProfileStore {
   }
 
   close(): void {
+    this.active = false;
+    this.storiesVersion++;
+    this.archivedStoriesVersion++;
     for (const un of this.unsubs) {
       un();
     }
     this.unsubs = [];
+    this.stopStatusRefresh();
     this.listeners = [];
   }
 
@@ -126,9 +150,54 @@ export class ProfileStore {
     }
   }
 
-  private send(req: TdRequest, tag: string, onOk: (res: TdObject) => void): void {
+  private applyUserStatus(status: TdObject | undefined, notifyChange: boolean): void {
+    this.userStatus = status;
+    const next = formatUserStatus(status, Math.floor(Date.now() / 1000));
+    const changed = next !== this.statusText;
+    this.statusText = next;
+    this.updateStatusRefresh();
+    if (notifyChange && changed) {
+      this.notify();
+    }
+  }
+
+  private updateStatusRefresh(): void {
+    if (!this.active) {
+      this.stopStatusRefresh();
+      return;
+    }
+    const type = this.userStatus !== undefined
+      ? (this.userStatus['@type'] as string | undefined) : undefined;
+    if (type !== 'userStatusOffline') {
+      this.stopStatusRefresh();
+      return;
+    }
+    if (this.statusRefreshTimer !== -1) {
+      return;
+    }
+    this.statusRefreshTimer = setInterval((): void => {
+      const next = formatUserStatus(this.userStatus, Math.floor(Date.now() / 1000));
+      if (next !== this.statusText) {
+        this.statusText = next;
+        this.notify();
+      }
+    }, STATUS_REFRESH_INTERVAL_MS);
+  }
+
+  private stopStatusRefresh(): void {
+    if (this.statusRefreshTimer !== -1) {
+      clearInterval(this.statusRefreshTimer);
+      this.statusRefreshTimer = -1;
+    }
+  }
+
+  private send(req: TdRequest, tag: string, onOk: (res: TdObject) => void,
+    onError?: (error: TdError) => void): void {
     this.client.send(req).then(onOk).catch((e: TdError) => {
       console.error(`ProfileStore.${tag} failed: ${e.message}`);
+      if (onError !== undefined) {
+        onError(e);
+      }
     });
   }
 
@@ -171,13 +240,22 @@ export class ProfileStore {
       this.initials = this.name.length > 0 ? this.name.substring(0, 1).toUpperCase() : '?';
       this.phone = (user['phone_number'] as string | undefined) ?? '';
       this.isContact = (user['is_contact'] as boolean | undefined) ?? false;
-      this.statusText = formatUserStatus(user['status'] as TdObject | undefined, Math.floor(Date.now() / 1000));
+      this.applyUserStatus(user['status'] as TdObject | undefined, false);
       const un = user['usernames'] as TdObject | undefined;
       this.usernames = un !== undefined ? ((un['active_usernames'] as string[] | undefined) ?? []) : [];
       const photo = user['profile_photo'] as TdObject | undefined;
       const big = photo !== undefined ? (photo['big'] as TdObject | undefined) : undefined;
       const fileId = big !== undefined ? ((big['id'] as number | undefined) ?? 0) : 0;
-      this.download(fileId, (p: string) => { this.avatarPath = p; });
+      const avatarVersion = ++this.avatarVersion;
+      if (fileId <= 0) {
+        this.avatarPath = '';
+      } else {
+        this.download(fileId, (p: string) => {
+          if (avatarVersion === this.avatarVersion) {
+            this.avatarPath = p;
+          }
+        });
+      }
       this.parseEmojiStatus(user['emoji_status'] as TdObject | undefined);
       this.notify();
     });
@@ -186,6 +264,9 @@ export class ProfileStore {
   // emoji_status.custom_emoji_id (older TDLib) or emoji_status.type.custom_emoji_id
   // (newer) → getCustomEmojiStickers → the sticker file behind the status.
   private parseEmojiStatus(es: TdObject | undefined): void {
+    const statusEmojiVersion = ++this.statusEmojiVersion;
+    this.statusEmojiPath = '';
+    this.statusEmojiFormat = '';
     if (es === undefined) {
       return;
     }
@@ -199,6 +280,9 @@ export class ProfileStore {
     const req: TdRequest = { '@type': 'getCustomEmojiStickers' };
     req['custom_emoji_ids'] = [ceId];
     this.send(req, 'getCustomEmojiStickers', (res: TdObject) => {
+      if (statusEmojiVersion !== this.statusEmojiVersion) {
+        return;
+      }
       const stickers = (res['stickers'] as TdObject[] | undefined) ?? [];
       if (stickers.length === 0) {
         return;
@@ -210,7 +294,11 @@ export class ProfileStore {
         : (fmtName === 'stickerFormatTgs' ? 'tgs' : 'webm');
       const file = st['sticker'] as TdObject | undefined;
       const stickerId = file !== undefined ? ((file['id'] as number | undefined) ?? 0) : 0;
-      this.download(stickerId, (p: string) => { this.statusEmojiPath = p; });
+      this.download(stickerId, (p: string) => {
+        if (statusEmojiVersion === this.statusEmojiVersion) {
+          this.statusEmojiPath = p;
+        }
+      });
     });
   }
 
@@ -237,13 +325,24 @@ export class ProfileStore {
       const anim = photoFull !== undefined ? (photoFull['animation'] as TdObject | undefined) : undefined;
       const animFile = anim !== undefined ? (anim['file'] as TdObject | undefined) : undefined;
       const animId = animFile !== undefined ? ((animFile['id'] as number | undefined) ?? 0) : 0;
-      this.download(animId, (p: string) => { this.avatarAnimPath = p; });
+      const animationVersion = ++this.avatarAnimationVersion;
+      if (animId <= 0) {
+        this.avatarAnimPath = '';
+      } else {
+        this.download(animId, (p: string) => {
+          if (animationVersion === this.avatarAnimationVersion) {
+            this.avatarAnimPath = p;
+          }
+        });
+      }
       this.personalChatId = (full['personal_chat_id'] as number | undefined) ?? 0;
       const bd = full['birthdate'] as TdObject | undefined;
       if (bd !== undefined) {
         const day = (bd['day'] as number | undefined) ?? 0;
         const month = (bd['month'] as number | undefined) ?? 0;
         this.birthday = (day > 0 && month > 0) ? `${month}月${day}日` : '';
+      } else {
+        this.birthday = '';
       }
       this.parseBusiness(full['business_info'] as TdObject | undefined);
       if (this.personalChatId !== 0) {
@@ -349,52 +448,197 @@ export class ProfileStore {
 
   // Profile ("posted to chat page") stories — the 动态 grid.
   private loadStories(): void {
+    const version = ++this.storiesVersion;
+    this.stories = [];
+    this.storiesLoading = true;
+    this.storiesError = '';
+    this.notify();
     // The private chat may not exist locally yet ("Chat not found") —
     // materialize it first, then query the profile stories.
     const create: TdRequest = { '@type': 'createPrivateChat' };
     create['user_id'] = this.userId;
     create['force'] = false;
-    this.send(create, 'createPrivateChat', () => this.loadStoriesNow());
+    this.send(create, 'createPrivateChat', (): void => {
+      this.loadStoriesNow(version);
+    }, (): void => {
+      this.failStories(version);
+    });
   }
 
-  private loadStoriesNow(): void {
+  reloadStories(): void {
+    if (!this.storiesLoading) {
+      this.loadStories();
+    }
+  }
+
+  private failStories(version: number): void {
+    if (version !== this.storiesVersion) {
+      return;
+    }
+    this.storiesLoading = false;
+    this.storiesError = '动态加载失败，请稍后重试';
+    this.notify();
+  }
+
+  private parseStory(story: TdObject): ParsedStory | null {
+    const id = (story['id'] as number | undefined) ?? 0;
+    const content = story['content'] as TdObject | undefined;
+    const contentType = content !== undefined
+      ? ((content['@type'] as string | undefined) ?? '') : '';
+    let thumbFileId = 0;
+    let duration = 0;
+    let isVideo = false;
+    if (contentType === 'storyContentVideo') {
+      isVideo = true;
+      const video = content!['video'] as TdObject | undefined;
+      duration = video !== undefined
+        ? Math.round((video['duration'] as number | undefined) ?? 0) : 0;
+      const thumb = video !== undefined ? (video['thumbnail'] as TdObject | undefined) : undefined;
+      const file = thumb !== undefined ? (thumb['file'] as TdObject | undefined) : undefined;
+      thumbFileId = file !== undefined ? ((file['id'] as number | undefined) ?? 0) : 0;
+    } else if (contentType === 'storyContentPhoto') {
+      const photo = content!['photo'] as TdObject | undefined;
+      const sizes = photo !== undefined ? ((photo['sizes'] as TdObject[] | undefined) ?? []) : [];
+      if (sizes.length > 0) {
+        const file = sizes[0]['photo'] as TdObject | undefined;
+        thumbFileId = file !== undefined ? ((file['id'] as number | undefined) ?? 0) : 0;
+      }
+    } else {
+      return null;
+    }
+    if (id <= 0) {
+      return null;
+    }
+    return {
+      item: { id, thumbPath: '', duration, isVideo },
+      thumbFileId
+    };
+  }
+
+  private applyStoryResults(parsed: ParsedStory[], archived: boolean, version: number): void {
+    if ((archived && version !== this.archivedStoriesVersion) ||
+      (!archived && version !== this.storiesVersion)) {
+      return;
+    }
+    const items = parsed.map((entry: ParsedStory): StoryItem => entry.item);
+    if (archived) {
+      this.archivedStories = items;
+      this.archivedStoriesLoading = false;
+      this.archivedStoriesLoaded = true;
+      this.archivedStoriesError = '';
+    } else {
+      this.stories = items;
+      this.storiesLoading = false;
+      this.storiesError = '';
+    }
+    this.notify();
+    for (const entry of parsed) {
+      if (entry.thumbFileId <= 0) {
+        continue;
+      }
+      const storyId = entry.item.id;
+      this.download(entry.thumbFileId, (path: string): void => {
+        if (archived) {
+          if (version !== this.archivedStoriesVersion) {
+            return;
+          }
+          this.archivedStories = this.archivedStories.map((item: StoryItem): StoryItem =>
+            item.id === storyId
+              ? { id: item.id, thumbPath: path, duration: item.duration, isVideo: item.isVideo }
+              : item);
+        } else {
+          if (version !== this.storiesVersion) {
+            return;
+          }
+          this.stories = this.stories.map((item: StoryItem): StoryItem =>
+            item.id === storyId
+              ? { id: item.id, thumbPath: path, duration: item.duration, isVideo: item.isVideo }
+              : item);
+        }
+      });
+    }
+  }
+
+  private loadStoriesNow(version: number): void {
     const req: TdRequest = { '@type': 'getChatPostedToChatPageStories' };
     req['chat_id'] = this.userId; // a user's chat id equals the user id
     req['from_story_id'] = 0;
     req['limit'] = 30;
-    this.send(req, 'getStories', (res: TdObject) => {
-      const arr = (res['stories'] as TdObject[] | undefined) ?? [];
-      for (const s of arr) {
-        const id = (s['id'] as number | undefined) ?? 0;
-        const content = s['content'] as TdObject | undefined;
-        const ct = content !== undefined ? ((content['@type'] as string | undefined) ?? '') : '';
-        let thumbFileId = 0;
-        let duration = 0;
-        let isVideo = false;
-        if (ct === 'storyContentVideo') {
-          isVideo = true;
-          const video = content!['video'] as TdObject | undefined;
-          duration = video !== undefined ? Math.round((video['duration'] as number | undefined) ?? 0) : 0;
-          const thumb = video !== undefined ? (video['thumbnail'] as TdObject | undefined) : undefined;
-          const file = thumb !== undefined ? (thumb['file'] as TdObject | undefined) : undefined;
-          thumbFileId = file !== undefined ? ((file['id'] as number | undefined) ?? 0) : 0;
-        } else if (ct === 'storyContentPhoto') {
-          const photo = content!['photo'] as TdObject | undefined;
-          const sizes = photo !== undefined ? ((photo['sizes'] as TdObject[] | undefined) ?? []) : [];
-          if (sizes.length > 0) {
-            const file = sizes[0]['photo'] as TdObject | undefined;
-            thumbFileId = file !== undefined ? ((file['id'] as number | undefined) ?? 0) : 0;
-          }
-        } else {
-          continue;
-        }
-        const item: StoryItem = { id, thumbPath: '', duration, isVideo };
-        this.stories = [...this.stories, item];
-        this.download(thumbFileId, (p: string) => {
-          this.stories = this.stories.map((x: StoryItem): StoryItem => x.id === id
-            ? { id: x.id, thumbPath: p, duration: x.duration, isVideo: x.isVideo } : x);
-        });
+    this.send(req, 'getStories', (res: TdObject): void => {
+      if (version !== this.storiesVersion) {
+        return;
       }
+      const arr = (res['stories'] as TdObject[] | undefined) ?? [];
+      const parsed: ParsedStory[] = [];
+      for (const story of arr) {
+        const entry = this.parseStory(story);
+        if (entry !== null) {
+          parsed.push(entry);
+        }
+      }
+      this.applyStoryResults(parsed, false, version);
+    }, (): void => {
+      this.failStories(version);
+    });
+  }
+
+  loadArchivedStories(force: boolean = false): void {
+    if (this.archivedStoriesLoading || (this.archivedStoriesLoaded && !force)) {
+      return;
+    }
+    const version = ++this.archivedStoriesVersion;
+    this.archivedStoriesLoading = true;
+    this.archivedStoriesError = '';
+    if (force) {
+      this.archivedStories = [];
+    }
+    this.notify();
+    // A user's own archive is different from storyListArchive (the latter is
+    // the list of active stories belonging to archived chats). Materialize the
+    // Saved Messages/private chat first, then request stories posted by it.
+    const create: TdRequest = { '@type': 'createPrivateChat' };
+    create['user_id'] = this.userId;
+    create['force'] = false;
+    this.send(create, 'createPrivateChatForArchive', (chat: TdObject): void => {
+      if (version !== this.archivedStoriesVersion) {
+        return;
+      }
+      const chatId = (chat['id'] as number | undefined) ?? this.userId;
+      this.loadArchivedStoriesNow(version, chatId);
+    }, (): void => {
+      if (version !== this.archivedStoriesVersion) {
+        return;
+      }
+      this.archivedStoriesLoading = false;
+      this.archivedStoriesError = '归档动态加载失败，请稍后重试';
+      this.notify();
+    });
+  }
+
+  private loadArchivedStoriesNow(version: number, chatId: number): void {
+    const req: TdRequest = { '@type': 'getChatArchivedStories' };
+    req['chat_id'] = chatId;
+    req['from_story_id'] = 0;
+    req['limit'] = 30;
+    this.send(req, 'getArchivedStories', (res: TdObject): void => {
+      if (version !== this.archivedStoriesVersion) {
+        return;
+      }
+      const arr = (res['stories'] as TdObject[] | undefined) ?? [];
+      const parsed: ParsedStory[] = [];
+      for (const story of arr) {
+        const entry = this.parseStory(story);
+        if (entry !== null) {
+          parsed.push(entry);
+        }
+      }
+      this.applyStoryResults(parsed, true, version);
+    }, (): void => {
+      if (version !== this.archivedStoriesVersion) {
+        return;
+      }
+      this.archivedStoriesLoading = false;
+      this.archivedStoriesError = '归档动态加载失败，请稍后重试';
       this.notify();
     });
   }

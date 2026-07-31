@@ -52,9 +52,23 @@ export async function saveMediaToGallery(context: common.UIAbilityContext, srcPa
 // Save a downloaded document via the system "save as" picker (user-visible
 // location, e.g. Downloads — a silent sandbox copy would be unreachable).
 export function saveFileToLocal(context: common.UIAbilityContext, srcPath: string, fileName: string): void {
+  if (srcPath === '' || context === undefined) {
+    promptAction.showToast({ message: '文件不可用', duration: 1800 });
+    return;
+  }
+  const suppliedName: string = fileName.trim();
+  const suppliedSlash: number = Math.max(
+    suppliedName.lastIndexOf('/'),
+    suppliedName.lastIndexOf('\\')
+  );
+  const safeSuppliedName: string = suppliedSlash >= 0
+    ? suppliedName.substring(suppliedSlash + 1) : suppliedName;
+  const pathName: string = srcPath.substring(srcPath.lastIndexOf('/') + 1);
+  const saveName: string = safeSuppliedName !== ''
+    ? safeSuppliedName : (pathName !== '' ? pathName : '文件');
   const docPicker = new picker.DocumentViewPicker(context);
   const opts = new picker.DocumentSaveOptions();
-  opts.newFileNames = [fileName !== '' ? fileName : srcPath.substring(srcPath.lastIndexOf('/') + 1)];
+  opts.newFileNames = [saveName];
   docPicker.save(opts).then((uris: string[]) => {
     if (uris.length === 0) {
       return; // user cancelled
@@ -68,5 +82,6 @@ export function saveFileToLocal(context: common.UIAbilityContext, srcPath: strin
     }
   }).catch((e: Object) => {
     console.error(`saveFileToLocal picker failed: ${JSON.stringify(e)}`);
+    promptAction.showToast({ message: '无法打开保存位置', duration: 1800 });
   });
 }

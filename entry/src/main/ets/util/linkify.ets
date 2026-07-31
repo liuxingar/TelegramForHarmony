@@ -17,7 +17,11 @@ export function linkifyRuns(text: string, entities: TdObject[]): RichRun[] {
           runs.push(r);
         }
       } else {
-        runs.push({ text: seg.text, bold: false, italic: false, link: false, url: '' });
+        runs.push({
+          offset: seg.offset, text: seg.text, bold: false, italic: false,
+          underline: false, strike: false, code: false, spoiler: false,
+          customEmojiId: '', link: false, url: ''
+        });
       }
     }
     return runs;
@@ -25,7 +29,8 @@ export function linkifyRuns(text: string, entities: TdObject[]): RichRun[] {
   return regexLinkify(text);
 }
 
-const LINK_RE: RegExp = /(https?:\/\/[^\s]+|t\.me\/[A-Za-z0-9_/+]+|@[A-Za-z0-9_]{3,32})/g;
+const LINK_RE: RegExp =
+  /(https?:\/\/[^\s]+|(?:t\.me|telegram\.me|telegram\.dog)\/@?[A-Za-z0-9_+/-]+|@[A-Za-z0-9_]{3,32})/g;
 
 function regexLinkify(text: string): RichRun[] {
   const runs: RichRun[] = [];
@@ -34,16 +39,30 @@ function regexLinkify(text: string): RichRun[] {
   let m = LINK_RE.exec(text);
   while (m !== null) {
     if (m.index > last) {
-      runs.push({ text: text.substring(last, m.index), bold: false, italic: false, link: false, url: '' });
+      runs.push({
+        offset: last, text: text.substring(last, m.index), bold: false, italic: false,
+        underline: false, strike: false, code: false, spoiler: false,
+        customEmojiId: '', link: false, url: ''
+      });
     }
     const token = m[0];
-    const url = token.startsWith('t.me/') ? `https://${token}` : token;
-    runs.push({ text: token, bold: false, italic: false, link: true, url });
+    const isSchemeLessTelegram = token.startsWith('t.me/')
+      || token.startsWith('telegram.me/') || token.startsWith('telegram.dog/');
+    const url = isSchemeLessTelegram ? `https://${token}` : token;
+    runs.push({
+      offset: m.index, text: token, bold: false, italic: false,
+      underline: false, strike: false, code: false, spoiler: false,
+      customEmojiId: '', link: true, url
+    });
     last = m.index + token.length;
     m = LINK_RE.exec(text);
   }
   if (last < text.length) {
-    runs.push({ text: text.substring(last), bold: false, italic: false, link: false, url: '' });
+    runs.push({
+      offset: last, text: text.substring(last), bold: false, italic: false,
+      underline: false, strike: false, code: false, spoiler: false,
+      customEmojiId: '', link: false, url: ''
+    });
   }
   return runs;
 }

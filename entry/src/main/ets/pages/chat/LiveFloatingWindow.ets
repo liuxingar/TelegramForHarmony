@@ -671,9 +671,12 @@ struct FloatingLiveOverlay {
 
   build() {
     Column() {
-      Blank();
+      // Layout-only spacers must not become full-screen touch targets. The
+      // overlay root is global, so a default-hit-test Blank here would swallow
+      // taps before the chat page underneath ever sees them.
+      Blank().hitTestBehavior(HitTestMode.None);
       Row() {
-        Blank();
+        Blank().hitTestBehavior(HitTestMode.None);
         Stack({ alignContent: Alignment.Center }) {
           XComponent({
             id: 'floating_live_primary_video',
@@ -788,13 +791,17 @@ struct FloatingLiveOverlay {
             })
         );
       }
-      .width('100%');
+      .width('100%')
+      // The Row spans the screen to right-align the player; only its Stack
+      // child should consume input.
+      .hitTestBehavior(HitTestMode.None);
     }
     .width('100%').height('100%')
     .padding({ right: 12, bottom: this.bottomSafe + 82, top: this.topSafe + 8 })
-    // Only the mini-player consumes touches. Everything outside it continues
-    // to hit-test the currently visible app page beneath the global overlay.
-    .hitTestBehavior(HitTestMode.Transparent);
+    // The root itself is layout-only. HitTestMode.None still allows children
+    // to participate, so the player remains interactive while every point
+    // outside its real bounds falls through to the current app page.
+    .hitTestBehavior(HitTestMode.None);
   }
 }
 

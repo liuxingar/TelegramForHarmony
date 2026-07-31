@@ -16,7 +16,7 @@ export interface SearchRow {
 }
 
 type Listener = () => void;
-type Bucket = 'top' | 'recent' | 'results' | 'joined' | 'similar' | 'apps';
+type Bucket = 'top' | 'recent' | 'opened' | 'results' | 'joined' | 'similar' | 'apps';
 
 // Backing store for the global search page: frequent contacts (getTopChats),
 // recently opened chats, and name-based chat search (local + public).
@@ -26,14 +26,30 @@ export class GlobalSearchStore {
   private unsubs: Array<() => void> = [];
   private fileApply: Map<number, (path: string) => void> = new Map();
   private searchSeq: number = 0;
+  private joinedResolvePending: number = 0;
+  private similarResolvePending: number = 0;
 
   topUsers: SearchRow[] = [];
   recent: SearchRow[] = [];
+  recentlyOpened: SearchRow[] = [];
   results: SearchRow[] = [];
   joinedChannels: SearchRow[] = [];
   similarChannels: SearchRow[] = [];
   apps: SearchRow[] = [];
   searching: boolean = false;
+  searchFailed: boolean = false;
+  topLoaded: boolean = false;
+  recentLoaded: boolean = false;
+  openedLoaded: boolean = false;
+  topFailed: boolean = false;
+  recentFailed: boolean = false;
+  openedFailed: boolean = false;
+  joinedLoaded: boolean = false;
+  similarLoaded: boolean = false;
+  appsLoaded: boolean = false;
+  joinedFailed: boolean = false;
+  similarFailed: boolean = false;
+  appsFailed: boolean = false;
 
   constructor(client: TdClient) {
     this.client = client;
@@ -60,6 +76,7 @@ export class GlobalSearchStore {
     }));
     this.loadTop();
     this.loadRecent();
+    this.loadRecentlyOpened();
     this.loadJoinedChannels();
     this.loadSimilarChannels();
     this.loadApps();
@@ -67,30 +84,50 @@ export class GlobalSearchStore {
 
   // 频道 tab landing: the channels the user has joined (from the main list).
   private loadJoinedChannels(): void {
+    this.joinedLoaded = false;
+    this.joinedFailed = false;
+    this.joinedResolvePending = 0;
+    this.notify();
     const req: TdRequest = { '@type': 'getChats' };
     req['chat_list'] = { '@type': 'chatListMain' } as TdObject;
     req['limit'] = 400;
     this.client.send(req).then((res: TdObject) => {
       const ids = (res['chat_ids'] as number[] | undefined) ?? [];
       this.joinedChannels = [];
+      this.joinedResolvePending = ids.length;
+      this.joinedLoaded = ids.length === 0;
+      this.notify();
       for (const id of ids) {
         this.appendIfChannel('joined', id);
       }
     }).catch((e: TdError) => {
+      this.joinedLoaded = true;
+      this.joinedFailed = true;
+      this.notify();
       console.error(`GlobalSearchStore.getChats failed: ${e.message}`);
     });
   }
 
   // 频道 tab landing: server-recommended channels.
   private loadSimilarChannels(): void {
+    this.similarLoaded = false;
+    this.similarFailed = false;
+    this.similarResolvePending = 0;
+    this.notify();
     const req: TdRequest = { '@type': 'getRecommendedChats' };
     this.client.send(req).then((res: TdObject) => {
       const ids = (res['chat_ids'] as number[] | undefined) ?? [];
       this.similarChannels = [];
+      this.similarResolvePending = ids.length;
+      this.similarLoaded = ids.length === 0;
+      this.notify();
       for (const id of ids) {
         this.appendIfChannel('similar', id);
       }
     }).catch((e: TdError) => {
+      this.similarLoaded = true;
+      this.similarFailed = true;
+      this.notify();
       console.error(`GlobalSearchStore.getRecommendedChats failed: ${e.message}`);
     });
   }
@@ -105,6 +142,7 @@ export class GlobalSearchStore {
       const isChannel = typeName === 'chatTypeSupergroup'
         && (((type as TdObject)['is_channel'] as boolean | undefined) ?? false);
       if (!isChannel) {
+        this.finishChannelResolve(bucket);
         return;
       }
       const title = (chat['title'] as string | undefined) ?? '';
@@ -115,6 +153,7 @@ export class GlobalSearchStore {
       };
       this.setBucket(bucket, [...this.getBucket(bucket), row]);
       this.notify();
+      this.finishChannelResolve(bucket);
       const sgId = ((type as TdObject)['supergroup_id'] as number | undefined) ?? 0;
       if (sgId > 0) {
         this.resolveSubscriberCount(bucket, chatId, sgId);
@@ -129,8 +168,25 @@ export class GlobalSearchStore {
         }));
       });
     }).catch((e: TdError) => {
+      this.finishChannelResolve(bucket);
       console.error(`GlobalSearchStore.appendIfChannel(${chatId}) failed: ${e.message}`);
     });
+  }
+
+  private finishChannelResolve(bucket: Bucket): void {
+    if (bucket === 'joined') {
+      this.joinedResolvePending = Math.max(0, this.joinedResolvePending - 1);
+      if (this.joinedResolvePending === 0) {
+        this.joinedLoaded = true;
+        this.notify();
+      }
+    } else if (bucket === 'similar') {
+      this.similarResolvePending = Math.max(0, this.similarResolvePending - 1);
+      if (this.similarResolvePending === 0) {
+        this.similarLoaded = true;
+        this.notify();
+      }
+    }
   }
 
   private resolveSubscriberCount(bucket: Bucket, chatId: number, supergroupId: number): void {
@@ -151,6 +207,9 @@ export class GlobalSearchStore {
 
   // 应用 tab: top-grossing Telegram mini apps (bots).
   private loadApps(): void {
+    this.appsLoaded = false;
+    this.appsFailed = false;
+    this.notify();
     const req: TdRequest = { '@type': 'getGrossingWebAppBots' };
     req['offset'] = '';
     req['limit'] = 30;
@@ -159,11 +218,15 @@ export class GlobalSearchStore {
       this.apps = ids.map((id: number): SearchRow => ({
         chatId: 0, userId: id, title: '', initials: '?', avatarPath: '', subtitle: '', isChannel: false
       }));
+      this.appsLoaded = true;
       this.notify();
       for (const id of ids) {
         this.resolveAppUser(id);
       }
     }).catch((e: TdError) => {
+      this.appsLoaded = true;
+      this.appsFailed = true;
+      this.notify();
       console.error(`GlobalSearchStore.getGrossingWebAppBots failed: ${e.message}`);
     });
   }
@@ -197,6 +260,8 @@ export class GlobalSearchStore {
         this.notify();
       });
     }).catch((e: TdError) => {
+      this.apps = this.apps.filter((r: SearchRow) => r.userId !== userId);
+      this.notify();
       console.error(`GlobalSearchStore.resolveAppUser(${userId}) failed: ${e.message}`);
     });
   }
@@ -210,33 +275,112 @@ export class GlobalSearchStore {
   }
 
   private loadTop(): void {
+    this.topLoaded = false;
+    this.topFailed = false;
+    this.notify();
     const req: TdRequest = { '@type': 'getTopChats' };
     req['category'] = { '@type': 'topChatCategoryUsers' } as TdObject;
     req['limit'] = 10;
     this.client.send(req).then((res: TdObject) => {
+      this.topLoaded = true;
       this.fillBucket('top', (res['chat_ids'] as number[] | undefined) ?? []);
     }).catch((e: TdError) => {
+      this.topLoaded = true;
+      this.topFailed = true;
+      this.notify();
       console.error(`GlobalSearchStore.getTopChats failed: ${e.message}`);
     });
   }
 
   private loadRecent(): void {
-    const req: TdRequest = { '@type': 'getRecentlyOpenedChats' };
+    this.recentLoaded = false;
+    this.recentFailed = false;
+    this.notify();
+    // Empty searchChats returns the "recently found" list used by Telegram's
+    // global-search landing. It is the same data source clearRecentlyFoundChats
+    // clears; getRecentlyOpenedChats is a different, non-clearable history.
+    const req: TdRequest = { '@type': 'searchChats' };
+    req['query'] = '';
     req['limit'] = 20;
     this.client.send(req).then((res: TdObject) => {
+      this.recentLoaded = true;
       this.fillBucket('recent', (res['chat_ids'] as number[] | undefined) ?? []);
     }).catch((e: TdError) => {
+      this.recentLoaded = true;
+      this.recentFailed = true;
+      this.notify();
+      console.error(`GlobalSearchStore.loadRecent failed: ${e.message}`);
+    });
+  }
+
+  private loadRecentlyOpened(): void {
+    this.openedLoaded = false;
+    this.openedFailed = false;
+    this.notify();
+    const req: TdRequest = { '@type': 'getRecentlyOpenedChats' };
+    req['limit'] = 30;
+    this.client.send(req).then((res: TdObject) => {
+      this.openedLoaded = true;
+      this.fillBucket('opened', (res['chat_ids'] as number[] | undefined) ?? []);
+    }).catch((e: TdError) => {
+      this.openedLoaded = true;
+      this.openedFailed = true;
+      this.notify();
       console.error(`GlobalSearchStore.getRecentlyOpenedChats failed: ${e.message}`);
     });
   }
 
-  clearRecent(): void {
+  clearRecent(): Promise<void> {
+    const previous = [...this.recent];
     this.recent = [];
     this.notify();
     const req: TdRequest = { '@type': 'clearRecentlyFoundChats' };
-    this.client.send(req).catch((e: TdError) => {
+    return this.client.send(req).then((): void => {}).catch((e: TdError) => {
+      this.recent = previous;
+      this.notify();
       console.error(`GlobalSearchStore.clearRecentlyFoundChats failed: ${e.message}`);
+      return Promise.reject(e);
     });
+  }
+
+  rememberFoundChat(chatId: number): void {
+    if (chatId === 0) {
+      return;
+    }
+    const req: TdRequest = { '@type': 'addRecentlyFoundChat' };
+    req['chat_id'] = chatId;
+    this.client.send(req).then((): void => {
+      this.loadRecent();
+    }).catch((e: TdError) => {
+      console.error(`GlobalSearchStore.addRecentlyFoundChat failed: ${e.message}`);
+    });
+  }
+
+  retryLanding(): void {
+    if (!this.topLoaded || this.topFailed) {
+      this.loadTop();
+    }
+    if (!this.recentLoaded || this.recentFailed) {
+      this.loadRecent();
+    }
+    if (!this.openedLoaded || this.openedFailed) {
+      this.loadRecentlyOpened();
+    }
+  }
+
+  retryChannels(): void {
+    if (!this.joinedLoaded || this.joinedFailed) {
+      this.loadJoinedChannels();
+    }
+    if (!this.similarLoaded || this.similarFailed) {
+      this.loadSimilarChannels();
+    }
+  }
+
+  retryApps(): void {
+    if (!this.appsLoaded || this.appsFailed) {
+      this.loadApps();
+    }
   }
 
   // Name search: local known chats first, then public usernames; merged, deduped.
@@ -246,10 +390,12 @@ export class GlobalSearchStore {
     if (q === '') {
       this.results = [];
       this.searching = false;
+      this.searchFailed = false;
       this.notify();
       return;
     }
     this.searching = true;
+    this.searchFailed = false;
     this.notify();
     const local: TdRequest = { '@type': 'searchChats' };
     local['query'] = q;
@@ -273,12 +419,14 @@ export class GlobalSearchStore {
           }
         }
         this.searching = false;
+        this.searchFailed = false;
         this.fillBucket('results', merged);
       }).catch((e: TdError) => {
         // Public lookup can fail (e.g. too-short query) — local results still count.
         console.error(`GlobalSearchStore.searchPublicChats failed: ${e.message}`);
         if (seq === this.searchSeq) {
           this.searching = false;
+          this.searchFailed = false;
           this.fillBucket('results', ids);
         }
       });
@@ -286,6 +434,8 @@ export class GlobalSearchStore {
       console.error(`GlobalSearchStore.searchChats failed: ${e.message}`);
       if (seq === this.searchSeq) {
         this.searching = false;
+        this.searchFailed = true;
+        this.results = [];
         this.notify();
       }
     });
@@ -308,6 +458,8 @@ export class GlobalSearchStore {
       this.topUsers = rows;
     } else if (bucket === 'recent') {
       this.recent = rows;
+    } else if (bucket === 'opened') {
+      this.recentlyOpened = rows;
     } else if (bucket === 'joined') {
       this.joinedChannels = rows;
     } else if (bucket === 'similar') {
@@ -324,6 +476,8 @@ export class GlobalSearchStore {
       return this.topUsers;
     } else if (bucket === 'recent') {
       return this.recent;
+    } else if (bucket === 'opened') {
+      return this.recentlyOpened;
     } else if (bucket === 'joined') {
       return this.joinedChannels;
     } else if (bucket === 'similar') {
@@ -377,6 +531,8 @@ export class GlobalSearchStore {
         }));
       });
     }).catch((e: TdError) => {
+      this.setBucket(bucket, this.getBucket(bucket).filter((r: SearchRow) => r.chatId !== chatId));
+      this.notify();
       console.error(`GlobalSearchStore.getChat(${chatId}) failed: ${e.message}`);
     });
   }

@@ -23,10 +23,13 @@ export class ContactsStore {
   private listeners: Listener[] = [];
   private unsubs: Array<() => void> = [];
   private fileApply: Map<number, (path: string) => void> = new Map();
+  private avatarFileByUser: Map<number, number> = new Map();
   private byId: Map<number, ContactItem> = new Map();
+  private loadSequence: number = 0;
 
   contacts: ContactItem[] = [];
   loading: boolean = true;
+  errorMessage: string = '';
 
   constructor(client: TdClient) {
     this.client = client;
@@ -57,68 +60,165 @@ export class ContactsStore {
         this.updateStatus(uid, u['status'] as TdObject | undefined);
       }
     }));
-    this.loadContacts();
+    this.unsubs.push(this.client.onUpdate('updateUser', (u: TdObject) => {
+      const user = u['user'] as TdObject | undefined;
+      if (user !== undefined) {
+        this.applyUserUpdate(user);
+      }
+    }));
+    this.reload();
   }
 
   close(): void {
+    this.loadSequence++;
     for (const un of this.unsubs) {
       un();
     }
     this.unsubs = [];
     this.listeners = [];
+    this.fileApply.clear();
   }
 
-  private loadContacts(): void {
+  reload(): void {
+    const sequence = ++this.loadSequence;
+    this.loading = true;
+    this.errorMessage = '';
+    this.byId.clear();
+    this.contacts = [];
+    this.fileApply.clear();
+    this.avatarFileByUser.clear();
+    this.notify();
     const req: TdRequest = { '@type': 'getContacts' };
-    this.client.send(req).then((res: TdObject) => {
-      const ids = (res['user_ids'] as number[] | undefined) ?? [];
-      this.loading = false;
-      for (const id of ids) {
-        this.loadUser(id);
+    this.client.send(req, 8000).then((res: TdObject): void => {
+      if (sequence !== this.loadSequence) {
+        return;
       }
-      this.rebuild();
-      this.notify();
+      const ids = (res['user_ids'] as number[] | undefined) ?? [];
+      const loads: Promise<boolean>[] = [];
+      for (const id of ids) {
+        loads.push(this.loadUser(id, sequence));
+      }
+      // Do not report "refresh complete" while getUser calls are still
+      // trickling in. Publishing one complete snapshot also prevents rows
+      // jumping around as faster requests overtake slower ones.
+      Promise.all(loads).then((results: boolean[]): void => {
+        if (sequence !== this.loadSequence) {
+          return;
+        }
+        this.loading = false;
+        if (ids.length > 0 && !results.some((loaded: boolean): boolean => loaded)) {
+          this.errorMessage = '联系人资料加载失败';
+        }
+        this.rebuild();
+        this.notify();
+      });
     }).catch((e: TdError) => {
+      if (sequence !== this.loadSequence) {
+        return;
+      }
       console.error(`ContactsStore.getContacts failed: ${e.message}`);
       this.loading = false;
+      this.errorMessage = '联系人加载失败';
       this.notify();
     });
   }
 
-  private loadUser(id: number): void {
+  removeContact(userId: number): Promise<void> {
+    const req: TdRequest = { '@type': 'removeContacts' };
+    req['user_ids'] = [userId];
+    return this.client.send(req, 8000).then((): void => {
+      if (this.byId.delete(userId)) {
+        this.avatarFileByUser.delete(userId);
+        this.rebuild();
+        this.notify();
+      }
+    });
+  }
+
+  private loadUser(id: number, sequence: number): Promise<boolean> {
     const req: TdRequest = { '@type': 'getUser' };
     req['user_id'] = id;
-    this.client.send(req).then((user: TdObject) => {
-      const first = (user['first_name'] as string | undefined) ?? '';
-      const last = (user['last_name'] as string | undefined) ?? '';
-      const name = `${first}${last !== '' ? ' ' + last : ''}`.trim();
-      const status = user['status'] as TdObject | undefined;
-      const nowSec = Math.floor(Date.now() / 1000);
-      const item: ContactItem = {
-        id,
-        name: name !== '' ? name : '未命名',
-        initials: name.length > 0 ? name.substring(0, 1).toUpperCase() : '?',
-        avatarPath: '',
-        statusText: formatLastSeen(status, nowSec),
-        online: (status !== undefined) && (status['@type'] === 'userStatusOnline'),
-        sortKey: this.sortKey(status)
-      };
-      this.byId.set(id, item);
-      const photo = user['profile_photo'] as TdObject | undefined;
-      const small = photo !== undefined ? (photo['small'] as TdObject | undefined) : undefined;
-      const fileId = small !== undefined ? ((small['id'] as number | undefined) ?? 0) : 0;
-      this.download(fileId, (p: string) => {
-        const it = this.byId.get(id);
-        if (it !== undefined) {
-          it.avatarPath = p;
+    return this.client.send(req, 8000).then((user: TdObject): boolean => {
+      if (sequence !== this.loadSequence) {
+        return false;
+      }
+      this.applyUser(user);
+      return true;
+    }).catch((e: TdError) => {
+      console.error(`ContactsStore.getUser failed: ${e.message}`);
+      return false;
+    });
+  }
+
+  private applyUserUpdate(user: TdObject): void {
+    const id = user['id'] as number | undefined;
+    if (id === undefined) {
+      return;
+    }
+    const isContact = (user['is_contact'] as boolean | undefined) ?? false;
+    if (!isContact) {
+      if (this.byId.delete(id)) {
+        this.avatarFileByUser.delete(id);
+        if (!this.loading) {
           this.rebuild();
           this.notify();
         }
-      });
+      }
+      return;
+    }
+    this.applyUser(user);
+    if (!this.loading) {
       this.rebuild();
       this.notify();
-    }).catch((e: TdError) => {
-      console.error(`ContactsStore.getUser failed: ${e.message}`);
+    }
+  }
+
+  private applyUser(user: TdObject): void {
+    const id = user['id'] as number | undefined;
+    if (id === undefined) {
+      return;
+    }
+    const first = (user['first_name'] as string | undefined) ?? '';
+    const last = (user['last_name'] as string | undefined) ?? '';
+    const name = `${first}${last !== '' ? ' ' + last : ''}`.trim();
+    const status = user['status'] as TdObject | undefined;
+    const previous = this.byId.get(id);
+    const item: ContactItem = {
+      id,
+      name: name !== '' ? name : '未命名',
+      initials: name.length > 0 ? name.substring(0, 1).toUpperCase() : '?',
+      avatarPath: previous !== undefined ? previous.avatarPath : '',
+      statusText: formatLastSeen(status, Math.floor(Date.now() / 1000)),
+      online: (status !== undefined) && (status['@type'] === 'userStatusOnline'),
+      sortKey: this.sortKey(status)
+    };
+    this.byId.set(id, item);
+    const photo = user['profile_photo'] as TdObject | undefined;
+    const small = photo !== undefined ? (photo['small'] as TdObject | undefined) : undefined;
+    const fileId = small !== undefined ? ((small['id'] as number | undefined) ?? 0) : 0;
+    if (fileId <= 0) {
+      item.avatarPath = '';
+      this.avatarFileByUser.delete(id);
+      return;
+    }
+    if (this.avatarFileByUser.get(id) === fileId && item.avatarPath !== '') {
+      return;
+    }
+    this.avatarFileByUser.set(id, fileId);
+    this.download(fileId, (path: string): void => {
+      // A late download from an older profile photo must not overwrite the
+      // user's newer avatar.
+      if (this.avatarFileByUser.get(id) !== fileId) {
+        return;
+      }
+      const current = this.byId.get(id);
+      if (current !== undefined) {
+        current.avatarPath = path;
+        if (!this.loading) {
+          this.rebuild();
+          this.notify();
+        }
+      }
     });
   }
 
@@ -130,8 +230,10 @@ export class ContactsStore {
     it.statusText = formatLastSeen(status, Math.floor(Date.now() / 1000));
     it.online = (status !== undefined) && (status['@type'] === 'userStatusOnline');
     it.sortKey = this.sortKey(status);
-    this.rebuild();
-    this.notify();
+    if (!this.loading) {
+      this.rebuild();
+      this.notify();
+    }
   }
 
   private sortKey(status: TdObject | undefined): number {
@@ -161,7 +263,10 @@ export class ContactsStore {
   private rebuild(): void {
     const arr: ContactItem[] = [];
     this.byId.forEach((v: ContactItem) => { arr.push(v); });
-    arr.sort((a: ContactItem, b: ContactItem) => b.sortKey - a.sortKey);
+    arr.sort((a: ContactItem, b: ContactItem): number => {
+      const byLastSeen = b.sortKey - a.sortKey;
+      return byLastSeen !== 0 ? byLastSeen : a.name.localeCompare(b.name);
+    });
     this.contacts = arr;
   }
 
@@ -191,6 +296,7 @@ export class ContactsStore {
     const done = local !== undefined ? ((local['is_downloading_completed'] as boolean | undefined) ?? false) : false;
     const path = local !== undefined ? ((local['path'] as string | undefined) ?? '') : '';
     if (done && path !== '') {
+      this.fileApply.delete(id);
       apply(path);
     }
   }

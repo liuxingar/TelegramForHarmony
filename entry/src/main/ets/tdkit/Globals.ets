@@ -24,6 +24,8 @@ let unread: UnreadCountStore | undefined = undefined;
 let baseFilesDir: string = '';
 let activeTdFilesDirectory: string = '';
 let switchInFlight: Promise<void> | null = null;
+let desiredOnline: boolean = false;
+let runtimeReady: boolean = false;
 
 export function initTdKit(context: common.Context): void {
   if (client !== undefined) {
@@ -35,6 +37,7 @@ export function initTdKit(context: common.Context): void {
 }
 
 function createRuntime(slotId: string): void {
+  runtimeReady = false;
   const directories: TdAccountDirectories = accountRegistry.directories(baseFilesDir, slotId);
   activeTdFilesDirectory = directories.filesDirectory;
   client = new TdClient({ init: testNapi.tdInit, send: testNapi.tdSend });
@@ -59,7 +62,11 @@ function createRuntime(slotId: string): void {
   const runtimeAuth = auth;
   runtimeAuth.onStageChange((stage: AuthStage): void => {
     if (stage === AuthStage.Ready && client === runtimeClient && auth === runtimeAuth) {
+      runtimeReady = true;
+      applyDesiredOnlineState(runtimeClient);
       refreshActiveAccountSummary(runtimeClient);
+    } else if (client === runtimeClient && auth === runtimeAuth && stage !== AuthStage.Init) {
+      runtimeReady = false;
     }
   });
   client.start();
@@ -68,6 +75,16 @@ function createRuntime(slotId: string): void {
 async function stopRuntime(): Promise<void> {
   const currentAuth = auth;
   const currentClient = client;
+  const currentReady = runtimeReady;
+  runtimeReady = false;
+  if (currentClient !== undefined && currentReady) {
+    try {
+      await sendOnlineOption(currentClient, false);
+    } catch (caught) {
+      const error = caught as Error;
+      console.error(`Globals.stopRuntime set offline failed: ${error.message}`);
+    }
+  }
   if (currentAuth !== undefined) {
     await currentAuth.closeDatabase();
     currentAuth.dispose();
@@ -85,6 +102,35 @@ async function stopRuntime(): Promise<void> {
   files = undefined;
   folders = undefined;
   unread = undefined;
+}
+
+function sendOnlineOption(runtimeClient: TdClient, online: boolean): Promise<void> {
+  const request: TdRequest = { '@type': 'setOption' };
+  request['name'] = 'online';
+  request['value'] = {
+    '@type': 'optionValueBoolean',
+    'value': online
+  } as TdObject;
+  return runtimeClient.send(request).then((): void => {});
+}
+
+function applyDesiredOnlineState(runtimeClient: TdClient): void {
+  const target = desiredOnline;
+  sendOnlineOption(runtimeClient, target).catch((caught: Error): void => {
+    if (client !== runtimeClient) {
+      return;
+    }
+    console.error(`Globals.setOnline(${target}) failed: ${caught.message}`);
+  });
+}
+
+export function setTdOnlineState(online: boolean): void {
+  desiredOnline = online;
+  const runtimeClient = client;
+  if (runtimeClient === undefined || !runtimeReady) {
+    return;
+  }
+  applyDesiredOnlineState(runtimeClient);
 }
 
 function bumpSessionEpoch(): void {

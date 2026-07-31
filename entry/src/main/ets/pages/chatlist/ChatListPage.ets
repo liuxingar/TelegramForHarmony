@@ -1,9 +1,10 @@
 import { getFolderStore, getUnreadCountStore, getChatStore, getTdClient } from '../../tdkit/Globals';
-import { TdError, TdObject, TdRequest } from '../../tdkit/TdTypes';
+import { TdObject, TdRequest } from '../../tdkit/TdTypes';
 import { FolderInfo } from '../../store/FolderStore';
 import { ChatListView } from './ChatListView';
 import { MainTabBody } from './MainTabBody';
-import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY, COLOR_TAB_SELECTED, COLOR_TAB_UNSELECTED, COLOR_BADGE_BG, COLOR_TAB_PILL_BG } from '../../util/theme';
+import { CHAT_LIST_NOW } from './ChatListFreeze';
+import { COLOR_PRIMARY, COLOR_TEXT_SECONDARY, COLOR_TAB_SELECTED, COLOR_TAB_UNSELECTED, COLOR_BADGE_BG, COLOR_TAB_PILL_BG } from '../../util/theme';
 import { router } from '@kit.ArkUI';
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
 
@@ -12,23 +13,28 @@ interface TabSpec {
   title: string;
 }
 
+const TOP_BAR_HEIGHT: number = 56;
+const TOP_ACTION_SIZE: number = 44;
+const TAB_BADGE_MAX: number = 99;
+const FOLDER_BAR_HEIGHT: number = 44;
+const FOLDER_INDICATOR_HEIGHT: number = 32;
+const FOLDER_SWITCH_DURATION: number = 250;
+
 @Preview
 @Component
 export struct ChatListPage {
   @State folders: FolderInfo[] = [];
   @State unreadMap: Map<string, number> = new Map();
   @State selectedIndex: number = 0;
-  @State searchMode: boolean = false;
-  @State searchQuery: string = '';
   // TDLib connection state as a small status hint beside the title
   // ('' when connectionStateReady — nothing shown).
   @State syncLabel: string = '';
   @StorageProp('topSafeHeight') topSafe: number = 0;
+  @StorageProp('screenWidthVp') screenW: number = 360;
   // Sliding selection pill: position/size interpolated between tab frames so it
   // follows the finger during content swipes (Telegram-style).
   @State indicatorX: number = 8;
   @State indicatorW: number = 0;
-  @State indicatorH: number = 26;
   private tabXs: number[] = [];
   private tabWs: number[] = [];
   private tabsWidth: number = 0; // Tabs (content) width, for swipe-progress ratio
@@ -39,7 +45,31 @@ export struct ChatListPage {
   private unsubUnread: (() => void) | null = null;
   private unsubChats: (() => void) | null = null;
   private unsubConn: (() => void) | null = null;
-  private loadedFolders: Set<string> = new Set();
+  @State searchOpening: boolean = false;
+  private savedMessagesOpening: boolean = false;
+  private folderLayoutPending: boolean = false;
+  private clockTimer: number = -1;
+  private searchOpeningTimer: number = -1;
+
+  @Styles
+  actionNormalStyle() {
+    .backgroundColor(Color.Transparent)
+  }
+
+  @Styles
+  actionPressedStyle() {
+    .backgroundColor($r('app.color.surface_alt'))
+  }
+
+  @Styles
+  tabNormalStyle() {
+    .opacity(1)
+  }
+
+  @Styles
+  tabPressedStyle() {
+    .opacity(0.62)
+  }
 
   // Place the pill at a (possibly fractional) tab position: 1.4 = 40% of the
   // way between tab 1 and tab 2, interpolating both position and width.
@@ -75,22 +105,43 @@ export struct ChatListPage {
       target = x + w - this.tabViewW + 8;
     }
     if (target >= 0) {
-      this.tabScroller.scrollTo({ xOffset: target, yOffset: 0, animation: { duration: 200, curve: Curve.EaseOut } });
+      this.tabScroller.scrollTo({
+        xOffset: target,
+        yOffset: 0,
+        animation: {
+          duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 200),
+          curve: Curve.EaseOut
+        }
+      });
     }
   }
 
   aboutToAppear(): void {
+    this.startClock();
+    if (this.searchOpeningTimer !== -1) {
+      clearTimeout(this.searchOpeningTimer);
+      this.searchOpeningTimer = -1;
+    }
+    this.searchOpening = false;
+    this.savedMessagesOpening = false;
     this.folders = getFolderStore().getFolders();
     this.ensureFolderLoads(this.folders);
     this.refreshUnread();
     this.unsubFolders = getFolderStore().subscribe((f: FolderInfo[]) => {
+      const previousTabs = this.tabs();
+      const selectedKey = previousTabs[this.selectedIndex]?.key ?? 'main';
+      const foldersChanged = this.folderSignature(this.folders) !== this.folderSignature(f);
       this.folders = f;
+      if (foldersChanged) {
+        this.reconcileSelectedFolder(selectedKey, previousTabs);
+      }
       this.ensureFolderLoads(f);
       this.refreshUnread();
     });
     this.unsubUnread = getUnreadCountStore().subscribe(() => { this.refreshUnread(); });
-    // any chat change recomputes folder badges (folder unread is derived from loaded chats)
-    this.unsubChats = getChatStore().subscribe(() => { this.refreshUnread(); }, 'main');
+    // Folder unread is derived from cached chats. Listen to lightweight store
+    // invalidations rather than rebuilding/sorting the main list a second time.
+    this.unsubChats = getChatStore().subscribeChanges(() => { this.refreshUnread(); });
     this.unsubConn = getTdClient().onUpdate('updateConnectionState', (u: TdObject) => {
       const st = u['state'] as TdObject | undefined;
       const t = st !== undefined ? ((st['@type'] as string | undefined) ?? '') : '';
@@ -100,15 +151,54 @@ export struct ChatListPage {
     });
   }
 
+  // Folder edits can arrive while this keep-alive page is behind Settings.
+  // Preserve the selected folder by id when folders are reordered, and fall
+  // back to "所有" if the selected folder was deleted.
+  private reconcileSelectedFolder(selectedKey: string, previousTabs: TabSpec[]): void {
+    const previousXs = this.tabXs;
+    const previousWs = this.tabWs;
+    const xByKey: Map<string, number> = new Map();
+    const wByKey: Map<string, number> = new Map();
+    previousTabs.forEach((spec: TabSpec, index: number): void => {
+      xByKey.set(spec.key, previousXs[index] ?? 0);
+      wByKey.set(spec.key, previousWs[index] ?? 0);
+    });
+    const specs = this.tabs();
+    const matchedIndex = specs.findIndex((spec: TabSpec): boolean => spec.key === selectedKey);
+    const nextIndex = matchedIndex >= 0 ? matchedIndex : 0;
+    // Preserve known frames by stable folder id. Tabs whose geometry did not
+    // change may not emit onAreaChange again after an item is appended.
+    this.tabXs = specs.map((spec: TabSpec): number => xByKey.get(spec.key) ?? 0);
+    this.tabWs = specs.map((spec: TabSpec): number => wByKey.get(spec.key) ?? 0);
+    // Keep the old pill visible until the new frames arrive, then glide it to
+    // the preserved folder instead of flashing out and rebuilding at width 0.
+    this.folderLayoutPending = this.indicatorW > 0;
+    if (nextIndex !== this.selectedIndex) {
+      this.selectedIndex = nextIndex;
+      this.controller.changeIndex(nextIndex);
+    }
+  }
+
+  private folderSignature(fs: FolderInfo[]): string {
+    return fs.map((f: FolderInfo): string => `${f.id}:${f.title}`).join('|');
+  }
+
+  private startClock(): void {
+    AppStorage.setOrCreate(CHAT_LIST_NOW, Math.floor(Date.now() / 1000));
+    if (this.clockTimer !== -1) {
+      return;
+    }
+    this.clockTimer = setInterval((): void => {
+      AppStorage.setOrCreate(CHAT_LIST_NOW, Math.floor(Date.now() / 1000));
+    }, 60000);
+  }
+
   // TDLib does not emit updateUnreadChatCount for chat folders, so load each
   // folder once to populate its chats; the badge is then derived from them.
   private ensureFolderLoads(fs: FolderInfo[]): void {
     for (const f of fs) {
       const key = `folder:${f.id}`;
-      if (!this.loadedFolders.has(key)) {
-        this.loadedFolders.add(key);
-        getChatStore().load(key);
-      }
+      getChatStore().ensureLoaded(key);
     }
   }
 
@@ -134,6 +224,15 @@ export struct ChatListPage {
     if (this.unsubUnread !== null) { this.unsubUnread(); this.unsubUnread = null; }
     if (this.unsubChats !== null) { this.unsubChats(); this.unsubChats = null; }
     if (this.unsubConn !== null) { this.unsubConn(); this.unsubConn = null; }
+    if (this.clockTimer !== -1) {
+      clearInterval(this.clockTimer);
+      this.clockTimer = -1;
+    }
+    if (this.searchOpeningTimer !== -1) {
+      clearTimeout(this.searchOpeningTimer);
+      this.searchOpeningTimer = -1;
+    }
+    this.searchOpening = false;
   }
 
   private tabs(): TabSpec[] {
@@ -145,6 +244,10 @@ export struct ChatListPage {
   }
 
   private openSavedMessages(): void {
+    if (this.savedMessagesOpening) {
+      return;
+    }
+    this.savedMessagesOpening = true;
     const meRequest: TdRequest = { '@type': 'getMe' };
     getTdClient().send(meRequest).then((me: TdObject): Promise<TdObject> => {
       const userId = (me['id'] as number | undefined) ?? 0;
@@ -155,15 +258,58 @@ export struct ChatListPage {
       chatRequest['user_id'] = userId;
       chatRequest['force'] = false;
       return getTdClient().send(chatRequest);
-    }).then((chat: TdObject): void => {
+    }).then((chat: TdObject): Promise<void> => {
       const chatId = (chat['id'] as number | undefined) ?? 0;
-      if (chatId > 0) {
-        const params: Record<string, Object> = { 'chatId': chatId };
-        router.pushUrl({ url: 'pages/chat/ChatPage', params: params });
+      if (chatId <= 0) {
+        return Promise.reject(new Error('收藏对话不可用'));
       }
-    }).catch((error: TdError): void => {
+      const params: Record<string, Object> = { 'chatId': chatId };
+      return router.pushUrl({ url: 'pages/chat/ChatPage', params: params });
+    }).then((): void => {
+      // pushUrl resolves once the route request is accepted, while this
+      // keep-alive home component can stay mounted behind the new page.
+      this.savedMessagesOpening = false;
+    }).catch((error: Error): void => {
+      this.savedMessagesOpening = false;
       console.error(`ChatListPage.openSavedMessages failed: ${error.message}`);
     });
+  }
+
+  private openGlobalSearch(): void {
+    if (this.searchOpening) {
+      return;
+    }
+    this.searchOpening = true;
+    router.pushUrl({ url: 'pages/search/GlobalSearchPage' })
+      .then((): void => {
+        // Keep a short guard after the route request is accepted so a rapid
+        // double tap cannot enqueue a second search page.
+        this.searchOpeningTimer = setTimeout((): void => {
+          this.searchOpeningTimer = -1;
+          this.searchOpening = false;
+        }, 520);
+      })
+      .catch((error: Error): void => {
+        if (this.searchOpeningTimer !== -1) {
+          clearTimeout(this.searchOpeningTimer);
+          this.searchOpeningTimer = -1;
+        }
+        this.searchOpening = false;
+        console.error(`ChatListPage.openGlobalSearch failed: ${error.message}`);
+      });
+  }
+
+  private tabBadgeText(spec: TabSpec): string {
+    const unread = this.unreadMap.get(spec.key) ?? 0;
+    return unread > TAB_BADGE_MAX ? `${TAB_BADGE_MAX}+` : `${unread}`;
+  }
+
+  private horizontalPadding(): number {
+    return this.screenW >= 600 ? 24 : 12;
+  }
+
+  private folderTitleMaxWidth(): number {
+    return this.screenW >= 600 ? 180 : 132;
   }
 
   @Builder
@@ -181,79 +327,161 @@ export struct ChatListPage {
   }
 
   @Builder
-  topBar() {
-    if (this.searchMode) {
-      // Expanded global search bar (same pattern as the in-chat search header).
-      Row({ space: 8 }) {
-        Row() {
-          SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(22).fontColor([COLOR_TEXT_PRIMARY]);
-        }
-        .width(40).height(40).borderRadius(20).backgroundColor($r('app.color.surface'))
-        .justifyContent(FlexAlign.Center)
-        .shadow({ radius: 4, color: '#12000000', offsetX: 0, offsetY: 1 })
-        .onClick(() => {
-          this.searchMode = false;
-          this.searchQuery = '';
-        });
-        TextInput({ text: this.searchQuery, placeholder: '全局搜索' })
-          .layoutWeight(1).height(40)
-          .backgroundColor($r('app.color.surface')).borderRadius(20)
-          .defaultFocus(true)
-          .onChange((v: string) => { this.searchQuery = v; })
-          .onSubmit(() => {
-            const q = this.searchQuery.trim();
-            if (q !== '') {
-              const params: Record<string, Object> = { 'query': q };
-              router.pushUrl({ url: 'pages/search/GlobalSearchPage', params: params });
-            }
-          });
-      }.width('100%').padding({ left: 12, right: 12, top: 6, bottom: 8 })
-      .alignItems(VerticalAlign.Center);
-    } else {
-      Row() {
-        Row({ space: 5 }) {
-          Text('Telegram').fontSize(24).fontWeight(FontWeight.Bold).fontColor(COLOR_PRIMARY);
-          if (this.syncLabel !== '') {
-            Text(this.syncLabel).fontSize(11).fontColor(COLOR_TEXT_SECONDARY).margin({ bottom: 4 });
-          }
-        }.alignItems(VerticalAlign.Bottom).layoutWeight(1);
-        SymbolGlyph($r('sys.symbol.magnifyingglass')).fontSize(24).fontColor([COLOR_TEXT_SECONDARY]).margin({ right: 16 })
-          .onClick(() => { router.pushUrl({ url: 'pages/search/GlobalSearchPage' }); });
-        Row() {
-          SymbolGlyph($r('sys.symbol.more')).fontSize(24).fontColor([COLOR_TEXT_SECONDARY]);
-        }
-        .width(40).height(40)
-        .justifyContent(FlexAlign.Center)
-        .bindMenu(this.moreMenu());
-      }.width('100%').padding({ left: 16, right: 16, top: 12, bottom: 8 });
+  topAction(icon: string, label: string, onTap: () => void) {
+    Row() {
+      SymbolGlyph($r(icon)).fontSize(23).fontColor([COLOR_TEXT_SECONDARY]);
     }
+    .width(TOP_ACTION_SIZE).height(TOP_ACTION_SIZE)
+    .borderRadius(TOP_ACTION_SIZE / 2)
+    .justifyContent(FlexAlign.Center)
+    .stateStyles({
+      normal: this.actionNormalStyle,
+      pressed: this.actionPressedStyle
+    })
+    .accessibilityText(label)
+    .onClick((): void => { onTap(); });
+  }
+
+  @Builder
+  searchAction() {
+    Row() {
+      if (this.searchOpening) {
+        LoadingProgress()
+          .width(20)
+          .height(20)
+          .color(COLOR_PRIMARY)
+          .transition(TransitionEffect.OPACITY
+            .combine(TransitionEffect.scale({ x: 0.72, y: 0.72 }))
+            .animation({
+              duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 150),
+              curve: Curve.EaseOut
+            }));
+      } else {
+        SymbolGlyph($r('sys.symbol.magnifyingglass'))
+          .fontSize(23)
+          .fontColor([COLOR_TEXT_SECONDARY])
+          .transition(TransitionEffect.OPACITY
+            .combine(TransitionEffect.scale({ x: 0.84, y: 0.84 }))
+            .animation({
+              duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 150),
+              curve: Curve.EaseOut
+            }));
+      }
+    }
+    .width(TOP_ACTION_SIZE)
+    .height(TOP_ACTION_SIZE)
+    .borderRadius(TOP_ACTION_SIZE / 2)
+    .justifyContent(FlexAlign.Center)
+    .stateStyles({
+      normal: this.actionNormalStyle,
+      pressed: this.actionPressedStyle
+    })
+    .enabled(!this.searchOpening)
+    .accessibilityText(this.searchOpening ? '正在打开全局搜索' : '全局搜索')
+    .onClick((): void => {
+      this.openGlobalSearch();
+    });
+  }
+
+  @Builder
+  topBar() {
+    Row({ space: 2 }) {
+      Column() {
+        Text('Telegram')
+          .fontSize(25).fontWeight(FontWeight.Bold).fontColor(COLOR_PRIMARY)
+          .maxLines(1)
+          .translate({ y: this.syncLabel === '' ? 7 : 0 })
+          .animation({
+            duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+            curve: Curve.EaseOut
+          });
+        Text(this.syncLabel)
+          .height(14).fontSize(11).lineHeight(14)
+          .fontColor(COLOR_TEXT_SECONDARY)
+          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          .opacity(this.syncLabel === '' ? 0 : 1)
+          .translate({ y: this.syncLabel === '' ? -3 : 0 })
+          .animation({
+            duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+            curve: Curve.EaseOut
+          });
+      }
+      .height(TOP_BAR_HEIGHT)
+      .justifyContent(FlexAlign.Center)
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1);
+
+      this.searchAction();
+
+      Row() {
+        SymbolGlyph($r('sys.symbol.more')).fontSize(23).fontColor([COLOR_TEXT_SECONDARY]);
+      }
+      .width(TOP_ACTION_SIZE).height(TOP_ACTION_SIZE)
+      .borderRadius(TOP_ACTION_SIZE / 2)
+      .justifyContent(FlexAlign.Center)
+      .stateStyles({
+        normal: this.actionNormalStyle,
+        pressed: this.actionPressedStyle
+      })
+      .accessibilityText('更多操作')
+      .bindMenu(this.moreMenu());
+    }
+    .width('100%').height(TOP_BAR_HEIGHT)
+    .padding({ left: this.horizontalPadding() + 4, right: this.horizontalPadding() })
+    .alignItems(VerticalAlign.Center)
+    .backgroundColor($r('app.color.surface'));
   }
 
   @Builder
   pill(spec: TabSpec, index: number) {
-    Row({ space: 4 }) {
-      Text(spec.title).fontSize(13)
+    Row({ space: 5 }) {
+      Text(spec.title).fontSize(14)
         .fontWeight(this.selectedIndex === index ? FontWeight.Medium : FontWeight.Normal)
-        .fontColor(this.selectedIndex === index ? COLOR_TAB_SELECTED : COLOR_TAB_UNSELECTED);
+        .fontColor(this.selectedIndex === index ? COLOR_TAB_SELECTED : COLOR_TAB_UNSELECTED)
+        .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+        .constraintSize({ maxWidth: this.folderTitleMaxWidth() });
       if ((this.unreadMap.get(spec.key) ?? 0) > 0) {
-        Text(`${this.unreadMap.get(spec.key) ?? 0}`)
-          .fontSize(10).fontColor(Color.White)
+        Row() {
+          Text(this.tabBadgeText(spec))
+            .fontSize(10).fontColor(Color.White).fontWeight(FontWeight.Medium);
+        }
+          .constraintSize({ minWidth: 18 })
+          .height(18).padding({ left: 5, right: 5 })
+          .justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
           .backgroundColor(this.selectedIndex === index ? COLOR_TAB_SELECTED : COLOR_BADGE_BG)
-          .borderRadius(8).padding({ left: 5, right: 5, top: 1, bottom: 1 });
+          .borderRadius(9);
       }
     }
-    .padding({ left: 11, right: 11, top: 4, bottom: 4 })
-    .margin({ right: 3 })
-    .borderRadius(14)
+    .height(FOLDER_BAR_HEIGHT)
+    .padding({ left: 12, right: 12 })
+    .margin({ right: 2 })
+    .borderRadius(FOLDER_BAR_HEIGHT / 2)
+    .stateStyles({
+      normal: this.tabNormalStyle,
+      pressed: this.tabPressedStyle
+    })
     .onAreaChange((_old: Area, area: Area) => {
       // Record each pill's frame for the sliding indicator + keep-visible math.
       this.tabXs[index] = area.position.x as number;
       this.tabWs[index] = area.width as number;
-      this.indicatorH = area.height as number;
       if (index === this.selectedIndex) {
-        this.moveIndicatorTo(index);
+        if (this.folderLayoutPending) {
+          this.folderLayoutPending = false;
+          animateTo({
+            duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 220),
+            curve: Curve.EaseOut
+          }, () => { this.moveIndicatorTo(index); });
+          this.ensureTabVisible(index);
+        } else {
+          this.moveIndicatorTo(index);
+        }
       }
     })
+    .accessibilityText(
+      (this.unreadMap.get(spec.key) ?? 0) > 0
+        ? `${spec.title}，${this.tabBadgeText(spec)} 个未读`
+        : spec.title
+    )
     .onClick(() => { this.controller.changeIndex(index); });
   }
 
@@ -265,34 +493,49 @@ export struct ChatListPage {
           // Sliding selection pill behind the labels — driven by indicatorX/W,
           // which follow the finger during Tabs content swipes.
           Row()
-            .width(this.indicatorW).height(this.indicatorH)
-            .borderRadius(this.indicatorH / 2)
+            .width(this.indicatorW).height(FOLDER_INDICATOR_HEIGHT)
+            .borderRadius(FOLDER_INDICATOR_HEIGHT / 2)
             .backgroundColor(COLOR_TAB_PILL_BG)
-            .position({ x: this.indicatorX, y: (40 - this.indicatorH) / 2 });
+            .position({
+              x: this.indicatorX,
+              y: (FOLDER_BAR_HEIGHT - FOLDER_INDICATOR_HEIGHT) / 2
+            });
           Row() {
             ForEach(this.tabs(), (spec: TabSpec, index: number) => {
               this.pill(spec, index);
             }, (spec: TabSpec) => `${spec.key}_${spec.title}`);
-          }.padding({ left: 8, right: 8 }).height(40);
+          }.padding({ left: 8, right: 8 }).height(FOLDER_BAR_HEIGHT);
         }
       }
       .scrollable(ScrollDirection.Horizontal)
       .scrollBar(BarState.Off)
       .align(Alignment.Start)
       .width('100%')
-      .onAreaChange((_old: Area, area: Area) => { this.tabViewW = area.width as number; });
+      .onAreaChange((_old: Area, area: Area) => {
+        this.tabViewW = area.width as number;
+        this.ensureTabVisible(this.selectedIndex);
+      });
     }
     .backgroundColor($r('app.color.surface'))
-    .borderRadius(20)
+    .borderRadius(FOLDER_BAR_HEIGHT / 2)
     .clip(true)
-    .margin({ left: 8, right: 8, top: 2, bottom: 8 })
-    .shadow({ radius: 8, color: '#1F000000', offsetX: 0, offsetY: 0 });
+    .margin({ left: 8, right: 8, bottom: 6 })
+    .transition(
+      TransitionEffect.OPACITY
+        .combine(TransitionEffect.translate({ y: -4 }))
+        .animation({
+          duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+          curve: Curve.EaseOut
+        })
+    );
   }
 
   build() {
     Column() {
       this.topBar();
-      this.tabBar();
+      if (this.folders.length > 0) {
+        this.tabBar();
+      }
       Tabs({ controller: this.controller }) {
         ForEach(this.tabs(), (spec: TabSpec) => {
           TabContent() {
@@ -311,6 +554,7 @@ export struct ChatListPage {
         }, (spec: TabSpec) => `${spec.key}_${spec.title}`);
       }
       .barHeight(0)
+      .animationDuration(powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, FOLDER_SWITCH_DURATION))
       .onAreaChange((_old: Area, area: Area) => { this.tabsWidth = area.width as number; })
       // Content swipe in progress: convert the swipe offset into a fractional
       // tab position so the selection pill tracks the finger continuously.
@@ -322,17 +566,26 @@ export struct ChatListPage {
       // Finger released / tab tapped: settle the pill on the target tab and
       // scroll the strip if that tab sits outside the visible range.
       .onAnimationStart((_index: number, targetIndex: number) => {
+        this.folderLayoutPending = false;
         this.selectedIndex = targetIndex;
         animateTo({
-          duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 250), curve: Curve.EaseOut
+          duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, FOLDER_SWITCH_DURATION),
+          curve: Curve.EaseOut
         }, () => { this.moveIndicatorTo(targetIndex); });
         this.ensureTabVisible(targetIndex);
       })
       .onChange((index: number) => {
-        this.selectedIndex = index;
-        animateTo({
-          duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 200), curve: Curve.EaseOut
-        }, () => { this.moveIndicatorTo(index); });
+        // onAnimationStart already drives animated changes. Avoid starting the
+        // same settle animation twice when onChange fires at the end.
+        if (this.selectedIndex !== index) {
+          this.selectedIndex = index;
+          animateTo({
+            duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, FOLDER_SWITCH_DURATION),
+            curve: Curve.EaseOut
+          }, () => { this.moveIndicatorTo(index); });
+        } else {
+          this.moveIndicatorTo(index);
+        }
         this.ensureTabVisible(index);
       })
       .layoutWeight(1)

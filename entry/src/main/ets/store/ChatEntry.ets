@@ -6,6 +6,9 @@ export type ChatKind = 'private' | 'secret' | 'basicGroup' | 'supergroup' | 'cha
 
 export interface ChatEntry {
   id: number;
+  // Monotonic render revision. ForEach can use this compact value instead of
+  // embedding every mutable field (and the row index) in its identity.
+  revision: number;
   title: string;
   isMuted: boolean;
   unreadCount: number;
@@ -19,6 +22,11 @@ export interface ChatEntry {
   autoDeleteTime: number;
   kind: ChatKind;
   isMarkedUnread: boolean; // manually flagged unread (unread_count may be 0)
+  // Per-chat wallpaper/theme background supplied by TDLib. Kept as the
+  // original immutable object so ChatPage can render new background variants
+  // without making the chat-list store depend on ArkUI types.
+  background: TdObject | null;
+  themeName: string;
   liveGroupCallId: number; // current video chat/group call bound to this chat
   isLive: boolean;        // true only after groupCall.is_active is confirmed
   isRtmpLive: boolean;
@@ -26,12 +34,14 @@ export interface ChatEntry {
 
 export function cloneEntry(e: ChatEntry): ChatEntry {
   return {
-    id: e.id, title: e.title, isMuted: e.isMuted, unreadCount: e.unreadCount,
+    id: e.id, revision: e.revision + 1,
+    title: e.title, isMuted: e.isMuted, unreadCount: e.unreadCount,
     lastMessageText: e.lastMessageText, lastMessageDate: e.lastMessageDate,
     lastMessageId: e.lastMessageId,
     lastSenderName: e.lastSenderName, photoFileId: e.photoFileId,
     avatarPath: e.avatarPath, initials: e.initials, autoDeleteTime: e.autoDeleteTime,
     kind: e.kind, isMarkedUnread: e.isMarkedUnread,
+    background: e.background, themeName: e.themeName,
     liveGroupCallId: e.liveGroupCallId, isLive: e.isLive, isRtmpLive: e.isRtmpLive
   };
 }

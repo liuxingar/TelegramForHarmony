@@ -1,22 +1,33 @@
 import { common, Want } from '@kit.AbilityKit';
 
-// Open a tapped link (web URL / mailto / t.me) in the appropriate system app.
-export function openUrl(context: common.UIAbilityContext, url: string): void {
-  if (url === '' || context === undefined) {
+export function normalizeExternalUrl(url: string): string {
+  const target = url.trim();
+  if (target === '' || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(target)) {
+    return target;
+  }
+  return `https://${target}`;
+}
+
+// Open a tapped link (web URL / mailto / tel / geo) in the appropriate system app.
+export function openUrl(
+  context: common.UIAbilityContext,
+  url: string,
+  onFailed: () => void = (): void => {}
+): void {
+  if (url.trim() === '' || context === undefined) {
     return;
   }
   // Bare web addresses (www.example.com / example.com, no scheme) can't be
   // opened by viewData as-is — prepend https:// so the browser recognizes them.
-  // mailto:/tel:/existing-scheme links are left untouched.
-  let target = url.trim();
-  if (target.indexOf('://') < 0 && target.indexOf('mailto:') !== 0 && target.indexOf('tel:') !== 0) {
-    target = `https://${target}`;
-  }
+  // Any standards-compliant URI scheme (mailto:, tel:, geo:, tg:, …) is
+  // already complete and must be left untouched.
+  const target = normalizeExternalUrl(url);
   const want: Want = {
     action: 'ohos.want.action.viewData',
     uri: target
   };
   context.startAbility(want).catch((e: Object) => {
     console.error(`openUrl failed for ${target}: ${JSON.stringify(e)}`);
+    onFailed();
   });
 }

@@ -20,6 +20,11 @@ import streamSegmentMathTest from './StreamSegmentMath.test';
 import groupCallApiTest from './GroupCallApi.test';
 import liveStreamStoreTest from './LiveStreamStore.test';
 import groupCallStreamSessionTest from './GroupCallStreamSession.test';
+import albumLayoutTest from './AlbumLayout.test';
+import richTextTest from './RichText.test';
+import voiceWaveformTest from './VoiceWaveform.test';
+import fileMessageTest from './FileMessage.test';
+import openUrlTest from './OpenUrl.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -44,4 +49,9 @@ export default function testsuite() {
   groupCallApiTest();
   liveStreamStoreTest();
   groupCallStreamSessionTest();
+  albumLayoutTest();
+  richTextTest();
+  voiceWaveformTest();
+  fileMessageTest();
+  openUrlTest();
 }

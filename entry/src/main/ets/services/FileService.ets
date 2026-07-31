@@ -7,8 +7,12 @@ const AVATAR_PRIORITY: number = 1;
 export class FileService {
   private client: TdClient;
   private store: ChatStore;
-  private fileToChat: Map<number, number> = new Map();
+  // A TDLib file can be reused by more than one chat. Keeping only one chat
+  // here makes the last request steal the update, leaving earlier rows on
+  // initials until their detail page downloads the same file again.
+  private fileToChats: Map<number, Set<number>> = new Map();
   private requested: Set<number> = new Set();
+  private completedPaths: Map<number, string> = new Map();
 
   constructor(client: TdClient, store: ChatStore) {
     this.client = client;
@@ -20,7 +24,19 @@ export class FileService {
     if (fileId === 0) {
       return;
     }
-    this.fileToChat.set(fileId, chatId);
+    let chatIds = this.fileToChats.get(fileId);
+    if (chatIds === undefined) {
+      chatIds = new Set<number>();
+      this.fileToChats.set(fileId, chatIds);
+    }
+    chatIds.add(chatId);
+    const completedPath = this.completedPaths.get(fileId) ?? '';
+    if (completedPath !== '') {
+      if (this.store.photoFileIdOf(chatId) === fileId) {
+        this.store.setAvatarPath(chatId, completedPath);
+      }
+      return;
+    }
     if (this.requested.has(fileId)) {
       return;
     }
@@ -53,8 +69,8 @@ export class FileService {
     if (id === undefined) {
       return;
     }
-    const chatId = this.fileToChat.get(id);
-    if (chatId === undefined) {
+    const chatIds = this.fileToChats.get(id);
+    if (chatIds === undefined) {
       return;
     }
     const local = file['local'] as TdObject | undefined;
@@ -64,7 +80,14 @@ export class FileService {
     const done = (local['is_downloading_completed'] as boolean | undefined) ?? false;
     const path = (local['path'] as string | undefined) ?? '';
     if (done && path !== '') {
-      this.store.setAvatarPath(chatId, path);
+      this.completedPaths.set(id, path);
+      this.requested.delete(id);
+      for (const chatId of chatIds) {
+        // Ignore a late completion from the chat's previous photo.
+        if (this.store.photoFileIdOf(chatId) === id) {
+          this.store.setAvatarPath(chatId, path);
+        }
+      }
     }
   }
 }

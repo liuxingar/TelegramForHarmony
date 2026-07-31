@@ -34,13 +34,51 @@ struct ChatProfilePage {
   @State liveGroupCallId: number = 0;
   @State creatingLive: boolean = false;
   @State members: MemberItem[] = [];
+  @State pageState: string = 'loading'; // loading | ready | error
+  @State errorText: string = '';
+  @State membershipState: string = 'checking';
+  @State joinByRequest: boolean = false;
+  @State joining: boolean = false;
+  @State joinRequestSent: boolean = false;
   private chatId: number = 0;
+  private inviteLink: string = '';
+  private pendingDraftText: string = '';
+  private pendingJumpTo: number = 0;
   private store: ChatProfileStore | null = null;
   private unsub: (() => void) | null = null;
 
   aboutToAppear(): void {
     const params = router.getParams() as Record<string, Object> | undefined;
-    this.chatId = params !== undefined ? (params['chatId'] as number) : 0;
+    this.chatId = params !== undefined
+      ? ((params['chatId'] as number | undefined) ?? 0) : 0;
+    this.inviteLink = params !== undefined
+      ? ((params['inviteLink'] as string | undefined) ?? '') : '';
+    this.pendingDraftText = params !== undefined
+      ? ((params['draftText'] as string | undefined) ?? '') : '';
+    this.pendingJumpTo = params !== undefined
+      ? ((params['jumpTo'] as number | undefined) ?? 0) : 0;
+    if (this.chatId !== 0) {
+      this.startStore();
+    } else if (this.inviteLink !== '') {
+      this.loadInvitePreview();
+    } else {
+      this.pageState = 'error';
+      this.errorText = '链接中没有可识别的频道或群组';
+    }
+  }
+
+  private startStore(): void {
+    if (this.chatId === 0) {
+      return;
+    }
+    if (this.unsub !== null) {
+      this.unsub();
+      this.unsub = null;
+    }
+    if (this.store !== null) {
+      this.store.close();
+    }
+    this.pageState = 'loading';
     const store = new ChatProfileStore(getTdClient(), this.chatId);
     this.store = store;
     this.unsub = store.subscribe(() => { this.refresh(); });
@@ -73,6 +111,13 @@ struct ChatProfilePage {
     if (s === null) {
       return;
     }
+    this.pageState = s.loadState;
+    this.errorText = s.errorText;
+    this.membershipState = s.membershipState;
+    this.joinByRequest = s.joinByRequest;
+    if (s.loadState !== 'ready') {
+      return;
+    }
     this.title = s.title;
     this.initials = s.initials;
     this.avatarPath = s.avatarPath;
@@ -88,8 +133,119 @@ struct ChatProfilePage {
   }
 
   private openChat(): void {
+    if (this.chatId === 0 || this.membershipState !== 'writable') {
+      return;
+    }
     const params: Record<string, Object> = { 'chatId': this.chatId };
+    if (this.pendingDraftText !== '') {
+      params['draftText'] = this.pendingDraftText;
+    }
+    if (this.pendingJumpTo > 0) {
+      params['jumpTo'] = this.pendingJumpTo;
+    }
     router.pushUrl({ url: 'pages/chat/ChatPage', params: params });
+  }
+
+  private loadInvitePreview(): void {
+    if (this.inviteLink === '') {
+      return;
+    }
+    this.pageState = 'loading';
+    this.errorText = '';
+    this.membershipState = 'checking';
+    const req: TdRequest = { '@type': 'checkChatInviteLink' };
+    req['invite_link'] = this.inviteLink;
+    getTdClient().send(req).then((info: TdObject): void => {
+      const resolvedChatId = (info['chat_id'] as number | undefined) ?? 0;
+      if (resolvedChatId !== 0) {
+        this.chatId = resolvedChatId;
+        this.startStore();
+        return;
+      }
+      this.title = (info['title'] as string | undefined) ?? 'Telegram 群组';
+      this.initials = this.title !== '' ? this.title.substring(0, 1).toUpperCase() : '?';
+      this.description = (info['description'] as string | undefined) ?? '';
+      const count = (info['member_count'] as number | undefined) ?? 0;
+      const inviteType = (info['type'] as TdObject | undefined)
+        ?? (info['chat_type'] as TdObject | undefined);
+      const inviteTypeName = (inviteType?.['@type'] as string | undefined) ?? '';
+      this.isChannel = ((info['is_channel'] as boolean | undefined) ?? false)
+        || inviteTypeName.indexOf('Channel') >= 0
+        || inviteTypeName.indexOf('channel') >= 0;
+      this.subtitle = count > 0
+        ? `${count} 位${this.isChannel ? '订阅者' : '成员'}`
+        : (this.isChannel ? '频道' : '群组');
+      this.joinByRequest =
+        (info['creates_join_request'] as boolean | undefined) ?? false;
+      this.membershipState = 'joinable';
+      this.pageState = 'ready';
+    }).catch((e: TdError): void => {
+      console.error(`ChatProfilePage.checkChatInviteLink failed: ${e.message}`);
+      this.pageState = 'error';
+      this.errorText = '邀请链接无效、已过期或无法访问';
+      this.membershipState = 'blocked';
+    });
+  }
+
+  private joinChat(): void {
+    if (this.joining || this.membershipState !== 'joinable' || this.joinRequestSent) {
+      return;
+    }
+    this.joining = true;
+    const req: TdRequest = {
+      '@type': this.inviteLink !== '' ? 'joinChatByInviteLink' : 'joinChat'
+    };
+    if (this.inviteLink !== '') {
+      req['invite_link'] = this.inviteLink;
+    } else {
+      req['chat_id'] = this.chatId;
+    }
+    getTdClient().send(req).then((chat: TdObject): void => {
+      this.joining = false;
+      const joinedChatId = (chat['id'] as number | undefined) ?? this.chatId;
+      if (joinedChatId !== 0 && this.chatId === 0) {
+        this.chatId = joinedChatId;
+      }
+      if (this.joinByRequest) {
+        this.joinRequestSent = true;
+        promptAction.showToast({ message: '加入申请已发送', duration: 1800 });
+        return;
+      }
+      this.membershipState = 'writable';
+      promptAction.showToast({
+        message: this.isChannel ? '已加入频道' : '已加入群组',
+        duration: 1500
+      });
+      if (this.chatId !== 0 && this.store === null) {
+        this.startStore();
+      }
+    }).catch((e: TdError): void => {
+      this.joining = false;
+      console.error(`ChatProfilePage.join failed: ${e.message}`);
+      promptAction.showToast({ message: '加入失败，链接可能已失效', duration: 1800 });
+    });
+  }
+
+  private primaryActionLabel(): string {
+    if (this.joinRequestSent) {
+      return '已申请';
+    }
+    if (this.membershipState === 'checking') {
+      return '加载中';
+    }
+    if (this.membershipState === 'blocked') {
+      return '无法加入';
+    }
+    if (this.membershipState === 'joinable') {
+      if (this.joining) {
+        return '正在加入';
+      }
+      if (this.joinByRequest) {
+        return '申请加入';
+      }
+      return this.isChannel ? '加入频道' : '加入群组';
+    }
+    return '消息';
   }
 
   private toggleMute(): void {
@@ -219,6 +375,33 @@ struct ChatProfilePage {
     .onClick(onTap);
   }
 
+  @Builder
+  primaryActionButton() {
+    Column({ space: 5 }) {
+      if (this.joinRequestSent) {
+        SymbolGlyph($r('sys.symbol.checkmark_circle')).fontSize(22).fontColor([COLOR_PRIMARY]);
+      } else if (this.membershipState === 'joinable') {
+        SymbolGlyph($r('sys.symbol.person_badge_plus')).fontSize(22).fontColor([COLOR_PRIMARY]);
+      } else {
+        SymbolGlyph($r('sys.symbol.message')).fontSize(22).fontColor([COLOR_PRIMARY]);
+      }
+      Text(this.primaryActionLabel()).fontSize(12).fontColor(COLOR_PRIMARY);
+    }
+    .layoutWeight(1).height(62)
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
+    .opacity(this.membershipState === 'blocked' || this.membershipState === 'checking' ? 0.55 : 1)
+    .enabled(this.membershipState === 'writable' ||
+      (this.membershipState === 'joinable' && !this.joining && !this.joinRequestSent))
+    .onClick((): void => {
+      if (this.membershipState === 'writable') {
+        this.openChat();
+      } else {
+        this.joinChat();
+      }
+    });
+  }
+
   // Dedicated builder (not the param-based actionButton): @Builder value
   // params don't re-evaluate on @State change, so the icon/label would stick.
   @Builder
@@ -299,16 +482,49 @@ struct ChatProfilePage {
   @Builder
   actionsRow() {
     Row({ space: 8 }) {
-      this.actionButton('sys.symbol.message', '消息', () => { this.openChat(); });
-      this.muteButton();
-      this.actionButton('sys.symbol.magnifyingglass', '搜索', () => {});
-      if (this.canManageVideoChats) {
-        this.liveButton();
-      } else {
-        this.actionButton('sys.symbol.more', '更多', () => {});
+      this.primaryActionButton();
+      if (this.chatId !== 0) {
+        this.muteButton();
+        this.actionButton('sys.symbol.magnifyingglass', '搜索', () => {});
+        if (this.canManageVideoChats) {
+          this.liveButton();
+        } else {
+          this.actionButton('sys.symbol.more', '更多', () => {});
+        }
       }
     }
     .width('100%').padding({ left: 12, right: 12, top: 14 });
+  }
+
+  @Builder
+  pageStateCard() {
+    Column({ space: 10 }) {
+      if (this.pageState === 'loading') {
+        LoadingProgress().width(28).height(28).color(COLOR_PRIMARY);
+        Text('正在获取详情…').fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
+      } else {
+        SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+          .fontSize(28).fontColor([COLOR_TEXT_SECONDARY]);
+        Text(this.errorText !== '' ? this.errorText : '无法加载详情')
+          .fontSize(14).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center);
+        Row({ space: 6 }) {
+          SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(16).fontColor([COLOR_PRIMARY]);
+          Text('重试').fontSize(14).fontColor(COLOR_PRIMARY);
+        }
+        .height(36).padding({ left: 14, right: 14 }).borderRadius(18)
+        .backgroundColor('#123390EC')
+        .onClick((): void => {
+          if (this.inviteLink !== '') {
+            this.loadInvitePreview();
+          } else {
+            this.startStore();
+          }
+        });
+      }
+    }
+    .width('100%').padding({ top: 28, bottom: 28, left: 16, right: 16 })
+    .backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
+    .margin({ left: 12, right: 12, top: 16 });
   }
 
   @Builder
@@ -387,10 +603,14 @@ struct ChatProfilePage {
     Scroll() {
       Column() {
         this.header();
-        this.actionsRow();
-        this.infoCard();
-        if (this.members.length > 0) {
-          this.membersCard();
+        if (this.pageState === 'ready') {
+          this.actionsRow();
+          this.infoCard();
+          if (this.members.length > 0) {
+            this.membersCard();
+          }
+        } else {
+          this.pageStateCard();
         }
       }
       .width('100%');

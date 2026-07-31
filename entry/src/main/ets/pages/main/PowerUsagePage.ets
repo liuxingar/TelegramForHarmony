@@ -23,6 +23,7 @@ import {
   KEY_POWER_STICKER_LOOP,
   KEY_POWER_THRESHOLD,
   POWER_THRESHOLD_DEFAULT,
+  powerAnimationDuration,
   refreshPowerSavingState,
   setBoolean,
   setNumber
@@ -71,9 +72,60 @@ struct PowerUsagePage {
   @StorageLink(KEY_POWER_EFFECT_BLUR) effectBlur: boolean = false;
   @StorageLink(KEY_POWER_EFFECT_BACKGROUND) effectBackground: boolean = false;
   @State expandedKey: string = '';
+  @State leavingPage: boolean = false;
+  private leaveTimer: number = -1;
 
   aboutToAppear(): void {
     refreshPowerSavingState();
+  }
+
+  aboutToDisappear(): void {
+    if (this.leaveTimer !== -1) {
+      clearTimeout(this.leaveTimer);
+      this.leaveTimer = -1;
+    }
+    this.leavingPage = false;
+    this.expandedKey = '';
+  }
+
+  private leavePage(): void {
+    if (this.leavingPage) {
+      return;
+    }
+    this.leavingPage = true;
+    this.leaveTimer = setTimeout((): void => {
+      this.leaveTimer = -1;
+      this.leavingPage = false;
+    }, 500);
+    router.back();
+  }
+
+  @Styles
+  actionNormalStyle() {
+    .backgroundColor(Color.Transparent)
+    .opacity(1)
+    .scale({ x: 1, y: 1 })
+  }
+
+  @Styles
+  actionPressedStyle() {
+    .backgroundColor($r('app.color.surface_alt'))
+    .opacity(0.72)
+    .scale({ x: 0.92, y: 0.92 })
+  }
+
+  @Styles
+  rowNormalStyle() {
+    .backgroundColor(Color.Transparent)
+    .opacity(1)
+    .scale({ x: 1, y: 1 })
+  }
+
+  @Styles
+  rowPressedStyle() {
+    .backgroundColor($r('app.color.surface_alt'))
+    .opacity(0.76)
+    .scale({ x: 0.985, y: 0.985 })
   }
 
   private thresholdIndex(): number {
@@ -164,14 +216,24 @@ struct PowerUsagePage {
 
   @Builder
   header() {
-    Row({ space: 16 }) {
-      SymbolGlyph($r('sys.symbol.chevron_left'))
-        .fontSize(26).fontColor([COLOR_TEXT_PRIMARY])
-        .onClick((): void => { router.back(); });
+    Row({ space: 8 }) {
+      Row() {
+        SymbolGlyph($r('sys.symbol.chevron_left'))
+          .fontSize(25).fontColor([COLOR_TEXT_PRIMARY]);
+      }
+      .width(44).height(44).borderRadius(22)
+      .justifyContent(FlexAlign.Center)
+      .stateStyles({
+        normal: this.actionNormalStyle,
+        pressed: this.actionPressedStyle
+      })
+      .enabled(!this.leavingPage)
+      .accessibilityText('返回设置')
+      .onClick((): void => { this.leavePage(); });
       Text('省电').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
         .layoutWeight(1);
     }
-    .width('100%').height(48).padding({ left: 16, right: 16 })
+    .width('100%').height(56).padding({ left: 8, right: 16 })
     .alignItems(VerticalAlign.Center);
   }
 
@@ -224,17 +286,46 @@ struct PowerUsagePage {
   @Builder
   featureRow(icon: string, title: string, key: string, total: number) {
     Row({ space: 13 }) {
-      SymbolGlyph($r(icon)).fontSize(23).fontColor([COLOR_TEXT_PRIMARY]).width(30);
-      Text(title).fontSize(16).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
+      Row({ space: 13 }) {
+        SymbolGlyph($r(icon)).fontSize(23).fontColor([COLOR_TEXT_PRIMARY]).width(30);
+        Text(title).fontSize(16).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
+      }
+      .height(48)
+      .layoutWeight(1)
+      .borderRadius(10)
+      .stateStyles({
+        normal: this.rowNormalStyle,
+        pressed: this.rowPressedStyle
+      })
+      .accessibilityText(`${title}，${this.featureValue(key) ? '已开启' : '已关闭'}`)
+      .onClick((): void => {
+        const next = !this.featureValue(key);
+        if (total > 0) {
+          this.setGroup(key, next);
+        } else {
+          setBoolean(key, next);
+        }
+      });
       if (total > 0) {
         Row({ space: 7 }) {
           Text(`${this.groupCount(key)}/${total}`)
             .fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-          SymbolGlyph($r(this.expandedKey === key
-            ? 'sys.symbol.chevron_up' : 'sys.symbol.chevron_down'))
-            .fontSize(14).fontColor([COLOR_TEXT_PRIMARY]);
+          SymbolGlyph($r('sys.symbol.chevron_down'))
+            .fontSize(14)
+            .fontColor([COLOR_TEXT_PRIMARY])
+            .rotate({ angle: this.expandedKey === key ? 180 : 0 })
+            .animation({
+              duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 160),
+              curve: Curve.EaseOut
+            });
         }
         .height(42).padding({ left: 8, right: 8 })
+        .borderRadius(10)
+        .stateStyles({
+          normal: this.rowNormalStyle,
+          pressed: this.rowPressedStyle
+        })
+        .accessibilityText(`${this.expandedKey === key ? '收起' : '展开'}${title}详细选项`)
         .onClick((): void => {
           this.expandedKey = this.expandedKey === key ? '' : key;
         });
@@ -243,6 +334,7 @@ struct PowerUsagePage {
       }
       Toggle({ type: ToggleType.Switch, isOn: this.featureValue(key) })
         .selectedColor(COLOR_PRIMARY)
+        .accessibilityText(`${title}开关`)
         .onChange((value: boolean): void => {
           if (total > 0) {
             this.setGroup(key, value);
@@ -259,16 +351,36 @@ struct PowerUsagePage {
   subFeatureRow(groupKey: string, key: string, title: string) {
     Row({ space: 10 }) {
       Circle({ width: 5, height: 5 }).fill(COLOR_PRIMARY);
-      Text(title).fontSize(14).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
+      Text(title)
+        .fontSize(14)
+        .fontColor(COLOR_TEXT_PRIMARY)
+        .height(40)
+        .layoutWeight(1)
+        .borderRadius(8)
+        .stateStyles({
+          normal: this.rowNormalStyle,
+          pressed: this.rowPressedStyle
+        })
+        .accessibilityText(`${title}，${this.subFeatureValue(key) ? '已开启' : '已关闭'}`)
+        .onClick((): void => {
+          this.setSubFeature(groupKey, key, !this.subFeatureValue(key));
+        });
       Toggle({ type: ToggleType.Switch, isOn: this.subFeatureValue(key) })
         .selectedColor(COLOR_PRIMARY)
+        .accessibilityText(`${title}开关`)
         .onChange((value: boolean): void => {
           this.setSubFeature(groupKey, key, value);
         });
     }
     .width('100%').height(46)
     .padding({ left: 62, right: 13 })
-    .backgroundColor($r('app.color.surface_alt'));
+    .backgroundColor($r('app.color.surface_alt'))
+    .transition(TransitionEffect.OPACITY
+      .combine(TransitionEffect.translate({ y: -4 }))
+      .animation({
+        duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 150),
+        curve: Curve.EaseOut
+      }));
   }
 
   @Builder
@@ -323,9 +435,23 @@ struct PowerUsagePage {
   @Builder
   smoothCard() {
     Row({ space: 12 }) {
-      Text('启用平滑过渡').fontSize(16).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
+      Text('启用平滑过渡')
+        .fontSize(16)
+        .fontColor(COLOR_TEXT_PRIMARY)
+        .height(48)
+        .layoutWeight(1)
+        .borderRadius(10)
+        .stateStyles({
+          normal: this.rowNormalStyle,
+          pressed: this.rowPressedStyle
+        })
+        .accessibilityText(`启用平滑过渡，${this.smoothTransitions ? '已开启' : '已关闭'}`)
+        .onClick((): void => {
+          setBoolean(KEY_POWER_SMOOTH_TRANSITIONS, !this.smoothTransitions);
+        });
       Toggle({ type: ToggleType.Switch, isOn: this.smoothTransitions })
         .selectedColor(COLOR_PRIMARY)
+        .accessibilityText('平滑过渡开关')
         .onChange((value: boolean): void => {
           setBoolean(KEY_POWER_SMOOTH_TRANSITIONS, value);
         });

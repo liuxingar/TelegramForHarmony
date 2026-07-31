@@ -2,7 +2,8 @@ import lottie, { AnimationItem } from '@ohos/lottie';
 import { gunzipTgs } from '../../util/gunzipTgs';
 import {
   KEY_POWER_ACTIVE, KEY_POWER_EMOJI, KEY_POWER_EMOJI_CHAT, KEY_POWER_EMOJI_REACTIONS,
-  KEY_POWER_EMOJI_STATUS, KEY_POWER_STICKERS, KEY_POWER_STICKER_AUTOPLAY, KEY_POWER_STICKER_LOOP
+  KEY_POWER_EMOJI_STATUS, KEY_POWER_STICKERS, KEY_POWER_STICKER_AUTOPLAY, KEY_POWER_STICKER_LOOP,
+  KEY_REDUCE_ANIM
 } from '../../store/AppSettings';
 
 // Cap on simultaneously running Lottie animations: a screenful of TGS emoji
@@ -24,6 +25,7 @@ export struct TgsStickerView {
   @Prop boxWidth: number = 160;
   @Prop boxHeight: number = 160;
   @Prop powerCategory: string = 'sticker';
+  onFailed: () => void = (): void => {};
   @StorageProp(KEY_POWER_ACTIVE) @Watch('onPowerChanged') powerSaving: boolean = false;
   @StorageProp(KEY_POWER_STICKERS) @Watch('onPowerChanged') stickersEnabled: boolean = true;
   @StorageProp(KEY_POWER_EMOJI) @Watch('onPowerChanged') emojiEnabled: boolean = true;
@@ -32,6 +34,7 @@ export struct TgsStickerView {
   @StorageProp(KEY_POWER_EMOJI_CHAT) @Watch('onPowerChanged') emojiChat: boolean = true;
   @StorageProp(KEY_POWER_EMOJI_REACTIONS) @Watch('onPowerChanged') emojiReactions: boolean = true;
   @StorageProp(KEY_POWER_EMOJI_STATUS) @Watch('onPowerChanged') emojiStatus: boolean = true;
+  @StorageProp(KEY_REDUCE_ANIM) @Watch('onPowerChanged') reduceAnimations: boolean = false;
   @State failed: boolean = false;
   private settings: RenderingContextSettings = new RenderingContextSettings(true);
   private ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings);
@@ -101,6 +104,8 @@ export struct TgsStickerView {
     }
     if (json === '') {
       this.failed = true;
+      this.onFailed();
+      this.stopAnim();
       return;
     }
     try {
@@ -116,12 +121,17 @@ export struct TgsStickerView {
     } catch (e) {
       console.error(`TgsStickerView lottie load failed: ${e}`);
       this.failed = true;
+      this.onFailed();
+      this.stopAnim();
     }
   }
 
   private powerSuspended(): boolean {
-    if (this.powerSaving) {
+    if (this.powerSaving || this.reduceAnimations) {
       return true;
+    }
+    if (this.powerCategory === 'emojiPicker') {
+      return !this.emojiEnabled;
     }
     if (this.powerCategory === 'emojiStatus' || this.powerCategory === 'emoji') {
       return !this.emojiEnabled || !this.emojiStatus;

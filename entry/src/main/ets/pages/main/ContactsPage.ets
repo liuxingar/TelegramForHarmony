@@ -1,16 +1,23 @@
 import { getTdClient } from '../../tdkit/Globals';
 import { ContactsStore, ContactItem } from '../../store/ContactsStore';
 import { AvatarView } from '../chatlist/AvatarView';
-import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import { COLOR_DIVIDER, COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
 import { TdRequest, TdObject, TdError } from '../../tdkit/TdTypes';
-import { router } from '@kit.ArkUI';
+import { promptAction, router, SymbolGlyphModifier } from '@kit.ArkUI';
 import { searchPublicUsers } from '../../store/PublicUserSearch';
+import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
 
 const CARD_BG: ResourceColor = $r('app.color.surface');
 const CARD_RADIUS: number = 14;
 const PAGE_BG: ResourceColor = $r('app.color.page_bg');
+const TOP_BAR_HEIGHT: number = 56;
+const TOP_ACTION_SIZE: number = 44;
+const SEARCH_BAR_HEIGHT: number = 46;
+const SEARCH_DELAY_MS: number = 350;
+const CONTACT_LONG_PRESS_MS: number = 500;
+const SKELETON_ROWS: number[] = [0, 1, 2, 3, 4];
 
-// The contacts tab: search box, invite/recent-calls shortcuts, and the contact
+// The contacts tab: search box, recent-calls shortcut, and the contact
 // list sorted by last-seen. Title shows 正在刷新... until getContacts resolves.
 @Preview
 @Component
@@ -19,26 +26,103 @@ export struct ContactsPage {
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @State contacts: ContactItem[] = [];
   @State loading: boolean = true;
+  @State loadError: string = '';
   @State query: string = '';
   @State remoteUsers: ContactItem[] = [];
   @State remoteLoading: boolean = false;
+  @State searchFocused: boolean = false;
+  @State pressedAction: string = '';
+  @State pressedContactId: number = 0;
+  @State openingContactId: number = 0;
+  @State deletingContactId: number = 0;
+  @State contextMenuShown: boolean = false;
+  @State menuContactId: number = 0;
+  @State menuContactName: string = '';
+  @State skeletonBright: boolean = false;
+  @State fabPressed: boolean = false;
+  @State addContactSheetOpen: boolean = false;
+  @State addFirstName: string = '';
+  @State addLastName: string = '';
+  @State addPhone: string = '';
+  @State addContactError: string = '';
+  @State addContactSaving: boolean = false;
   private store: ContactsStore | null = null;
   private unsub: (() => void) | null = null;
   private searchTimer: number = -1;
   private searchSequence: number = 0;
+  private actionUnlockTimer: number = -1;
+  private actionNavigationLocked: boolean = false;
+  private chatOpenSequence: number = 0;
+  private deleteSequence: number = 0;
+  private addContactSequence: number = 0;
+  private skeletonTimer: number = -1;
+  private contactPressActive: boolean = false;
+  private contactPressId: number = 0;
+  private contactPressIndex: number = -1;
+  private contactPressVersion: string = '';
+  private contactPressConsumedByMenu: boolean = false;
+  private pendingContacts: ContactItem[] | null = null;
+  private pendingLoading: boolean = false;
+  private pendingLoadError: string = '';
+
+  @Styles
+  topActionNormalStyle() {
+    .backgroundColor(Color.Transparent)
+    .opacity(1)
+    .scale({ x: 1, y: 1 })
+  }
+
+  @Styles
+  topActionPressedStyle() {
+    .backgroundColor($r('app.color.surface_alt'))
+    .opacity(0.76)
+    .scale({ x: 0.92, y: 0.92 })
+  }
+
+  @Styles
+  retryNormalStyle() {
+    .backgroundColor($r('app.color.selected_pill'))
+    .opacity(1)
+    .scale({ x: 1, y: 1 })
+  }
+
+  @Styles
+  retryPressedStyle() {
+    .backgroundColor($r('app.color.selected_pill'))
+    .opacity(0.72)
+    .scale({ x: 0.96, y: 0.96 })
+  }
 
   aboutToAppear(): void {
+    this.releaseActionLock();
     const store = new ContactsStore(getTdClient());
     this.store = store;
     this.unsub = store.subscribe(() => {
-      this.contacts = store.contacts;
-      this.loading = store.loading;
+      this.applyContacts(store.contacts, store.loading, store.errorMessage);
     });
     store.open();
   }
 
   aboutToDisappear(): void {
+    this.stopSkeletonPulse();
+    this.releaseActionLock();
+    this.pressedAction = '';
+    this.pressedContactId = 0;
+    this.openingContactId = 0;
+    this.deletingContactId = 0;
+    this.fabPressed = false;
+    this.addContactSheetOpen = false;
+    this.addContactSaving = false;
+    this.contextMenuShown = false;
+    this.menuContactId = 0;
+    this.contactPressActive = false;
+    this.pendingContacts = null;
+    this.chatOpenSequence++;
+    this.deleteSequence++;
+    this.addContactSequence++;
     this.searchSequence++;
+    this.remoteLoading = false;
+    this.searchFocused = false;
     if (this.searchTimer !== -1) {
       clearTimeout(this.searchTimer);
       this.searchTimer = -1;
@@ -49,6 +133,10 @@ export struct ContactsPage {
 
   private onQueryChanged(value: string): void {
     this.query = value;
+    this.scheduleRemoteSearch(value, SEARCH_DELAY_MS);
+  }
+
+  private scheduleRemoteSearch(value: string, delayMs: number): void {
     const sequence = ++this.searchSequence;
     if (this.searchTimer !== -1) {
       clearTimeout(this.searchTimer);
@@ -61,7 +149,7 @@ export struct ContactsPage {
       return;
     }
     this.remoteLoading = true;
-    this.searchTimer = setTimeout((): void => {
+    const run = (): void => {
       this.searchTimer = -1;
       searchPublicUsers(getTdClient(), value).then((users: ContactItem[]): void => {
         if (sequence !== this.searchSequence) {
@@ -77,23 +165,323 @@ export struct ContactsPage {
         this.remoteUsers = [];
         this.remoteLoading = false;
       });
-    }, 350);
+    };
+    if (delayMs <= 0) {
+      run();
+    } else {
+      this.searchTimer = setTimeout(run, delayMs);
+    }
+  }
+
+  private submitSearch(): void {
+    if (this.query.trim().replace(/^@/, '').length < 2) {
+      return;
+    }
+    this.scheduleRemoteSearch(this.query, 0);
+  }
+
+  private clearSearch(): void {
+    this.onQueryChanged('');
+  }
+
+  private startSkeletonPulse(): void {
+    if (this.skeletonTimer !== -1 ||
+      powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 1) === 0) {
+      return;
+    }
+    this.skeletonTimer = setInterval((): void => {
+      this.skeletonBright = !this.skeletonBright;
+    }, 680);
+  }
+
+  private stopSkeletonPulse(): void {
+    if (this.skeletonTimer !== -1) {
+      clearInterval(this.skeletonTimer);
+      this.skeletonTimer = -1;
+    }
+    this.skeletonBright = false;
+  }
+
+  private applyContacts(next: ContactItem[], nextLoading: boolean, nextError: string): void {
+    if (this.contextMenuShown) {
+      this.pendingContacts = next;
+      this.pendingLoading = nextLoading;
+      this.pendingLoadError = nextError;
+      return;
+    }
+    if (nextLoading && next.length === 0) {
+      this.startSkeletonPulse();
+    } else {
+      this.stopSkeletonPulse();
+    }
+    const structureChanged = this.contacts.length !== next.length ||
+      this.contacts.some((item: ContactItem, index: number): boolean => item.id !== next[index]?.id);
+    if (structureChanged) {
+      animateTo({
+        duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+        curve: Curve.EaseOut
+      }, (): void => {
+        this.contacts = next;
+        this.loading = nextLoading;
+        this.loadError = nextError;
+      });
+      return;
+    }
+    this.contacts = next;
+    this.loading = nextLoading;
+    this.loadError = nextError;
+  }
+
+  private flushPendingContacts(): void {
+    const pending = this.pendingContacts;
+    if (pending === null) {
+      return;
+    }
+    const loading = this.pendingLoading;
+    const error = this.pendingLoadError;
+    this.pendingContacts = null;
+    this.applyContacts(pending, loading, error);
+  }
+
+  private retryContacts(): void {
+    if (this.store !== null && !this.loading) {
+      this.store.reload();
+    }
+  }
+
+  private openAddContactSheet(): void {
+    if (this.contextMenuShown || this.addContactSaving) {
+      return;
+    }
+    this.fabPressed = false;
+    this.addFirstName = '';
+    this.addLastName = '';
+    this.addPhone = '';
+    this.addContactError = '';
+    this.addContactSheetOpen = true;
+  }
+
+  private phoneDigits(value: string): string {
+    let digits = '';
+    for (let index = 0; index < value.length; index++) {
+      const code = value.charCodeAt(index);
+      if (code >= 48 && code <= 57) {
+        digits += value.charAt(index);
+      }
+    }
+    return digits;
+  }
+
+  private addContactFailureMessage(error: TdError): string {
+    const message = error.message.toUpperCase();
+    if (message.includes('PHONE_NUMBER_INVALID')) {
+      return '手机号格式不正确，请包含国家或地区代码';
+    }
+    if (message.includes('USER_NOT_FOUND') || message.includes('PHONE_NUMBER_NOT_OCCUPIED')) {
+      return '未找到使用此号码的 Telegram 用户';
+    }
+    if (message.includes('NETWORK') || message.includes('TIMEOUT')) {
+      return '网络连接失败，请稍后重试';
+    }
+    return '添加联系人失败，请稍后重试';
+  }
+
+  private submitNewContact(): void {
+    if (this.addContactSaving) {
+      return;
+    }
+    const firstName = this.addFirstName.trim();
+    const lastName = this.addLastName.trim();
+    const phone = this.phoneDigits(this.addPhone);
+    if (firstName === '') {
+      this.addContactError = '请输入名字';
+      return;
+    }
+    if (phone.length < 6 || phone.length > 15) {
+      this.addContactError = '请输入包含国家或地区代码的有效手机号';
+      return;
+    }
+    this.addContactError = '';
+    this.addContactSaving = true;
+    const sequence = ++this.addContactSequence;
+    const contact: TdObject = { '@type': 'contact' };
+    contact['phone_number'] = phone;
+    contact['first_name'] = firstName;
+    contact['last_name'] = lastName;
+    contact['vcard'] = '';
+    contact['user_id'] = 0;
+    const request: TdRequest = { '@type': 'addContact' };
+    request['contact'] = contact;
+    request['share_phone_number'] = false;
+    getTdClient().send(request, 10000).then((): void => {
+      if (sequence !== this.addContactSequence) {
+        return;
+      }
+      this.addContactSaving = false;
+      this.addContactSheetOpen = false;
+      promptAction.showToast({ message: `已添加联系人「${firstName}${lastName !== '' ? ' ' + lastName : ''}」`, duration: 1800 });
+      if (this.store !== null) {
+        this.store.reload();
+      }
+    }).catch((error: TdError): void => {
+      if (sequence !== this.addContactSequence) {
+        return;
+      }
+      this.addContactSaving = false;
+      this.addContactError = this.addContactFailureMessage(error);
+      console.error(`ContactsPage.addContact failed: ${error.message}`);
+    });
+  }
+
+  private releaseActionLock(): void {
+    if (this.actionUnlockTimer !== -1) {
+      clearTimeout(this.actionUnlockTimer);
+      this.actionUnlockTimer = -1;
+    }
+    this.actionNavigationLocked = false;
+  }
+
+  private openRecentCalls(): void {
+    if (this.actionNavigationLocked) {
+      return;
+    }
+    this.actionNavigationLocked = true;
+    // Guard the current page against a rapid double tap. The lock is also
+    // released when this page disappears, so returning never leaves it stuck.
+    this.actionUnlockTimer = setTimeout((): void => {
+      this.actionUnlockTimer = -1;
+      this.actionNavigationLocked = false;
+    }, 500);
+    router.pushUrl({ url: 'pages/main/CallsPage' }).catch((error: Error): void => {
+      console.error(`ContactsPage.openRecentCalls failed: ${error.message}`);
+      this.releaseActionLock();
+    });
   }
 
   // Ensure the private chat exists (TDLib may not have it loaded yet), then
   // navigate into it — same pattern as ProfilePage.sendMessage.
   private openChatWith(userId: number): void {
+    if (this.openingContactId !== 0 || this.deletingContactId !== 0) {
+      return;
+    }
+    const sequence = ++this.chatOpenSequence;
+    this.openingContactId = userId;
     const req: TdRequest = { '@type': 'createPrivateChat' };
     req['user_id'] = userId;
     req['force'] = false;
-    getTdClient().send(req).then((chat: TdObject) => {
+    getTdClient().send(req, 8000).then((chat: TdObject): void => {
+      if (sequence !== this.chatOpenSequence) {
+        return;
+      }
+      this.openingContactId = 0;
       const id = chat['id'] as number | undefined;
       if (id !== undefined) {
         const params: Record<string, Object> = { 'chatId': id };
-        router.pushUrl({ url: 'pages/chat/ChatPage', params: params });
+        router.pushUrl({ url: 'pages/chat/ChatPage', params: params }).catch((error: Error): void => {
+          console.error(`ContactsPage.openChat failed: ${error.message}`);
+          promptAction.showToast({ message: '无法打开聊天，请稍后重试', duration: 1800 });
+        });
       }
-    }).catch((e: TdError) => {
+    }).catch((e: TdError): void => {
+      if (sequence !== this.chatOpenSequence) {
+        return;
+      }
+      this.openingContactId = 0;
       console.error(`ContactsPage.createPrivateChat failed: ${e.message}`);
+      promptAction.showToast({ message: '无法打开聊天，请稍后重试', duration: 1800 });
+    });
+  }
+
+  private contactVersion(contact: ContactItem): string {
+    return `${contact.id}_${contact.avatarPath}_${contact.name}_${contact.statusText}_${contact.online ? 1 : 0}`;
+  }
+
+  private visibleContactIndex(userId: number): number {
+    return this.filtered().findIndex((contact: ContactItem): boolean => contact.id === userId);
+  }
+
+  private beginContactPress(contact: ContactItem): void {
+    const local = this.contacts.find((item: ContactItem): boolean => item.id === contact.id);
+    this.contactPressConsumedByMenu = false;
+    this.contactPressActive = local !== undefined && this.deletingContactId === 0;
+    this.contactPressId = contact.id;
+    this.contactPressIndex = this.visibleContactIndex(contact.id);
+    this.contactPressVersion = local !== undefined ? this.contactVersion(local) : '';
+  }
+
+  private endContactPress(): void {
+    this.contactPressActive = false;
+  }
+
+  private openContactMenuIfCurrent(contact: ContactItem): void {
+    const current = this.contacts.find((item: ContactItem): boolean => item.id === contact.id);
+    const unchanged = this.contactPressActive
+      && this.contactPressId === contact.id
+      && current !== undefined
+      && this.contactVersion(current) === this.contactPressVersion
+      && this.visibleContactIndex(contact.id) === this.contactPressIndex;
+    this.contactPressActive = false;
+    this.pressedContactId = 0;
+    if (!unchanged) {
+      // A status/avatar/search refresh moved or rebuilt the row while the
+      // recognizer was waiting. Ignore this hold instead of lifting stale UI.
+      return;
+    }
+    this.contactPressConsumedByMenu = true;
+    this.menuContactId = contact.id;
+    this.menuContactName = current !== undefined ? current.name : contact.name;
+    this.contextMenuShown = true;
+  }
+
+  private onContactMenuDisappear(): void {
+    this.contextMenuShown = false;
+    this.menuContactId = 0;
+    this.menuContactName = '';
+    this.pressedContactId = 0;
+    this.contactPressActive = false;
+    this.flushPendingContacts();
+  }
+
+  private confirmDeleteContact(): void {
+    const userId = this.menuContactId;
+    const name = this.menuContactName;
+    if (userId <= 0 || name === '') {
+      return;
+    }
+    promptAction.showDialog({
+      title: '删除联系人',
+      message: `确定从联系人中删除「${name}」吗？聊天记录不会被删除。`,
+      buttons: [
+        { text: '取消', color: COLOR_TEXT_SECONDARY as string },
+        { text: '删除', color: '#E64646' }
+      ]
+    }).then((result: promptAction.ShowDialogSuccessResponse): void => {
+      if (result.index === 1) {
+        this.deleteContact(userId, name);
+      }
+    }).catch((): void => {});
+  }
+
+  private deleteContact(userId: number, name: string): void {
+    if (this.store === null || this.deletingContactId !== 0) {
+      return;
+    }
+    this.deletingContactId = userId;
+    const sequence = ++this.deleteSequence;
+    const store = this.store;
+    store.removeContact(userId).then((): void => {
+      if (sequence !== this.deleteSequence) {
+        return;
+      }
+      this.deletingContactId = 0;
+      promptAction.showToast({ message: `已删除联系人「${name}」`, duration: 1600 });
+    }).catch((error: TdError): void => {
+      if (sequence !== this.deleteSequence) {
+        return;
+      }
+      this.deletingContactId = 0;
+      console.error(`ContactsPage.removeContact failed: ${error.message}`);
+      promptAction.showToast({ message: '删除联系人失败，请重试', duration: 1800 });
     });
   }
 
@@ -116,97 +504,555 @@ export struct ContactsPage {
   }
 
   @Builder
-  topBar() {
-    Row() {
-      Text(this.loading ? '正在刷新...' : '联系人')
-        .fontSize(28).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
-        .layoutWeight(1);
-      SymbolGlyph($r('sys.symbol.line_3_horizontal'))
-        .fontSize(22).fontColor([COLOR_TEXT_PRIMARY]);
+  topMenu() {
+    Menu() {
+      MenuItem({ content: '新建群组' })
+        .onClick((): void => {
+          router.pushUrl({ url: 'pages/main/NewGroupPage' });
+        });
+      MenuItem({ content: '最近通话' })
+        .onClick((): void => {
+          router.pushUrl({ url: 'pages/main/CallsPage' });
+        });
     }
-    .width('100%').height(48).padding({ left: 16, right: 16 })
-    .alignItems(VerticalAlign.Center);
+  }
+
+  @Builder
+  topBar() {
+    Row({ space: 4 }) {
+      Column() {
+        Text('联系人')
+          .fontSize(28).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
+          .maxLines(1)
+          .translate({ y: this.loading ? 0 : 7 })
+          .animation({
+            duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+            curve: Curve.EaseOut
+          });
+        Text('正在刷新…')
+          .height(14).fontSize(11).lineHeight(14)
+          .fontColor(COLOR_TEXT_SECONDARY)
+          .maxLines(1)
+          .opacity(this.loading ? 1 : 0)
+          .translate({ y: this.loading ? 0 : -3 })
+          .animation({
+            duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+            curve: Curve.EaseOut
+          });
+      }
+      .height(TOP_BAR_HEIGHT)
+      .justifyContent(FlexAlign.Center)
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1);
+
+      Row() {
+        SymbolGlyph($r('sys.symbol.more'))
+          .fontSize(23).fontColor([COLOR_TEXT_SECONDARY]);
+      }
+      .width(TOP_ACTION_SIZE).height(TOP_ACTION_SIZE)
+      .borderRadius(TOP_ACTION_SIZE / 2)
+      .justifyContent(FlexAlign.Center)
+      .stateStyles({
+        normal: this.topActionNormalStyle,
+        pressed: this.topActionPressedStyle
+      })
+      .accessibilityText('联系人更多操作')
+      .bindMenu(this.topMenu());
+    }
+    .width('100%').height(TOP_BAR_HEIGHT)
+    .padding({ left: 16, right: 12 })
+    .alignItems(VerticalAlign.Center)
+    .backgroundColor(PAGE_BG);
   }
 
   @Builder
   searchBox() {
-    Column() {
-      Row({ space: 8 }) {
-        SymbolGlyph($r('sys.symbol.magnifyingglass')).fontSize(17).fontColor([COLOR_TEXT_SECONDARY]);
-        TextInput({ text: this.query, placeholder: '搜索联系人或 @用户名' })
-          .layoutWeight(1).height(36).fontSize(16)
-          .backgroundColor(Color.Transparent).padding(0).borderRadius(0)
-          .placeholderColor(COLOR_TEXT_SECONDARY)
-          .onChange((v: string): void => { this.onQueryChanged(v); });
+    Row({ space: 8 }) {
+      SymbolGlyph($r('sys.symbol.magnifyingglass'))
+        .fontSize(18)
+        .fontColor([this.searchFocused ? COLOR_PRIMARY : COLOR_TEXT_SECONDARY])
+        .animation({
+          duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 160),
+          curve: Curve.EaseOut
+        });
+      TextInput({ text: this.query, placeholder: '搜索联系人或 @用户名' })
+        .layoutWeight(1).height(38).fontSize(16)
+        .backgroundColor(Color.Transparent).padding(0).borderRadius(0)
+        .placeholderColor(COLOR_TEXT_SECONDARY)
+        .caretColor(COLOR_PRIMARY)
+        .enterKeyType(EnterKeyType.Search)
+        .onFocus((): void => { this.searchFocused = true; })
+        .onBlur((): void => { this.searchFocused = false; })
+        .onSubmit((): void => { this.submitSearch(); })
+        .onChange((v: string): void => { this.onQueryChanged(v); });
+      if (this.remoteLoading) {
+        LoadingProgress()
+          .width(18).height(18)
+          .color(COLOR_PRIMARY)
+          .transition(TransitionEffect.OPACITY
+            .combine(TransitionEffect.scale({ x: 0.72, y: 0.72 }))
+            .animation({
+              duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 160),
+              curve: Curve.EaseOut
+            }));
+      } else if (this.query !== '') {
+        Row() {
+          SymbolGlyph($r('sys.symbol.xmark_circle'))
+            .fontSize(19).fontColor([COLOR_TEXT_SECONDARY]);
+        }
+        .width(32).height(32)
+        .borderRadius(16)
+        .justifyContent(FlexAlign.Center)
+        .stateStyles({
+          normal: this.topActionNormalStyle,
+          pressed: this.topActionPressedStyle
+        })
+        .accessibilityText('清空搜索')
+        .onClick((): void => { this.clearSearch(); })
+        .transition(TransitionEffect.OPACITY
+          .combine(TransitionEffect.scale({ x: 0.72, y: 0.72 }))
+          .animation({
+            duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 160),
+            curve: Curve.EaseOut
+          }));
       }
-      .width('100%').padding({ left: 12, right: 12, top: 4, bottom: 4 })
-      .height(44)
-      .backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
-      .alignItems(VerticalAlign.Center);
     }
-    .margin({ left: 12, right: 12, top: 4 });
+    .width('calc(100% - 24vp)')
+    .height(SEARCH_BAR_HEIGHT)
+    .padding({ left: 13, right: 9 })
+    .backgroundColor(CARD_BG)
+    .borderRadius(SEARCH_BAR_HEIGHT / 2)
+    .border({
+      width: this.searchFocused ? 1.5 : 0.5,
+      color: this.searchFocused ? COLOR_PRIMARY : COLOR_DIVIDER
+    })
+    .alignItems(VerticalAlign.Center)
+    .margin({ left: 12, right: 12, top: 4 })
+    .animation({
+      duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 160),
+      curve: Curve.EaseOut
+    });
   }
 
   @Builder
-  actionRow(icon: string, bg: string, label: string, onTap: () => void) {
+  actionRow(icon: string, bg: string, label: string, detail: string, onTap: () => void) {
     Row({ space: 14 }) {
       Row() {
-        SymbolGlyph($r(icon)).fontSize(20).fontColor([Color.White]);
+        SymbolGlyph($r(icon))
+          .fontSize(20)
+          .fontColor([Color.White])
+          .scale({
+            x: this.pressedAction === label ? 0.9 : 1,
+            y: this.pressedAction === label ? 0.9 : 1
+          })
+          .animation({
+            duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 120),
+            curve: Curve.EaseOut
+          });
       }
       .width(40).height(40).borderRadius(20).backgroundColor(bg)
       .justifyContent(FlexAlign.Center);
-      Text(label).fontSize(16).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
+      Column({ space: 2 }) {
+        Text(label)
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(COLOR_TEXT_PRIMARY)
+          .maxLines(1);
+        Text(detail)
+          .fontSize(12)
+          .fontColor(COLOR_TEXT_SECONDARY)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis });
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1);
+      SymbolGlyph($r('sys.symbol.chevron_right'))
+        .fontSize(16)
+        .fontColor([COLOR_TEXT_SECONDARY])
+        .translate({ x: this.pressedAction === label ? 2 : 0 })
+        .animation({
+          duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 120),
+          curve: Curve.EaseOut
+        });
     }
-    .width('100%').padding({ left: 14, right: 14, top: 8, bottom: 8 })
+    .width('100%')
+    .height(62)
+    .padding({ left: 12, right: 14 })
     .alignItems(VerticalAlign.Center)
-    .onClick(() => { onTap(); });
+    .borderRadius(CARD_RADIUS - 4)
+    .backgroundColor(this.pressedAction === label ? $r('app.color.surface_alt') : Color.Transparent)
+    .scale({
+      x: this.pressedAction === label ? 0.986 : 1,
+      y: this.pressedAction === label ? 0.97 : 1
+    })
+    .animation({
+      duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 120),
+      curve: Curve.EaseOut
+    })
+    .accessibilityText(`${label}，${detail}`)
+    .onTouch((event: TouchEvent): void => {
+      if (event.type === TouchType.Down) {
+        this.pressedAction = label;
+      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+        this.pressedAction = '';
+      }
+    })
+    .onClick((): void => {
+      this.pressedAction = '';
+      onTap();
+    });
   }
 
   @Builder
   actionCard() {
     Column() {
       Column() {
-        this.actionRow('sys.symbol.phone_fill', '#34C759', '最近通话', () => {
-          router.pushUrl({ url: 'pages/main/CallsPage' });
-        });
+        this.actionRow(
+          'sys.symbol.phone_fill',
+          '#34C759',
+          '最近通话',
+          '查看呼入、呼出与未接记录',
+          (): void => { this.openRecentCalls(); }
+        );
       }
-      .width('100%').backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
-      .padding({ top: 4, bottom: 4 });
+      .width('100%')
+      .backgroundColor(CARD_BG)
+      .borderRadius(CARD_RADIUS)
+      .padding(4)
+      .clip(true);
     }
     .margin({ left: 12, right: 12, top: 12 });
   }
 
   @Builder
+  contactContextMenu() {
+    Menu() {
+      MenuItem({
+        symbolStartIcon: new SymbolGlyphModifier($r('sys.symbol.trash')).fontColor([Color.Red]),
+        content: '删除联系人'
+      })
+        .onClick((): void => { this.confirmDeleteContact(); });
+    }
+  }
+
+  @Builder
   contactRow(c: ContactItem) {
     Row({ space: 12 }) {
-      AvatarView({ avatarPath: c.avatarPath, initials: c.initials, colorSeed: c.id, avatarSize: 46 });
+      Stack({ alignContent: Alignment.BottomEnd }) {
+        AvatarView({ avatarPath: c.avatarPath, initials: c.initials, colorSeed: c.id, avatarSize: 46 });
+        if (c.online) {
+          Circle({ width: 12, height: 12 })
+            .fill('#34C759')
+            .border({ width: 2, color: CARD_BG })
+            .translate({ x: 1, y: 1 })
+            .transition(TransitionEffect.OPACITY
+              .combine(TransitionEffect.scale({ x: 0.5, y: 0.5 }))
+              .animation({
+                duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 160),
+                curve: Curve.EaseOut
+              }));
+        }
+      }
+      .width(46)
+      .height(46);
       Column({ space: 3 }) {
-        Text(c.name).fontSize(16).fontColor(COLOR_TEXT_PRIMARY)
+        Text(c.name)
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(COLOR_TEXT_PRIMARY)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
         Text(c.statusText)
           .fontSize(13)
           .fontColor(c.online ? COLOR_PRIMARY : COLOR_TEXT_SECONDARY)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
       }.alignItems(HorizontalAlign.Start).layoutWeight(1);
+      if (this.openingContactId === c.id || this.deletingContactId === c.id) {
+        LoadingProgress()
+          .width(18)
+          .height(18)
+          .color(COLOR_PRIMARY)
+          .transition(TransitionEffect.OPACITY
+            .combine(TransitionEffect.scale({ x: 0.65, y: 0.65 }))
+            .animation({
+              duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 140),
+              curve: Curve.EaseOut
+            }));
+      }
     }
-    .width('100%').padding({ left: 14, right: 14, top: 7, bottom: 7 })
+    .width('100%')
+    .constraintSize({ minHeight: 60 })
+    .padding({ left: 10, right: 10, top: 7, bottom: 7 })
     .alignItems(VerticalAlign.Center)
-    .onClick(() => { this.openChatWith(c.id); });
+    .borderRadius(CARD_RADIUS - 4)
+    .backgroundColor(this.pressedContactId === c.id ? $r('app.color.surface_alt') : CARD_BG)
+    .scale({
+      x: this.pressedContactId === c.id ? 0.99 : 1,
+      y: this.pressedContactId === c.id ? 0.985 : 1
+    })
+    .animation({
+      duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 110),
+      curve: Curve.EaseOut
+    })
+    .accessibilityText(`${c.name}，${c.statusText}`)
+    .onTouch((event: TouchEvent): void => {
+      if (event.type === TouchType.Down) {
+        this.pressedContactId = c.id;
+        this.beginContactPress(c);
+      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+        if (this.pressedContactId === c.id) {
+          this.pressedContactId = 0;
+        }
+        this.endContactPress();
+      }
+    })
+    .onClick((): void => {
+      this.pressedContactId = 0;
+      if (this.contactPressConsumedByMenu || this.contextMenuShown) {
+        this.contactPressConsumedByMenu = false;
+        return;
+      }
+      this.openChatWith(c.id);
+    })
+    .parallelGesture(
+      LongPressGesture({ fingers: 1, repeat: false, duration: CONTACT_LONG_PRESS_MS })
+        .onAction((): void => { this.openContactMenuIfCurrent(c); })
+        .onActionCancel((): void => { this.endContactPress(); })
+    )
+    .bindContextMenu(
+      this.contextMenuShown && this.menuContactId === c.id,
+      this.contactContextMenu,
+      {
+        preview: MenuPreviewMode.IMAGE,
+        previewBorderRadius: CARD_RADIUS - 2,
+        previewAnimationOptions: {
+          scale: [0.98, 1.035],
+          transition: TransitionEffect.OPACITY
+            .combine(TransitionEffect.scale({ x: 0.98, y: 0.98 }))
+            .animation({
+              duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+              curve: Curve.FastOutSlowIn
+            })
+        },
+        borderRadius: 16,
+        backgroundColor: Color.Transparent,
+        backgroundBlurStyle: BlurStyle.COMPONENT_ULTRA_THICK,
+        transition: TransitionEffect.OPACITY
+          .combine(TransitionEffect.scale({ x: 0.96, y: 0.96 }))
+          .animation({
+            duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+            curve: Curve.FastOutSlowIn
+          }),
+        mask: {
+          color: '#52000000',
+          backgroundBlurStyle: BlurStyle.BACKGROUND_THIN
+        },
+        modalMode: ModalMode.TARGET_WINDOW,
+        hapticFeedbackMode: HapticFeedbackMode.AUTO,
+        onDisappear: (): void => { this.onContactMenuDisappear(); }
+      }
+    );
+  }
+
+  @Builder
+  skeletonRow(index: number) {
+    Row({ space: 12 }) {
+      Circle({ width: 46, height: 46 })
+        .fill($r('app.color.surface_alt'));
+      Column({ space: 8 }) {
+        Rect({ width: index % 2 === 0 ? 142 : 108, height: 12, radius: 6 })
+          .fill($r('app.color.surface_alt'));
+        Rect({ width: index % 3 === 0 ? 196 : 158, height: 9, radius: 4.5 })
+          .fill($r('app.color.surface_alt'));
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1);
+    }
+    .width('100%')
+    .height(60)
+    .padding({ left: 10, right: 10 });
+  }
+
+  @Builder
+  loadingCard() {
+    Column() {
+      Row({ space: 6 }) {
+        Circle({ width: 13, height: 13 }).fill($r('app.color.surface_alt'));
+        Rect({ width: 118, height: 10, radius: 5 }).fill($r('app.color.surface_alt'));
+      }
+      .width('100%')
+      .height(36)
+      .padding({ left: 10, right: 10 });
+      Divider().color(COLOR_DIVIDER).strokeWidth(0.7).margin({ left: 10, right: 10 });
+      ForEach(SKELETON_ROWS, (index: number): void => {
+        if (index > 0) {
+          Divider().color(COLOR_DIVIDER).strokeWidth(0.7).margin({ left: 68, right: 10 });
+        }
+        this.skeletonRow(index);
+      }, (index: number): string => `${index}`);
+    }
+    .width('calc(100% - 24vp)')
+    .margin({ left: 12, right: 12, top: 12 })
+    .padding({ left: 4, right: 4, bottom: 4 })
+    .backgroundColor(CARD_BG)
+    .borderRadius(CARD_RADIUS)
+    .opacity(this.skeletonBright ? 0.56 : 0.92)
+    .animation({
+      duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 640),
+      curve: Curve.EaseInOut
+    })
+    .transition(TransitionEffect.OPACITY.animation({
+      duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 160),
+      curve: Curve.EaseOut
+    }));
+  }
+
+  @Builder
+  emptyContactsCard() {
+    Column({ space: 8 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        Circle({ width: 58, height: 58 }).fill($r('app.color.surface_alt'));
+        SymbolGlyph($r('sys.symbol.person_2'))
+          .fontSize(28)
+          .fontColor([COLOR_TEXT_SECONDARY]);
+      }
+      Text('暂无联系人')
+        .fontSize(17)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(COLOR_TEXT_PRIMARY);
+      Text('可以搜索姓名或 @用户名开始聊天')
+        .fontSize(13)
+        .fontColor(COLOR_TEXT_SECONDARY)
+        .textAlign(TextAlign.Center);
+    }
+    .width('calc(100% - 24vp)')
+    .height(190)
+    .margin({ left: 12, right: 12, top: 12 })
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor(CARD_BG)
+    .borderRadius(CARD_RADIUS)
+    .transition(TransitionEffect.OPACITY
+      .combine(TransitionEffect.scale({ x: 0.97, y: 0.97 }))
+      .animation({
+        duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+        curve: Curve.EaseOut
+      }));
+  }
+
+  @Builder
+  errorContactsCard() {
+    Column({ space: 8 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        Circle({ width: 58, height: 58 }).fill('#18E64646');
+        SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+          .fontSize(28)
+          .fontColor(['#E64646']);
+      }
+      Text(this.loadError !== '' ? this.loadError : '联系人加载失败')
+        .fontSize(17)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(COLOR_TEXT_PRIMARY);
+      Text('网络或服务暂时不可用')
+        .fontSize(13)
+        .fontColor(COLOR_TEXT_SECONDARY);
+      Row({ space: 6 }) {
+        SymbolGlyph($r('sys.symbol.arrow_clockwise'))
+          .fontSize(15)
+          .fontColor([COLOR_PRIMARY]);
+        Text('重新加载')
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(COLOR_PRIMARY);
+      }
+      .height(38)
+      .padding({ left: 16, right: 16 })
+      .margin({ top: 4 })
+      .borderRadius(19)
+      .stateStyles({
+        normal: this.retryNormalStyle,
+        pressed: this.retryPressedStyle
+      })
+      .accessibilityText('重新加载联系人')
+      .onClick((): void => { this.retryContacts(); });
+    }
+    .width('calc(100% - 24vp)')
+    .height(220)
+    .margin({ left: 12, right: 12, top: 12 })
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor(CARD_BG)
+    .borderRadius(CARD_RADIUS)
+    .transition(TransitionEffect.OPACITY
+      .combine(TransitionEffect.scale({ x: 0.97, y: 0.97 }))
+      .animation({
+        duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+        curve: Curve.EaseOut
+      }));
+  }
+
+  @Builder
+  searchEmptyState() {
+    Column({ space: 6 }) {
+      SymbolGlyph($r('sys.symbol.magnifyingglass'))
+        .fontSize(26)
+        .fontColor([COLOR_TEXT_SECONDARY]);
+      Text('未找到相关用户')
+        .fontSize(15)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(COLOR_TEXT_PRIMARY);
+      Text('请检查姓名或 @用户名是否正确')
+        .fontSize(12)
+        .fontColor(COLOR_TEXT_SECONDARY);
+    }
+    .width('100%')
+    .height(116)
+    .justifyContent(FlexAlign.Center)
+    .transition(TransitionEffect.OPACITY
+      .combine(TransitionEffect.translate({ y: 6 }))
+      .animation({
+        duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 160),
+        curve: Curve.EaseOut
+      }));
   }
 
   @Builder
   listCard() {
     Column() {
       Column() {
-        Text(this.query.trim() === '' ? '按最后上线时间排序' : '联系人与全局用户')
-          .fontSize(13).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
-          .width('100%').padding({ left: 14, right: 14, top: 10, bottom: 6 });
+        Row({ space: 6 }) {
+          SymbolGlyph(this.query.trim() === ''
+            ? $r('sys.symbol.clock')
+            : $r('sys.symbol.magnifyingglass'))
+            .fontSize(13)
+            .fontColor([COLOR_PRIMARY]);
+          Text(this.query.trim() === '' ? '按最近上线排序' : '联系人与全局用户')
+            .fontSize(13)
+            .fontColor(COLOR_PRIMARY)
+            .fontWeight(FontWeight.Medium)
+            .layoutWeight(1);
+          Text(this.remoteLoading
+            ? '搜索中'
+            : `${this.filtered().length} 位`)
+            .fontSize(12)
+            .fontColor(COLOR_TEXT_SECONDARY);
+        }
+        .width('100%')
+        .height(36)
+        .padding({ left: 10, right: 10 })
+        .alignItems(VerticalAlign.Center);
+        Divider()
+          .color(COLOR_DIVIDER)
+          .strokeWidth(0.7)
+          .margin({ left: 10, right: 10 });
         ForEach(this.filtered(), (c: ContactItem, index: number) => {
           if (index > 0) {
-            Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 72 });
+            Divider().color(COLOR_DIVIDER).strokeWidth(0.7).margin({ left: 68, right: 10 });
           }
           this.contactRow(c);
-        }, (c: ContactItem) => `${c.id}_${c.avatarPath}`);
+        // ArkUI reuses an unchanged ForEach key without rebuilding the row.
+        // Include visible user data so an asynchronously downloaded avatar or
+        // live status update reaches AvatarView/Text, while keeping geometry
+        // stable to avoid a visible row insertion animation.
+        }, (c: ContactItem) =>
+          `${c.id}_${c.avatarPath}_${c.name}_${c.statusText}_${c.online ? 1 : 0}`);
         if (this.remoteLoading) {
           Row({ space: 8 }) {
             LoadingProgress().width(18).height(18).color(COLOR_PRIMARY);
@@ -216,28 +1062,236 @@ export struct ContactsPage {
           .height(48)
           .justifyContent(FlexAlign.Center);
         } else if (this.query.trim() !== '' && this.filtered().length === 0) {
-          Text('没有找到用户')
-            .fontSize(14)
-            .fontColor(COLOR_TEXT_SECONDARY)
-            .width('100%')
-            .height(58)
-            .textAlign(TextAlign.Center);
+          this.searchEmptyState();
         }
       }
-      .width('100%').backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
-      .padding({ bottom: 4 });
+      .width('100%')
+      .backgroundColor(CARD_BG)
+      .borderRadius(CARD_RADIUS)
+      .padding({ left: 4, right: 4, bottom: 4 })
+      .clip(true);
     }
     .margin({ left: 12, right: 12, top: 12 });
   }
 
   @Builder
+  addContactSheet() {
+    Column({ space: 0 }) {
+      Row() {
+        Column({ space: 2 }) {
+          Text('新建联系人')
+            .fontSize(21)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(COLOR_TEXT_PRIMARY);
+          Text('使用对方的国际手机号添加')
+            .fontSize(12)
+            .fontColor(COLOR_TEXT_SECONDARY);
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1);
+        Row() {
+          SymbolGlyph($r('sys.symbol.xmark'))
+            .fontSize(18)
+            .fontColor([COLOR_TEXT_SECONDARY]);
+        }
+        .width(38)
+        .height(38)
+        .borderRadius(19)
+        .justifyContent(FlexAlign.Center)
+        .stateStyles({
+          normal: this.topActionNormalStyle,
+          pressed: this.topActionPressedStyle
+        })
+        .enabled(!this.addContactSaving)
+        .accessibilityText('关闭新建联系人')
+        .onClick((): void => { this.addContactSheetOpen = false; });
+      }
+      .width('100%')
+      .height(54)
+      .alignItems(VerticalAlign.Center);
+
+      Column({ space: 6 }) {
+        Text('姓名')
+          .width('100%')
+          .fontSize(12)
+          .fontColor(COLOR_TEXT_SECONDARY)
+          .padding({ left: 4 });
+        TextInput({ text: this.addFirstName, placeholder: '名字（必填）' })
+          .width('100%')
+          .height(48)
+          .fontSize(16)
+          .fontColor(COLOR_TEXT_PRIMARY)
+          .placeholderColor(COLOR_TEXT_SECONDARY)
+          .caretColor(COLOR_PRIMARY)
+          .backgroundColor($r('app.color.surface_alt'))
+          .borderRadius(12)
+          .padding({ left: 14, right: 14 })
+          .maxLength(64)
+          .enabled(!this.addContactSaving)
+          .enterKeyType(EnterKeyType.Next)
+          .onChange((value: string): void => {
+            this.addFirstName = value;
+            this.addContactError = '';
+          });
+        TextInput({ text: this.addLastName, placeholder: '姓（选填）' })
+          .width('100%')
+          .height(48)
+          .fontSize(16)
+          .fontColor(COLOR_TEXT_PRIMARY)
+          .placeholderColor(COLOR_TEXT_SECONDARY)
+          .caretColor(COLOR_PRIMARY)
+          .backgroundColor($r('app.color.surface_alt'))
+          .borderRadius(12)
+          .padding({ left: 14, right: 14 })
+          .maxLength(64)
+          .enabled(!this.addContactSaving)
+          .enterKeyType(EnterKeyType.Next)
+          .onChange((value: string): void => {
+            this.addLastName = value;
+            this.addContactError = '';
+          });
+      }
+      .width('100%')
+      .margin({ top: 12 });
+
+      Column({ space: 6 }) {
+        Text('手机号码')
+          .width('100%')
+          .fontSize(12)
+          .fontColor(COLOR_TEXT_SECONDARY)
+          .padding({ left: 4 });
+        Row({ space: 8 }) {
+          SymbolGlyph($r('sys.symbol.phone_fill'))
+            .fontSize(17)
+            .fontColor([COLOR_PRIMARY]);
+          TextInput({ text: this.addPhone, placeholder: '+86 138 0000 0000' })
+            .layoutWeight(1)
+            .height(46)
+            .fontSize(16)
+            .fontColor(COLOR_TEXT_PRIMARY)
+            .placeholderColor(COLOR_TEXT_SECONDARY)
+            .caretColor(COLOR_PRIMARY)
+            .backgroundColor(Color.Transparent)
+            .padding(0)
+            .type(InputType.PhoneNumber)
+            .maxLength(24)
+            .enabled(!this.addContactSaving)
+            .enterKeyType(EnterKeyType.Done)
+            .onSubmit((): void => { this.submitNewContact(); })
+            .onChange((value: string): void => {
+              this.addPhone = value;
+              this.addContactError = '';
+            });
+        }
+        .width('100%')
+        .height(48)
+        .padding({ left: 14, right: 12 })
+        .backgroundColor($r('app.color.surface_alt'))
+        .borderRadius(12)
+        .border({
+          width: this.addContactError !== '' ? 1 : 0,
+          color: this.addContactError !== '' ? '#E64646' : Color.Transparent
+        });
+      }
+      .width('100%')
+      .margin({ top: 12 });
+
+      if (this.addContactError !== '') {
+        Row({ space: 6 }) {
+          SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+            .fontSize(13)
+            .fontColor(['#E64646']);
+          Text(this.addContactError)
+            .fontSize(12)
+            .fontColor('#E64646')
+            .layoutWeight(1);
+        }
+        .width('100%')
+        .padding({ left: 4, right: 4, top: 8 })
+        .transition(TransitionEffect.OPACITY
+          .combine(TransitionEffect.translate({ y: -4 }))
+          .animation({
+            duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 150),
+            curve: Curve.EaseOut
+          }));
+      }
+
+      Button() {
+        Row({ space: 8 }) {
+          if (this.addContactSaving) {
+            LoadingProgress().width(18).height(18).color(Color.White);
+          } else {
+            SymbolGlyph($r('sys.symbol.person_badge_plus'))
+              .fontSize(18)
+              .fontColor([Color.White]);
+          }
+          Text(this.addContactSaving ? '正在添加…' : '添加联系人')
+            .fontSize(16)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Color.White);
+        }
+      }
+      .width('100%')
+      .height(50)
+      .margin({ top: 18 })
+      .backgroundColor(COLOR_PRIMARY)
+      .borderRadius(14)
+      .enabled(!this.addContactSaving)
+      .onClick((): void => { this.submitNewContact(); });
+    }
+    .width('100%')
+    .padding({
+      left: 20,
+      right: 20,
+      top: 6,
+      bottom: Math.max(18, this.bottomSafe + 10)
+    })
+    .backgroundColor(CARD_BG);
+  }
+
+  @Builder
   fab() {
     Row() {
-      SymbolGlyph($r('sys.symbol.person_badge_plus')).fontSize(24).fontColor([Color.White]);
+      SymbolGlyph($r('sys.symbol.person_badge_plus'))
+        .fontSize(24)
+        .fontColor([Color.White])
+        .scale({
+          x: this.fabPressed ? 0.88 : 1,
+          y: this.fabPressed ? 0.88 : 1
+        })
+        .animation({
+          duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 110),
+          curve: Curve.EaseOut
+        });
     }
-    .width(56).height(56).borderRadius(28).backgroundColor(COLOR_PRIMARY)
+    .width(56).height(56).borderRadius(28)
+    .backgroundColor(COLOR_PRIMARY)
     .justifyContent(FlexAlign.Center)
-    .shadow({ radius: 10, color: '#33000000', offsetX: 0, offsetY: 3 })
+    .shadow({
+      radius: this.fabPressed ? 4 : 10,
+      color: this.fabPressed ? '#22000000' : '#33000000',
+      offsetX: 0,
+      offsetY: this.fabPressed ? 1 : 3
+    })
+    .scale({
+      x: this.addContactSheetOpen ? 0.78 : (this.fabPressed ? 0.9 : 1),
+      y: this.addContactSheetOpen ? 0.78 : (this.fabPressed ? 0.9 : 1)
+    })
+    .opacity(this.addContactSheetOpen ? 0 : 1)
+    .animation({
+      duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 150),
+      curve: Curve.EaseOut
+    })
+    .enabled(!this.addContactSheetOpen && !this.contextMenuShown)
+    .accessibilityText('新建联系人')
+    .onTouch((event: TouchEvent): void => {
+      if (event.type === TouchType.Down) {
+        this.fabPressed = true;
+      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+        this.fabPressed = false;
+      }
+    })
+    .onClick((): void => { this.openAddContactSheet(); })
     .margin({ right: 18, bottom: this.bottomSafe + 88 });
   }
 
@@ -249,7 +1303,15 @@ export struct ContactsPage {
           Column() {
             this.searchBox();
             this.actionCard();
-            this.listCard();
+            if (this.query.trim() === '' && this.loading && this.contacts.length === 0) {
+              this.loadingCard();
+            } else if (this.query.trim() === '' && this.loadError !== '' && this.contacts.length === 0) {
+              this.errorContactsCard();
+            } else if (this.query.trim() === '' && !this.loading && this.contacts.length === 0) {
+              this.emptyContactsCard();
+            } else {
+              this.listCard();
+            }
           }
           .width('100%')
           .padding({ bottom: this.bottomSafe + 88 });
@@ -258,7 +1320,8 @@ export struct ContactsPage {
         .width('100%')
         .align(Alignment.Top)
         .edgeEffect(EdgeEffect.Spring)
-        .scrollBar(BarState.Off);
+        .scrollBar(BarState.Off)
+        .enableScrollInteraction(!this.contextMenuShown);
       }
       .width('100%').height('100%');
 
@@ -266,6 +1329,11 @@ export struct ContactsPage {
     }
     .width('100%').height('100%')
     .backgroundColor(PAGE_BG)
-    .padding({ top: this.topSafe });
+    .padding({ top: this.topSafe })
+    .bindSheet($$this.addContactSheetOpen, this.addContactSheet(), {
+      height: SheetSize.FIT_CONTENT,
+      backgroundColor: CARD_BG,
+      dragBar: true
+    });
   }
 }

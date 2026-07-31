@@ -1,9 +1,18 @@
-const WEEKDAYS: string[] = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const MONTHS: string[] = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const WEEKDAYS: string[] = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : `${n}`;
+}
+
+// Message bubbles always show the message's local clock time. Relative labels
+// such as "周二" belong to conversation/search previews, not the timestamp in
+// the lower-right corner of an individual message.
+export function formatClockTime(unixSec: number): string {
+  if (unixSec <= 0) {
+    return '';
+  }
+  const d = new Date(unixSec * 1000);
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 
 export function formatTime(unixSec: number, nowSec: number): string {
@@ -23,8 +32,7 @@ export function formatTime(unixSec: number, nowSec: number): string {
     return WEEKDAYS[d.getDay()];
   }
   if (d.getFullYear() === now.getFullYear()) {
-    return `${MONTHS[d.getMonth()]} ${d.getDate()}`;
+    return `${d.getMonth() + 1}月${d.getDate()}日`;
   }
-  const yy = pad2(d.getFullYear() % 100);
-  return `${d.getMonth() + 1}/${d.getDate()}/${yy}`;
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
 }

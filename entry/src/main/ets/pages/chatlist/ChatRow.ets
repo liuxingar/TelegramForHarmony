@@ -6,8 +6,11 @@ import {
   setArchived, setInFolder, clearHistory, leaveOrDeleteChat, leaveLabel
 } from '../../store/ChatActions';
 import { getChatStore, getFolderStore } from '../../tdkit/Globals';
-import { KEY_POWER_ACTIVE, KEY_POWER_PARTICLES, KEY_THREE_LINES } from '../../store/AppSettings';
-import { CHAT_MENU_OPEN } from './ChatListFreeze';
+import {
+  KEY_POWER_ACTIVE, KEY_POWER_PARTICLES, KEY_POWER_SMOOTH_TRANSITIONS,
+  KEY_THREE_LINES, powerAnimationDuration
+} from '../../store/AppSettings';
+import { CHAT_LIST_NOW, CHAT_MENU_OPEN } from './ChatListFreeze';
 import { AvatarView } from './AvatarView';
 import { formatTime } from '../../util/formatTime';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY, COLOR_MUTED_BADGE, ROW_PAD_H, ROW_PAD_V } from '../../util/theme';
@@ -15,16 +18,26 @@ import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY, COLOR_MUTED_BA
 @Component
 export struct ChatRow {
   @Prop chat: ChatEntry;
-  @Prop nowSec: number;
   // The list this row is being shown in — pinning is per-list, and the menu
   // offers 取消归档 instead of 归档 inside the archive.
   @Prop listKey: string;
+  @StorageProp(CHAT_LIST_NOW) nowSec: number = Math.floor(Date.now() / 1000);
   // 聊天设置 → 聊天列表视图: the preview line wraps to two lines in 三行 mode.
   @StorageProp(KEY_THREE_LINES) threeLines: boolean = false;
   @StorageProp(KEY_POWER_ACTIVE) powerSaving: boolean = false;
   @StorageProp(KEY_POWER_PARTICLES) particlesEnabled: boolean = true;
   @State livePulseExpanded: boolean = false;
+  @State contextMenuShown: boolean = false;
   private livePulseTimer: number = -1;
+  // A long press is only valid for the exact row snapshot that was under the
+  // finger on TouchType.Down. A new message can update the row revision or
+  // reorder it while the recognition timer is running.
+  private pressActive: boolean = false;
+  private pressRevision: number = -1;
+  private pressIndex: number = -1;
+  // A successful long press and the row click share the same pointer
+  // sequence. Keep the click from navigating when release follows the menu.
+  private pressConsumedByMenu: boolean = false;
 
   aboutToAppear(): void {
     if (!this.chat.isLive) { return; }
@@ -41,6 +54,10 @@ export struct ChatRow {
     if (this.livePulseTimer !== -1) {
       clearInterval(this.livePulseTimer);
       this.livePulseTimer = -1;
+    }
+    if (this.contextMenuShown) {
+      this.contextMenuShown = false;
+      AppStorage.setOrCreate(CHAT_MENU_OPEN, false);
     }
   }
 
@@ -59,6 +76,59 @@ export struct ChatRow {
   // Unread by count OR by the manual flag — either state offers 标记为已读.
   private isUnread(): boolean {
     return this.chat.unreadCount > 0 || this.chat.isMarkedUnread;
+  }
+
+  private unreadLabel(): string {
+    return this.chat.unreadCount > 999 ? '999+' : `${this.chat.unreadCount}`;
+  }
+
+  private accessibilitySummary(): string {
+    const parts: string[] = [this.chat.title];
+    if (this.isPinned()) {
+      parts.push('已置顶');
+    }
+    if (this.chat.isMuted) {
+      parts.push('已静音');
+    }
+    if (this.isUnread()) {
+      parts.push(this.chat.unreadCount > 0 ? `${this.chat.unreadCount} 条未读` : '标记为未读');
+    }
+    if (this.chat.lastMessageText !== '') {
+      parts.push(this.chat.lastMessageText);
+    }
+    return parts.join('，');
+  }
+
+  private currentIndex(): number {
+    return getChatStore().getChats(this.listKey)
+      .findIndex((entry: ChatEntry): boolean => entry.id === this.chat.id);
+  }
+
+  private beginPress(): void {
+    const current = getChatStore().entryOf(this.chat.id);
+    this.pressConsumedByMenu = false;
+    this.pressActive = current !== undefined;
+    this.pressRevision = current?.revision ?? -1;
+    this.pressIndex = this.currentIndex();
+  }
+
+  private endPress(): void {
+    this.pressActive = false;
+  }
+
+  private openContextMenuIfCurrent(): void {
+    const current = getChatStore().entryOf(this.chat.id);
+    const unchanged = this.pressActive && current !== undefined
+      && current.revision === this.pressRevision
+      && this.currentIndex() === this.pressIndex;
+    this.pressActive = false;
+    if (!unchanged) {
+      // The row was refreshed or moved before recognition completed. Ignore
+      // this long press instead of opening a menu for stale screen content.
+      return;
+    }
+    this.pressConsumedByMenu = true;
+    this.contextMenuShown = true;
   }
 
   private confirmClearHistory(): void {
@@ -95,6 +165,19 @@ export struct ChatRow {
         leaveOrDeleteChat(this.chat.id, this.chat.kind);
       }
     }).catch(() => {});
+  }
+
+  // Native pressed feedback starts as soon as the finger goes down. Besides
+  // making ordinary taps feel responsive, it also makes the long-press wait
+  // visible before the context menu appears.
+  @Styles
+  rowNormalStyle() {
+    .backgroundColor($r('app.color.surface'))
+  }
+
+  @Styles
+  rowPressedStyle() {
+    .backgroundColor($r('app.color.surface_alt'))
   }
 
   @Builder
@@ -208,7 +291,10 @@ export struct ChatRow {
         }.width('100%');
         Row() {
           if (this.chat.lastSenderName !== '') {
-            Text(`${this.chat.lastSenderName}: `).fontSize(14).fontColor(COLOR_PRIMARY).maxLines(1);
+            Text(`${this.chat.lastSenderName}: `)
+              .fontSize(14).fontColor(COLOR_PRIMARY)
+              .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+              .constraintSize({ maxWidth: 112 });
           }
           Text(this.chat.lastMessageText)
             .fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
@@ -217,13 +303,24 @@ export struct ChatRow {
         }.width('100%').alignItems(VerticalAlign.Top);
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
       Column({ space: 6 }) {
-        Text(formatTime(this.chat.lastMessageDate, this.nowSec))
-          .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+        Row({ space: 3 }) {
+          if (this.isPinned()) {
+            SymbolGlyph($r('sys.symbol.pin')).fontSize(11).fontColor([COLOR_TEXT_SECONDARY]);
+          }
+          Text(formatTime(this.chat.lastMessageDate, this.nowSec))
+            .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+        }
         if (this.chat.unreadCount > 0) {
-          Text(`${this.chat.unreadCount}`)
-            .fontSize(12).fontColor(Color.White)
+          Row() {
+            Text(this.unreadLabel())
+              .fontSize(12).fontColor(Color.White)
+              .fontWeight(FontWeight.Medium);
+          }
+            .constraintSize({ minWidth: 22 })
+            .height(22).padding({ left: 7, right: 7 })
+            .justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
             .backgroundColor(this.chat.isMuted ? COLOR_MUTED_BADGE : COLOR_PRIMARY)
-            .borderRadius(11).padding({ left: 7, right: 7, top: 2, bottom: 2 });
+            .borderRadius(11);
         } else if (this.chat.isMarkedUnread) {
           // Manually flagged unread — a plain dot, like the official clients.
           Circle({ width: 10, height: 10 })
@@ -231,17 +328,79 @@ export struct ChatRow {
         }
       }.alignItems(HorizontalAlign.End);
     }
-    .width('100%').padding({ left: ROW_PAD_H, right: ROW_PAD_H, top: ROW_PAD_V, bottom: ROW_PAD_V }).alignItems(VerticalAlign.Center)
+    .width('100%')
+    .constraintSize({ minHeight: 72 })
+    .padding({ left: ROW_PAD_H, right: ROW_PAD_H, top: ROW_PAD_V, bottom: ROW_PAD_V })
+    .alignItems(VerticalAlign.Center)
+    .stateStyles({
+      normal: this.rowNormalStyle,
+      pressed: this.rowPressedStyle
+    })
+    .accessibilityText(this.accessibilitySummary())
     .onClick(() => {
+      if (this.pressConsumedByMenu || this.contextMenuShown) {
+        this.pressConsumedByMenu = false;
+        return;
+      }
       const params: Record<string, Object> = { 'chatId': this.chat.id };
       router.pushUrl({ url: 'pages/chat/ChatPage', params: params });
     })
-    // While the menu is open the list must not rebuild: the ForEach key encodes
-    // mutable fields, so an incoming message would re-create this row and take
-    // the menu down with it. The flag freezes the list (see CHAT_MENU_OPEN).
-    .bindContextMenu(this.contextMenu, ResponseType.LongPress, {
-      onAppear: (): void => { AppStorage.setOrCreate(CHAT_MENU_OPEN, true); },
-      onDisappear: (): void => { AppStorage.setOrCreate(CHAT_MENU_OPEN, false); }
+    .onTouch((event: TouchEvent): void => {
+      if (event.type === TouchType.Down) {
+        this.beginPress();
+      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+        this.endPress();
+      }
+    })
+    // Keep List's pan recognizer active. Movement cancels this recognizer,
+    // while a stationary hold reaches the data-consistency check above.
+    .parallelGesture(
+      LongPressGesture({ fingers: 1, repeat: false, duration: 500 })
+        .onAction((): void => { this.openContextMenuIfCurrent(); })
+        .onActionCancel((): void => { this.endPress(); })
+    )
+    // While the menu is open the list must not rebuild: an incoming message
+    // increments the row revision and would otherwise take the menu down.
+    // The flag freezes the list (see CHAT_MENU_OPEN).
+    .bindContextMenu(this.contextMenuShown, this.contextMenu, {
+      // IMAGE captures this exact chat strip. The framework then lifts that
+      // snapshot above the mask, so list inertia can no longer move the
+      // focused item away from the menu.
+      preview: MenuPreviewMode.IMAGE,
+      previewBorderRadius: 14,
+      previewAnimationOptions: {
+        scale: [0.98, 1.035],
+        transition: TransitionEffect.OPACITY
+          .combine(TransitionEffect.scale({ x: 0.98, y: 0.98 }))
+          .animation({
+            duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+            curve: Curve.FastOutSlowIn
+          })
+      },
+      borderRadius: 16,
+      backgroundColor: Color.Transparent,
+      backgroundBlurStyle: BlurStyle.COMPONENT_ULTRA_THICK,
+      transition: TransitionEffect.OPACITY
+        .combine(TransitionEffect.scale({ x: 0.96, y: 0.96 }))
+        .animation({
+          duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+          curve: Curve.FastOutSlowIn
+        }),
+      // A modal blurred mask keeps the page visually behind the lifted row
+      // and absorbs taps until the operation panel is dismissed.
+      mask: {
+        color: '#52000000',
+        backgroundBlurStyle: BlurStyle.BACKGROUND_THIN
+      },
+      modalMode: ModalMode.TARGET_WINDOW,
+      hapticFeedbackMode: HapticFeedbackMode.AUTO,
+      aboutToAppear: (): void => {
+        AppStorage.setOrCreate(CHAT_MENU_OPEN, true);
+      },
+      onDisappear: (): void => {
+        this.contextMenuShown = false;
+        AppStorage.setOrCreate(CHAT_MENU_OPEN, false);
+      }
     });
   }
 }

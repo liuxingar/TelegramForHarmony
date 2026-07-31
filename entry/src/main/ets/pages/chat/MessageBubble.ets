@@ -4,13 +4,24 @@ import { AvatarView } from '../chatlist/AvatarView';
 import {
   KEY_TEXT_SIZE, KEY_BUBBLE_RADIUS, KEY_REDUCE_ANIM, TEXT_SIZE_DEFAULT, RADIUS_DEFAULT,
   KEY_POWER_ACTIVE, KEY_POWER_AUTOPLAY_GIF, KEY_POWER_AUTOPLAY_VIDEO, KEY_POWER_CHAT_EFFECTS,
-  KEY_POWER_EFFECT_MESSAGE, KEY_POWER_EFFECT_REACTION, KEY_POWER_EMOJI, KEY_POWER_EMOJI_REACTIONS
+  KEY_POWER_EFFECT_MESSAGE, KEY_POWER_EFFECT_REACTION, KEY_POWER_EMOJI, KEY_POWER_EMOJI_CHAT,
+  KEY_POWER_EMOJI_REACTIONS, KEY_POWER_STICKERS, KEY_POWER_STICKER_AUTOPLAY
 } from '../../store/AppSettings';
 import { TgsStickerView } from './TgsStickerView';
 import { WebmStickerView } from './WebmStickerView';
 import { SmartLoopVideo } from '../common/SmartLoopVideo';
 import { VoiceBubble } from './VoiceBubble';
-import { formatTime } from '../../util/formatTime';
+import { MusicBubble } from './MusicBubble';
+import { FileBubble } from './FileBubble';
+import { ContactBubble } from './ContactBubble';
+import { LocationBubble } from './LocationBubble';
+import { PollBubble } from './PollBubble';
+import { DiceBubble } from './DiceBubble';
+import { GameBubble } from './GameBubble';
+import { PaidMediaBubble } from './PaidMediaBubble';
+import { GiftBubble } from './GiftBubble';
+import { GiveawayBubble } from './GiveawayBubble';
+import { formatClockTime } from '../../util/formatTime';
 import { formatFileSize } from '../../util/formatFileSize';
 import { parseFormattedText, RichSegment, RichRun } from '../../util/richText';
 import { packAlbumRows, AlbumCell } from '../../util/packAlbumRows';
@@ -39,16 +50,20 @@ export struct MessageBubble {
   @Prop showUnreadDivider: boolean;
   @Prop dateLabel: string = ''; // date pill above this row when the day changes
   @Prop albumPaths: string[];
+  @Prop albumFileIds: number[];
   @Prop albumRatios: number[];
   @Prop albumMemberIds: number[];
   @Prop albumIsVideo: boolean[];
   @Prop albumProgress: number[];
+  @Prop albumFailed: boolean[];
   @Prop albumCaption: string;
   albumCaptionEntities: TdObject[] = [];
   @StorageProp('screenWidthVp') screenW: number = 360;
   // Measured width of the bubble (it shrinks to fit content) — the inline
   // keyboard below matches it exactly instead of the theoretical max width.
   @State bubbleW: number = 0;
+  @State revealedSpoilerKeys: string[] = [];
+  @State expandedQuoteKeys: string[] = [];
   // x/y are the tap's window coordinates (vp) — the fullscreen viewer uses them
   // as the anchor for its expand-from-tap / shrink-back-to-tap transition.
   onMediaTap: (messageId: number, x: number, y: number) => void = (): void => {};
@@ -59,12 +74,46 @@ export struct MessageBubble {
   onReplyTap: (messageId: number) => void = (): void => {};
   onFileTap: (messageId: number) => void = (): void => {};
   onFileSave: (messageId: number) => void = (): void => {};
+  onStickerRetry: (messageId: number) => void = (): void => {};
+  onContactOpen: (userId: number, phone: string, vcard: string) => void =
+    (_userId: number, _phone: string, _vcard: string): void => {};
+  onPhoneOpen: (phone: string) => void = (_phone: string): void => {};
+  onLocationOpen: (latitude: number, longitude: number, label: string, valid: boolean) => void =
+    (_latitude: number, _longitude: number, _label: string, _valid: boolean): void => {};
+  onPollVote: (messageId: number, optionIds: number[]) => void =
+    (_messageId: number, _optionIds: number[]): void => {};
+  onGameOpen: (messageId: number) => void = (_messageId: number): void => {};
+  onGamePhotoRetry: (messageId: number) => void = (_messageId: number): void => {};
+  @Prop paidMediaPending: boolean = false;
+  onPaidMediaUnlock: (messageId: number) => void = (_messageId: number): void => {};
+  onPaidMediaOpen: (messageId: number) => void = (_messageId: number): void => {};
+  onSpecialPhotoRetry: (messageId: number) => void = (_messageId: number): void => {};
+  onGiftCodeCopy: (code: string) => void = (_code: string): void => {};
+  onGiveawayOpen: (chatId: number, messageId: number) => void =
+    (_chatId: number, _messageId: number): void => {};
   onVoiceTap: (messageId: number) => void = (): void => {};
+  onVoicePlaybackStarted: (messageId: number) => void = (): void => {};
+  onAudioTap: (messageId: number) => void = (): void => {};
+  onAudioPrevious: (messageId: number) => void = (): void => {};
+  onAudioNext: (messageId: number) => void = (): void => {};
+  onAudioSeek: (messageId: number, fraction: number) => void =
+    (_messageId: number, _fraction: number): void => {};
+  @Prop audioQueuePosition: number = 0;
+  @Prop audioQueueLength: number = 0;
+  @Prop audioHasPrevious: boolean = false;
+  @Prop audioHasNext: boolean = false;
   onAutoplayVideoNeedDownload: (messageId: number) => void = (): void => {};
+  onAnimationTap: (messageId: number, isPlaying: boolean) => void =
+    (_messageId: number, _isPlaying: boolean): void => {};
+  onAnimationPlaybackFailed: (messageId: number) => void = (): void => {};
+  @Prop animationPaused: boolean = false;
+  @Prop animationForcePlay: boolean = false;
+  @Prop animationPlaybackFailed: boolean = false;
   // Long-press context menu actions.
   onSetReaction: (messageId: number, emoji: string, isChosen: boolean) => void = (): void => {};
   onReplyTo: (messageId: number) => void = (): void => {};
   onCopyText: (messageId: number) => void = (): void => {};
+  onCopyCode: (text: string) => void = (): void => {};
   onCopyLink: (messageId: number) => void = (): void => {};
   onForwardMsg: (messageId: number) => void = (): void => {};
   onReportMsg: (messageId: number) => void = (): void => {};
@@ -84,40 +133,92 @@ export struct MessageBubble {
   // 聊天设置 → 消息字号 / 消息圆角, applied live.
   @StorageProp(KEY_TEXT_SIZE) msgTextSize: number = TEXT_SIZE_DEFAULT;
   @StorageProp(KEY_BUBBLE_RADIUS) bubbleRadius: number = RADIUS_DEFAULT;
-  @StorageProp(KEY_REDUCE_ANIM) reduceAnim: boolean = false;
-  @StorageProp(KEY_POWER_ACTIVE) powerSaving: boolean = false;
+  @StorageProp(KEY_REDUCE_ANIM) @Watch('onPlaybackPolicyChanged') reduceAnim: boolean = false;
+  @StorageProp(KEY_POWER_ACTIVE) @Watch('onPlaybackPolicyChanged') powerSaving: boolean = false;
+  @StorageProp('appIsForeground') appIsForeground: boolean = true;
   @StorageProp(KEY_POWER_CHAT_EFFECTS) chatEffectsEnabled: boolean = true;
   @StorageProp(KEY_POWER_EFFECT_MESSAGE) messageEffectsEnabled: boolean = true;
   @StorageProp(KEY_POWER_EFFECT_REACTION) reactionEffectsEnabled: boolean = false;
   @StorageProp(KEY_POWER_EMOJI) emojiEnabled: boolean = true;
+  @StorageProp(KEY_POWER_EMOJI_CHAT) emojiChatEnabled: boolean = true;
   @StorageProp(KEY_POWER_EMOJI_REACTIONS) emojiReactionsEnabled: boolean = true;
-  @StorageProp(KEY_POWER_AUTOPLAY_GIF) autoplayGif: boolean = true;
+  @StorageProp(KEY_POWER_STICKERS) stickersEnabled: boolean = true;
+  @StorageProp(KEY_POWER_STICKER_AUTOPLAY) stickerAutoplay: boolean = true;
+  @StorageProp(KEY_POWER_AUTOPLAY_GIF) @Watch('onPlaybackPolicyChanged') autoplayGif: boolean = true;
   @StorageProp(KEY_POWER_AUTOPLAY_VIDEO) autoplayVideo: boolean = true;
   @Prop showAvatar: boolean = true;     // last row of a same-sender run
   @Prop showSenderName: boolean = true; // first row of a same-sender run
+  @State mediaVisible: boolean = true;
+  @State stickerPlaybackFailed: boolean = false;
 
   aboutToAppear(): void {
-    if (this.msg.contentType === 'video' && !this.msg.isAnimation &&
-      this.autoplayVideo && !this.powerSaving && this.msg.videoPath === '') {
+    this.requestAutoplayDownload();
+  }
+
+  private requestAutoplayDownload(): void {
+    if (this.msg.contentType !== 'video' || this.msg.videoFileId === 0 ||
+      this.msg.videoPath !== '' || this.msg.videoFailed || !this.mediaVisible) {
+      return;
+    }
+    const allowed = this.msg.isAnimation
+      ? (this.autoplayGif && !this.powerSaving && !this.reduceAnim)
+      : (this.autoplayVideo && !this.powerSaving && !this.reduceAnim);
+    if (allowed || (this.msg.isAnimation && this.animationForcePlay)) {
       this.onAutoplayVideoNeedDownload(this.msg.id);
     }
   }
 
+  private onPlaybackPolicyChanged(): void {
+    this.requestAutoplayDownload();
+  }
+
   // mm:ss (or h:mm:ss for long videos) duration badge text.
   private formatDuration(totalSeconds: number): string {
-    const h = Math.floor(totalSeconds / 3600);
-    const m = Math.floor((totalSeconds % 3600) / 60);
-    const s = totalSeconds % 60;
+    const safeSeconds = Math.max(0, Math.floor(totalSeconds));
+    const h = Math.floor(safeSeconds / 3600);
+    const m = Math.floor((safeSeconds % 3600) / 60);
+    const s = safeSeconds % 60;
     const mm = h > 0 ? `${m}`.padStart(2, '0') : `${m}`;
     const ss = `${s}`.padStart(2, '0');
     return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
   }
 
-  // Concrete pixel caps for text. Percentage widths ('100%') don't resolve inside
-  // a shrink-to-fit bubble (maxWidth:'78%' with no definite width), so text falls
-  // back to its intrinsic width and overflows. A concrete maxWidth forces wrapping.
+  // Keep all shell/content measurements on the same concrete cap. A percentage
+  // max width on the outer shrink-to-fit Column can resolve differently from
+  // the numeric caps used by text/media and cause a late first-layout reflow.
+  private bubbleMaxW(): number {
+    return this.screenW * 0.78;
+  }
+
   private inlineMaxW(): number {
-    return this.screenW * 0.78 - 32;
+    return this.bubbleMaxW() - 16;
+  }
+
+  private runCornerRadius(): number {
+    return Math.min(this.bubbleRadius, 7);
+  }
+
+  private tailCornerRadius(): number {
+    return Math.min(this.bubbleRadius, 2);
+  }
+
+  // A tail belongs only to the final bubble of a consecutive sender run.
+  // showAvatar is the run-end flag for private chats too, even when no avatar
+  // column is rendered there.
+  private hasBubbleTail(): boolean {
+    return this.showAvatar && !this.isBareEmoji();
+  }
+
+  private bubbleTailGutter(): number {
+    return this.isBareEmoji() ? 0 : 7;
+  }
+
+  private rowTopPadding(): number {
+    return this.showSenderName ? 3 : 1;
+  }
+
+  private rowBottomPadding(): number {
+    return this.showAvatar ? 3 : 1;
   }
 
   private effectDuration(duration: number): number {
@@ -129,15 +230,100 @@ export struct MessageBubble {
       this.emojiEnabled && this.emojiReactionsEnabled && !this.powerSaving ? duration : 0;
   }
 
+  // Keep the bubble's own colors intact and dim the whole surface while held.
+  // ArkUI's pressed state also cancels naturally when a list drag takes over.
+  @Styles
+  bubbleNormalStyle() {
+    .opacity(1)
+    .scale({ x: 1, y: 1 })
+  }
+
+  @Styles
+  bubblePressedStyle() {
+    // A tappable inline Span owns its own pressed feedback. Letting the parent
+    // bubble dim as well makes a tiny link tap flash the whole message. Voice
+    // controls also provide their own compact pressed feedback.
+    .opacity(this.hasInlineLink() || this.msg.contentType === 'voice' ||
+      this.msg.contentType === 'audio' || this.msg.contentType === 'file' ? 1 : 0.84)
+    .scale({
+      x: this.hasInlineLink() || this.msg.contentType === 'voice' ||
+        this.msg.contentType === 'audio' || this.msg.contentType === 'file' ? 1 : 0.992,
+      y: this.hasInlineLink() || this.msg.contentType === 'voice' ||
+        this.msg.contentType === 'audio' || this.msg.contentType === 'file' ? 1 : 0.992
+    })
+  }
+
+  @Styles
+  linkRunNormalStyle() {
+    .opacity(1)
+  }
+
+  @Styles
+  linkRunPressedStyle() {
+    .opacity(0.52)
+  }
+
+  @Styles
+  botButtonNormalStyle() {
+    .opacity(1)
+    .scale({ x: 1, y: 1 })
+  }
+
+  @Styles
+  botButtonPressedStyle() {
+    .opacity(0.72)
+    .scale({ x: 0.975, y: 0.975 })
+  }
+
+  @Styles
+  systemPillNormalStyle() {
+    .opacity(1)
+    .scale({ x: 1, y: 1 })
+  }
+
+  @Styles
+  systemPillPressedStyle() {
+    .opacity(this.liveVideoChatTappable() ? 0.72 : 1)
+    .scale({
+      x: this.liveVideoChatTappable() ? 0.985 : 1,
+      y: this.liveVideoChatTappable() ? 0.985 : 1
+    })
+  }
+
+  @Styles
+  menuActionNormalStyle() {
+    .opacity(1)
+    .scale({ x: 1, y: 1 })
+  }
+
+  @Styles
+  menuActionPressedStyle() {
+    .opacity(0.72)
+    .scale({ x: 0.97, y: 0.94 })
+  }
+
   private autoplayInlineVideo(): boolean {
-    if (this.powerSaving || this.msg.contentType !== 'video' || this.msg.videoPath === '') {
+    if (this.msg.contentType !== 'video' || this.msg.videoPath === '' ||
+      !this.mediaVisible || !this.appIsForeground || this.animationPlaybackFailed) {
       return false;
     }
-    return this.msg.isAnimation ? this.autoplayGif : this.autoplayVideo;
+    if (this.msg.isAnimation) {
+      if (this.animationPaused) {
+        return false;
+      }
+      return this.animationForcePlay || (!this.powerSaving && !this.reduceAnim && this.autoplayGif);
+    }
+    return !this.powerSaving && !this.reduceAnim && this.autoplayVideo;
   }
 
   private autoplayCategory(): string {
     return this.msg.isAnimation ? 'gif' : 'video';
+  }
+
+  private animationDownloadExpected(): boolean {
+    return this.msg.isAnimation && this.msg.videoFileId !== 0 &&
+      this.msg.videoPath === '' && !this.msg.videoFailed &&
+      (this.animationForcePlay || (!this.powerSaving && !this.reduceAnim && this.autoplayGif));
   }
 
   // The link preview card adds its own 8+8 horizontal padding on top of the
@@ -156,9 +342,67 @@ export struct MessageBubble {
 
   private mediaRatio(): number {
     if (this.msg.photoWidth > 0 && this.msg.photoHeight > 0) {
-      return this.msg.photoWidth / this.msg.photoHeight;
+      // Extreme source ratios remain visible through Cover cropping without
+      // producing an unusably narrow/tall chat bubble.
+      return Math.max(0.56, Math.min(2.1, this.msg.photoWidth / this.msg.photoHeight));
     }
-    return 1;
+    // An unknown photo remains square; an unknown video starts at the common
+    // 16:9 shape so its placeholder doesn't jump from square once decoded.
+    return this.msg.contentType === 'video' ? 16 / 9 : 1;
+  }
+
+  private videoFileUnavailable(): boolean {
+    return this.msg.contentType === 'video' &&
+      this.msg.videoFileId === 0 && this.msg.videoPath === '';
+  }
+
+  private videoDownloadActive(): boolean {
+    return this.msg.videoPath === '' &&
+      this.msg.videoProgress > 0 && this.msg.videoProgress < 100;
+  }
+
+  private videoMetaText(): string {
+    if (this.msg.isAnimation) {
+      return this.msg.videoDuration > 0
+        ? `GIF · ${this.formatDuration(this.msg.videoDuration)}`
+        : 'GIF';
+    }
+    if (this.msg.videoDuration > 0) {
+      return this.formatDuration(this.msg.videoDuration);
+    }
+    return this.msg.videoFileSize > 0 ? formatFileSize(this.msg.videoFileSize) : '';
+  }
+
+  private videoAccessibilityText(): string {
+    if (this.msg.isAnimation) {
+      if (this.videoFileUnavailable()) {
+        return 'GIF 文件暂不可用';
+      }
+      if (this.msg.videoFailed || this.animationPlaybackFailed) {
+        return 'GIF 加载失败，点击重试';
+      }
+      if (this.videoDownloadActive() || this.animationDownloadExpected()) {
+        return this.msg.videoProgress > 0
+          ? `GIF 已下载 ${this.msg.videoProgress}%`
+          : 'GIF 正在加载';
+      }
+      return this.autoplayInlineVideo() ? 'GIF 正在播放，点击暂停' : 'GIF 已暂停，点击播放';
+    }
+    if (this.videoFileUnavailable()) {
+      return '视频文件暂不可用';
+    }
+    if (this.msg.videoFailed) {
+      return '视频加载失败，点击重试播放';
+    }
+    if (this.videoDownloadActive()) {
+      return `视频已下载 ${this.msg.videoProgress}%，点击播放`;
+    }
+    if (this.msg.photoFailed) {
+      return '视频封面加载失败，点击仍可播放';
+    }
+    return this.msg.videoDuration > 0
+      ? `视频，时长 ${this.formatDuration(this.msg.videoDuration)}，点击播放`
+      : '点击播放视频';
   }
 
   private mediaBox(): MediaBox {
@@ -206,29 +450,168 @@ export struct MessageBubble {
     }
   }
 
+  private messageTimeText(): string {
+    return formatClockTime(this.msg.date);
+  }
+
   // Invisible tail appended to the last text line: reserves exactly the space
   // the overlaid timestamp occupies, so it never covers real text (Telegram's
   // inline-time layout).
   private timeReserve(): string {
-    return `  ${formatTime(this.msg.date, this.nowSec)}${this.msg.isOutgoing ? '   ' : ''}`;
+    const editReserve = this.msg.editDate > 0 ? '    ' : '';
+    return `${editReserve}  ${this.messageTimeText()}${this.msg.isOutgoing ? '   ' : ''}`;
+  }
+
+  private fallbackLabel(): string {
+    const label = this.msg.placeholderLabel.trim();
+    return label !== '' ? label : '暂不支持此消息';
+  }
+
+  private richRunDecoration(run: RichRun): TextDecorationType {
+    if (run.strike) {
+      return TextDecorationType.LineThrough;
+    }
+    return run.underline ? TextDecorationType.Underline : TextDecorationType.None;
+  }
+
+  private spoilerKey(run: RichRun): string {
+    return `${run.offset}_${run.text.length}`;
+  }
+
+  private spoilerRevealed(run: RichRun): boolean {
+    return this.revealedSpoilerKeys.indexOf(this.spoilerKey(run)) >= 0;
+  }
+
+  private revealSpoiler(run: RichRun): void {
+    const key = this.spoilerKey(run);
+    if (this.revealedSpoilerKeys.indexOf(key) < 0) {
+      this.revealedSpoilerKeys = [...this.revealedSpoilerKeys, key];
+    }
+  }
+
+  private quoteKey(segment: RichSegment): string {
+    return `${segment.offset}_${segment.text.length}`;
+  }
+
+  private quoteExpanded(segment: RichSegment): boolean {
+    return this.expandedQuoteKeys.indexOf(this.quoteKey(segment)) >= 0;
+  }
+
+  private toggleQuote(segment: RichSegment): void {
+    const key = this.quoteKey(segment);
+    if (this.quoteExpanded(segment)) {
+      this.expandedQuoteKeys = this.expandedQuoteKeys.filter((item: string): boolean => item !== key);
+    } else {
+      this.expandedQuoteKeys = [...this.expandedQuoteKeys, key];
+    }
+  }
+
+  private inlineCustomEmojiPath(customEmojiId: string): string {
+    const idx = this.msg.inlineCustomEmojiIds.indexOf(customEmojiId);
+    if (idx < 0 || idx >= this.msg.inlineCustomEmojiPaths.length) {
+      return '';
+    }
+    return this.msg.inlineCustomEmojiPaths[idx];
+  }
+
+  private inlineCustomEmojiSource(customEmojiId: string): string {
+    const path = this.inlineCustomEmojiPath(customEmojiId);
+    return path.startsWith('/') ? `file://${path}` : path;
+  }
+
+  private codeTextSize(): number {
+    return Math.max(12, this.msgTextSize - 2);
+  }
+
+  private formattedTextHasLink(text: string, entities: TdObject[]): boolean {
+    const segments = parseFormattedText(text, entities);
+    for (const segment of segments) {
+      for (const run of segment.runs) {
+        if (run.url !== '') {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private hasInlineLink(): boolean {
+    return this.formattedTextHasLink(this.msg.text, this.msg.textEntities) ||
+      (this.albumCaption !== '' &&
+        this.formattedTextHasLink(this.albumCaption, this.albumCaptionEntities));
+  }
+
+  @Builder
+  richInlineRun(run: RichRun) {
+    // Spoiler masking has priority over every nested style, including custom
+    // emoji. Otherwise an emoji inside a spoiler is visible before reveal.
+    if (run.spoiler && !this.spoilerRevealed(run)) {
+      Span(run.text)
+        .fontWeight(run.bold ? FontWeight.Bold : FontWeight.Normal)
+        .fontStyle(run.italic ? FontStyle.Italic : FontStyle.Normal)
+        .fontFamily(run.code ? 'monospace' : '')
+        .fontColor(Color.Transparent)
+        .decoration({ type: this.richRunDecoration(run), color: Color.Transparent })
+        .textBackgroundStyle({ color: '#708E8E93', radius: 3 })
+        .animation({ duration: this.effectDuration(150), curve: Curve.EaseOut })
+        .onClick((): void => { this.revealSpoiler(run); });
+    } else if (run.customEmojiId !== '' && this.inlineCustomEmojiPath(run.customEmojiId) !== '') {
+      ImageSpan(this.inlineCustomEmojiSource(run.customEmojiId))
+        .width(this.msgTextSize + 3)
+        .height(this.msgTextSize + 3)
+        .verticalAlign(ImageSpanAlignment.CENTER)
+        .objectFit(ImageFit.Contain);
+    } else if (run.url !== '') {
+      Span(run.text)
+        .fontWeight(run.bold ? FontWeight.Bold : FontWeight.Normal)
+        .fontStyle(run.italic ? FontStyle.Italic : FontStyle.Normal)
+        .fontFamily(run.code ? 'monospace' : '')
+        .fontColor(COLOR_PRIMARY)
+        .decoration({ type: this.richRunDecoration(run), color: COLOR_PRIMARY })
+        .textBackgroundStyle({
+          color: run.code ? $r('app.color.surface_alt') : Color.Transparent,
+          radius: run.code ? 3 : 0
+        })
+        .stateStyles({
+          normal: this.linkRunNormalStyle,
+          pressed: this.linkRunPressedStyle
+        })
+        .animation({ duration: this.effectDuration(90), curve: Curve.EaseOut })
+        .onClick(() => { this.onLinkTap(run.url); });
+    } else {
+      Span(run.text)
+        .fontWeight(run.bold ? FontWeight.Bold : FontWeight.Normal)
+        .fontStyle(run.italic ? FontStyle.Italic : FontStyle.Normal)
+        .fontFamily(run.code ? 'monospace' : '')
+        .fontColor(run.link ? COLOR_PRIMARY : COLOR_BUBBLE_TEXT)
+        .decoration({
+          type: this.richRunDecoration(run),
+          color: run.link ? COLOR_PRIMARY : COLOR_BUBBLE_TEXT
+        })
+        .textBackgroundStyle({
+          color: run.code ? $r('app.color.surface_alt') : Color.Transparent,
+          radius: run.code ? 3 : 0
+        })
+        .animation({ duration: this.effectDuration(150), curve: Curve.EaseOut });
+    }
   }
 
   @Builder
   richRuns(runs: RichRun[], maxWidth: number, reserveTail: boolean) {
     Text() {
       ForEach(runs, (r: RichRun) => {
-        Span(r.text)
-          .fontWeight(r.bold ? FontWeight.Bold : FontWeight.Normal)
-          .fontStyle(r.italic ? FontStyle.Italic : FontStyle.Normal)
-          .fontColor(r.link ? COLOR_PRIMARY : COLOR_BUBBLE_TEXT)
-          .onClick(r.url !== '' ? (() => { this.onLinkTap(r.url); }) : undefined);
-      }, (r: RichRun, i: number) => `run_${i}_${r.text}`);
+        this.richInlineRun(r);
+      }, (r: RichRun, i: number) => `run_${i}_${r.offset}_${r.text}`);
       if (reserveTail) {
         // fontSize 14 (not 11): when this reserve wraps onto its own line, the
         // taller line leaves a visible gap between the text and the timestamp.
         Span(this.timeReserve()).fontSize(14).fontColor(Color.Transparent);
       }
-    }.fontSize(16).constraintSize({ maxWidth });
+    }
+    .fontSize(this.msgTextSize)
+    .lineHeight(this.msgTextSize * 1.34)
+    .wordBreak(WordBreak.BREAK_WORD)
+    .constraintSize({ maxWidth });
   }
 
   // Render TDLib formatted text: inline bold/link runs, pre/code blocks and
@@ -241,35 +624,86 @@ export struct MessageBubble {
       ForEach(parseFormattedText(text, entities), (seg: RichSegment, segIdx: number) => {
         if (seg.kind === 'pre') {
           Column() {
-            Text(seg.text).fontSize(14).fontColor(COLOR_BUBBLE_TEXT).fontFamily('monospace')
-              .constraintSize({ maxWidth: maxWidth - 20 }).wordBreak(WordBreak.BREAK_ALL);
+            Row({ space: 8 }) {
+              Text(seg.language !== '' ? seg.language : '代码')
+                .fontSize(11).fontColor(COLOR_TEXT_SECONDARY).fontWeight(FontWeight.Medium)
+                .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+                .layoutWeight(1);
+              Row() {
+                Text('复制')
+                  .fontSize(11).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium);
+              }
+                .height(26)
+                .padding({ left: 8, right: 8 })
+                .borderRadius(13)
+                .backgroundColor('#10000000')
+                .stateStyles({
+                  normal: this.linkRunNormalStyle,
+                  pressed: this.linkRunPressedStyle
+                })
+                .animation({ duration: this.effectDuration(90), curve: Curve.EaseOut })
+                .onClick((): void => { this.onCopyCode(seg.text); });
+            }
+            .width(maxWidth - 18)
+            .alignItems(VerticalAlign.Center)
+            .margin({ bottom: 5 });
+            Text() {
+              Span(seg.text);
+              if (reserveTail && seg.isLast) {
+                Span(this.timeReserve()).fontColor(Color.Transparent);
+              }
+            }
+            .fontSize(this.codeTextSize())
+            .lineHeight(this.codeTextSize() * 1.42)
+            .fontColor(COLOR_BUBBLE_TEXT)
+            .fontFamily('monospace')
+            .constraintSize({ maxWidth: maxWidth - 20 })
+            .wordBreak(WordBreak.BREAK_ALL);
           }
-          .backgroundColor($r('app.color.surface_alt')).borderRadius(6)
-          .padding(8).margin({ top: 4, bottom: 2 });
+          .width(maxWidth)
+          .backgroundColor($r('app.color.surface_alt')).borderRadius(7)
+          .padding({ left: 9, right: 9, top: 7, bottom: 8 })
+          .margin({ top: 4, bottom: 2 })
+          .clip(true);
         } else if (seg.kind === 'quote') {
           Column() {
             // Span-based rendering keeps links inside the quote tappable.
             Text() {
               ForEach(seg.runs, (r: RichRun) => {
-                Span(r.text)
-                  .fontWeight(r.bold ? FontWeight.Bold : FontWeight.Normal)
-                  .fontStyle(r.italic ? FontStyle.Italic : FontStyle.Normal)
-                  .fontColor(r.link ? COLOR_PRIMARY : COLOR_BUBBLE_TEXT)
-                  .onClick(r.url !== '' ? (() => { this.onLinkTap(r.url); }) : undefined);
-              }, (r: RichRun, i: number) => `qrun_${i}_${r.text}`);
+                this.richInlineRun(r);
+              }, (r: RichRun, i: number) => `qrun_${i}_${r.offset}_${r.text}`);
+              if (reserveTail && seg.isLast) {
+                Span(this.timeReserve()).fontSize(14).fontColor(Color.Transparent);
+              }
             }
             .fontSize(this.msgTextSize)
-            .constraintSize({ maxWidth: maxWidth - 20 }).wordBreak(WordBreak.BREAK_ALL);
+            .lineHeight(this.msgTextSize * 1.34)
+            .maxLines(seg.expandable && !this.quoteExpanded(seg) ? 4 : 10000)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .constraintSize({ maxWidth: maxWidth - 20 }).wordBreak(WordBreak.BREAK_WORD);
+            if (seg.expandable) {
+              Text(this.quoteExpanded(seg) ? '收起引用' : '展开引用')
+                .fontSize(11).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
+                .margin({ top: 4 })
+                .stateStyles({
+                  normal: this.linkRunNormalStyle,
+                  pressed: this.linkRunPressedStyle
+                })
+                .animation({ duration: this.effectDuration(100), curve: Curve.EaseOut })
+                .onClick((): void => { this.toggleQuote(seg); });
+            }
           }
-          .backgroundColor($r('app.color.surface_alt')).borderRadius(6)
+          .backgroundColor('#103391E8').borderRadius(7)
           .border({ width: { left: 3 }, color: COLOR_PRIMARY })
-          .padding({ left: 8, right: 8, top: 6, bottom: 6 }).margin({ top: 4, bottom: 2 });
+          .padding({ left: 9, right: 8, top: 7, bottom: 7 }).margin({ top: 4, bottom: 2 })
+          .animation({ duration: this.effectDuration(180), curve: Curve.EaseOut });
         } else {
-          this.richRuns(seg.runs, maxWidth,
-            reserveTail && segIdx === parseFormattedText(text, entities).length - 1);
+          this.richRuns(seg.runs, maxWidth, reserveTail && seg.isLast);
         }
       }, (seg: RichSegment, i: number) => `seg_${i}_${seg.kind}`);
-    }.alignItems(HorizontalAlign.Start);
+    }
+    .constraintSize({ maxWidth })
+    .alignItems(HorizontalAlign.Start);
   }
 
   // Channel post footer: recent-commenter avatars + comment count + chevron,
@@ -313,11 +747,18 @@ export struct MessageBubble {
                 .layoutWeight(1).height(36)
                 .backgroundColor(botButtonBg(btn.style, '#4d000000'))
                 .borderRadius(8)
+                .stateStyles({
+                  normal: this.botButtonNormalStyle,
+                  pressed: this.botButtonPressedStyle
+                })
+                .animation({ duration: this.effectDuration(100), curve: Curve.EaseOut })
                 .onClick(() => {
                   if (btn.url !== '') {
                     this.onLinkTap(btn.url);
                   } else if (btn.callbackData !== '') {
                     this.onBotCallback(this.msg.id, btn.callbackData);
+                  } else if (btn.isGame) {
+                    this.onGameOpen(this.msg.id);
                   }
                 });
             }, (btn: InlineBtn, btnIdx: number) => `ib_${rowIdx}_${btnIdx}_${btn.text}`);
@@ -330,10 +771,11 @@ export struct MessageBubble {
     }
     .width('100%')
     .padding({
-      // Align with the bubble's edge, not the tail tip: the tail adds 7vp
-      // before an incoming bubble / after an outgoing one.
-      left: 10 + (this.msg.isOutgoing ? 0 : (this.isGroup ? 38 : 0) + 7),
-      right: 10 + (this.msg.isOutgoing ? 7 : 0),
+      // Align with the bubble body; every non-bare row reserves the same 7vp
+      // tail gutter so first/middle/last bubbles never shift horizontally.
+      left: 10 + (this.msg.isOutgoing ? 0 : (this.isGroup ? 38 : 0) +
+        this.bubbleTailGutter()),
+      right: 10 + (this.msg.isOutgoing ? this.bubbleTailGutter() : 0),
       top: 2, bottom: 2
     })
     .justifyContent(this.msg.isOutgoing ? FlexAlign.End : FlexAlign.Start);
@@ -344,22 +786,121 @@ export struct MessageBubble {
   @Builder
   loadingRing(size: number, percent: number) {
     Stack() {
-      Progress({ value: percent, total: 100, type: ProgressType.Ring })
-        .width(size).height(size).color(Color.White);
-      Text(`${percent}%`).fontSize(Math.max(9, size * 0.24)).fontColor(Color.White);
+      if (percent > 0) {
+        Progress({ value: percent, total: 100, type: ProgressType.Ring })
+          .width(size).height(size).color(Color.White);
+        Text(`${percent}%`).fontSize(Math.max(9, size * 0.24)).fontColor(Color.White);
+      } else {
+        LoadingProgress().width(size * 0.72).height(size * 0.72).color(Color.White);
+      }
     }
     .padding(6)
     .backgroundColor('#00000066')
     .borderRadius(size);
   }
 
+  @Builder
+  mediaLoadState(size: number, percent: number, failed: boolean) {
+    if (failed) {
+      Column({ space: 3 }) {
+        SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(Math.max(17, size * 0.5))
+          .fontColor([Color.White]);
+        Text('重试').fontSize(11).fontColor(Color.White).fontWeight(FontWeight.Medium);
+      }
+      .padding({ left: 10, right: 10, top: 7, bottom: 7 })
+      .backgroundColor('#80000000').borderRadius(18);
+    } else {
+      this.loadingRing(size, percent);
+    }
+  }
+
+  @Builder
+  stickerStatusBadge(failed: boolean, percent: number) {
+    Stack() {
+      Circle({ width: 30, height: 30 }).fill('#78000000')
+        .stroke('#20FFFFFF').strokeWidth(0.7);
+      if (failed) {
+        SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(16).fontColor([Color.White]);
+      } else if (percent > 0) {
+        Progress({ value: percent, total: 100, type: ProgressType.Ring })
+          .width(20).height(20).color(Color.White);
+      } else {
+        LoadingProgress().width(17).height(17).color(Color.White);
+      }
+    }
+    .width(30).height(30)
+    .accessibilityText(failed ? '贴纸加载失败，点击重试' : '正在加载贴纸');
+  }
+
+  @Builder
+  stickerUnavailable() {
+    Column({ space: 6 }) {
+      SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+        .fontSize(24).fontColor([COLOR_TEXT_SECONDARY]);
+      Text('贴纸不可用')
+        .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).fontWeight(FontWeight.Medium);
+    }
+    .width(this.stickerW()).height(this.stickerH())
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor('#12000000')
+    .borderRadius(18);
+  }
+
+  @Builder
+  stickerPausedFallback() {
+    if (this.msg.text !== '') {
+      Text(this.msg.text)
+        .fontSize(this.msg.isEmojiSticker ? 52 : 42)
+        .textAlign(TextAlign.Center)
+        .width(this.stickerW()).height(this.stickerH());
+    } else {
+      Column({ space: 5 }) {
+        SymbolGlyph($r('sys.symbol.pause')).fontSize(21).fontColor([COLOR_TEXT_SECONDARY]);
+        Text('动画已暂停').fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
+      }
+      .width(this.stickerW()).height(this.stickerH())
+      .justifyContent(FlexAlign.Center);
+    }
+  }
+
   // Centered play-triangle badge, overlaid on video thumbnails.
   @Builder
   playBadge(size: number) {
     Stack() {
-      Circle({ width: size, height: size }).fill('#6B728099');
+      Circle({ width: size, height: size }).fill('#73000000')
+        .stroke('#24FFFFFF').strokeWidth(1);
       SymbolGlyph($r('sys.symbol.play_fill')).fontSize(size * 0.42).fontColor([Color.White]).margin({ left: 2 });
     }.width(size).height(size);
+  }
+
+  // One unambiguous center control for video states. Thumbnail loading owns
+  // the center until it finishes; after that this control changes between
+  // download progress, retry, unavailable, and play without stacking icons.
+  @Builder
+  videoActionBadge(size: number) {
+    Stack() {
+      Circle({ width: size, height: size }).fill('#78000000')
+        .stroke('#24FFFFFF').strokeWidth(1);
+      if (this.videoDownloadActive()) {
+        Progress({ value: this.msg.videoProgress, total: 100, type: ProgressType.Ring })
+          .width(size).height(size).color(Color.White);
+        SymbolGlyph($r('sys.symbol.play_fill'))
+          .fontSize(size * 0.34).fontColor([Color.White]).margin({ left: 2 });
+      } else if (this.msg.isAnimation && this.animationDownloadExpected()) {
+        LoadingProgress().width(size * 0.62).height(size * 0.62).color(Color.White);
+      } else if (this.msg.videoFailed || this.animationPlaybackFailed) {
+        SymbolGlyph($r('sys.symbol.arrow_clockwise'))
+          .fontSize(size * 0.4).fontColor([Color.White]);
+      } else if (this.videoFileUnavailable()) {
+        SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+          .fontSize(size * 0.4).fontColor([Color.White]);
+      } else {
+        SymbolGlyph($r('sys.symbol.play_fill'))
+          .fontSize(size * 0.42).fontColor([Color.White]).margin({ left: 2 });
+      }
+    }
+    .width(size).height(size)
+    .animation({ duration: this.effectDuration(160), curve: Curve.EaseOut });
   }
 
   // Masonry album grid: each row is scaled to fill the media width while preserving
@@ -375,18 +916,42 @@ export struct MessageBubble {
             Stack() {
               if (this.albumPaths[cell.idx] !== '') {
                 Image(this.albumPaths[cell.idx].startsWith('/') ? `file://${this.albumPaths[cell.idx]}` : this.albumPaths[cell.idx])
-                  .width(cell.width).height(cell.height).borderRadius(4).objectFit(ImageFit.Cover);
+                  .width(cell.width).height(cell.height).borderRadius(6).objectFit(ImageFit.Cover)
+                  .transition(TransitionEffect.OPACITY
+                    .combine(TransitionEffect.scale({ x: 0.985, y: 0.985 }))
+                    .animation({ duration: this.effectDuration(180), curve: Curve.EaseOut }));
               } else {
-                Column().width(cell.width).height(cell.height).borderRadius(4).backgroundColor('#E0E0E0');
-                if (this.albumPaths[cell.idx] === '') {
-                  this.loadingRing(Math.min(32, Math.min(cell.width, cell.height) * 0.4), this.albumProgress[cell.idx] ?? 0);
+                Column().width(cell.width).height(cell.height).borderRadius(6)
+                  .backgroundColor(this.albumIsVideo[cell.idx] ? '#AEB6C0' : '#D7DCE2');
+                // A video without a downloadable thumbnail remains playable;
+                // don't leave an endless 0% spinner over that intentional state.
+                if ((this.albumFileIds[cell.idx] ?? 0) !== 0 &&
+                  !(this.albumFailed[cell.idx] ?? false)) {
+                  this.mediaLoadState(
+                    Math.min(34, Math.min(cell.width, cell.height) * 0.4),
+                    this.albumProgress[cell.idx] ?? 0,
+                    false
+                  );
+                } else if (!this.albumIsVideo[cell.idx]) {
+                  this.mediaLoadState(
+                    Math.min(34, Math.min(cell.width, cell.height) * 0.4),
+                    0,
+                    true
+                  );
                 }
               }
-              if (this.albumIsVideo[cell.idx]) {
+              if (this.albumIsVideo[cell.idx] &&
+                (this.albumPaths[cell.idx] !== '' ||
+                  (this.albumFileIds[cell.idx] ?? 0) === 0 ||
+                  (this.albumFailed[cell.idx] ?? false))) {
                 this.playBadge(Math.min(40, Math.min(cell.width, cell.height) * 0.46));
               }
             }
             .width(cell.width).height(cell.height)
+            .accessibilityText(this.albumIsVideo[cell.idx]
+              ? `相册第 ${cell.idx + 1} 项，视频，点击播放`
+              : ((this.albumFailed[cell.idx] ?? false)
+                ? '图片加载失败，点击重试' : `相册第 ${cell.idx + 1} 项`))
             .onClick((e: ClickEvent) => { this.onMediaTap(this.albumMemberIds[cell.idx], e.windowX, e.windowY); });
           }, (cell: AlbumCell) => `cell_${cell.idx}`);
         }
@@ -445,6 +1010,12 @@ export struct MessageBubble {
         .backgroundColor(r.isChosen ? COLOR_PRIMARY : '#00000010')
         .borderRadius(11).padding({ left: 8, right: 8, top: 3, bottom: 3 })
         .margin({ right: 4, top: 4 })
+        .stateStyles({
+          normal: this.menuActionNormalStyle,
+          pressed: this.menuActionPressedStyle
+        })
+        .animation({ duration: this.reactionDuration(120), curve: Curve.EaseOut })
+        .onClick(() => { this.onSetReaction(this.msg.id, r.emoji, r.isChosen); })
         .transition(
           TransitionEffect.scale({ x: 0.6, y: 0.6 })
             .combine(TransitionEffect.OPACITY)
@@ -471,6 +1042,12 @@ export struct MessageBubble {
     }
     .width('100%').padding({ left: 16, right: 16, top: 11, bottom: 11 })
     .alignItems(VerticalAlign.Center)
+    .borderRadius(10)
+    .stateStyles({
+      normal: this.menuActionNormalStyle,
+      pressed: this.menuActionPressedStyle
+    })
+    .animation({ duration: this.effectDuration(110), curve: Curve.EaseOut })
     .onClick(onTap);
   }
 
@@ -481,8 +1058,17 @@ export struct MessageBubble {
     Column() {
       Row({ space: 2 }) {
         ForEach(QUICK_REACTIONS, (e: string) => {
-          Text(e).fontSize(24)
-            .padding({ left: 3, right: 3, top: 4, bottom: 4 })
+          Row() {
+            Text(e).fontSize(23);
+          }
+            .width(32).height(34).borderRadius(17)
+            .justifyContent(FlexAlign.Center)
+            .backgroundColor(this.reactionChosen(e) ? '#263391E8' : Color.Transparent)
+            .stateStyles({
+              normal: this.menuActionNormalStyle,
+              pressed: this.menuActionPressedStyle
+            })
+            .animation({ duration: this.reactionDuration(120), curve: Curve.EaseOut })
             .onClick(() => { this.onSetReaction(this.msg.id, e, this.reactionChosen(e)); });
         }, (e: string) => e);
         Blank();
@@ -492,6 +1078,11 @@ export struct MessageBubble {
         }
         .width(30).height(30).borderRadius(15).backgroundColor('#0000000F')
         .justifyContent(FlexAlign.Center)
+        .stateStyles({
+          normal: this.menuActionNormalStyle,
+          pressed: this.menuActionPressedStyle
+        })
+        .animation({ duration: this.reactionDuration(110), curve: Curve.EaseOut })
         .onClick(() => { this.onOpenReactions(this.msg.id); });
       }
       .width('100%').padding({ left: 12, right: 10, top: 8, bottom: 8 })
@@ -531,12 +1122,25 @@ export struct MessageBubble {
       this.albumGrid();
       if (this.albumCaption !== '') {
         // Rich caption: links/@mentions/#hashtags stay tappable in albums too.
-        this.richContent(this.albumCaption, this.albumCaptionEntities, this.inlineMaxW(),
-          this.timeReserveInText());
+        Column() {
+          this.richContent(this.albumCaption, this.albumCaptionEntities, this.inlineMaxW(),
+            this.timeReserveInText());
+        }.margin({ top: 6 });
       }
     } else if (this.msg.contentType === 'text') {
-      this.richContent(this.msg.text, this.msg.textEntities, this.inlineMaxW(),
-        this.timeReserveInText());
+      if (this.msg.text.trim() === '') {
+        Text() {
+          Span('消息内容为空').fontColor(COLOR_TEXT_SECONDARY);
+          if (this.timeReserveInText()) {
+            Span(this.timeReserve()).fontSize(14).fontColor(Color.Transparent);
+          }
+        }
+        .fontSize(this.msgTextSize)
+        .lineHeight(this.msgTextSize * 1.34);
+      } else {
+        this.richContent(this.msg.text, this.msg.textEntities, this.inlineMaxW(),
+          this.timeReserveInText());
+      }
       if (this.msg.linkTitle !== '' || this.msg.linkSiteName !== '' || this.msg.linkDescription !== '') {
         this.linkPreviewCard();
       }
@@ -548,37 +1152,83 @@ export struct MessageBubble {
             thumbPath: this.msg.photoPath,
             boxWidth: this.mediaBox().width,
             boxHeight: this.mediaBox().height,
-            powerCategory: this.autoplayCategory()
-          });
+            powerCategory: this.autoplayCategory(),
+            forcePlay: this.msg.isAnimation && this.animationForcePlay,
+            onPlaybackFailed: (): void => {
+              if (this.msg.isAnimation) {
+                this.onAnimationPlaybackFailed(this.msg.id);
+              }
+            }
+          })
+            // Native texture components can otherwise consume the tap before
+            // the media wrapper gets a chance to toggle GIF pause/play.
+            .hitTestBehavior(HitTestMode.None);
         } else if (this.msg.photoPath !== '') {
           // Keep the thumbnail mounted while fullscreen preview is open. ArkUI's
           // geometry transition can re-parent this Image node; with LazyForEach
           // recycling that occasionally restored only the placeholder/background
           // or an undecoded blank node after returning to the chat.
           Image(this.msg.photoPath.startsWith('/') ? `file://${this.msg.photoPath}` : this.msg.photoPath)
-            .width(this.mediaBox().width).height(this.mediaBox().height).borderRadius(8).objectFit(ImageFit.Cover);
+            .width(this.mediaBox().width).height(this.mediaBox().height).borderRadius(8).objectFit(ImageFit.Cover)
+            .transition(TransitionEffect.OPACITY
+              .combine(TransitionEffect.scale({ x: 0.985, y: 0.985 }))
+              .animation({ duration: this.effectDuration(180), curve: Curve.EaseOut }));
         } else {
           Stack() {
-            Column().width(this.mediaBox().width).height(this.mediaBox().height).borderRadius(8).backgroundColor('#D8D8D8');
-            if (this.msg.photoPath === '') {
-              this.loadingRing(36, this.msg.photoProgress);
+            Column().width(this.mediaBox().width).height(this.mediaBox().height).borderRadius(8)
+              .backgroundColor(this.msg.contentType === 'video' ? '#AEB6C0' : '#D7DCE2');
+            if (this.msg.contentType === 'video') {
+              // Wait only when a real thumbnail file exists. Videos without a
+              // cover remain playable and get the normal play control below.
+              if (this.msg.photoFileId !== 0 && !this.msg.photoFailed) {
+                this.mediaLoadState(36, this.msg.photoProgress, false);
+              }
+            } else {
+              this.mediaLoadState(36, this.msg.photoProgress,
+                this.msg.photoFailed || this.msg.photoFileId === 0);
             }
           }.width(this.mediaBox().width).height(this.mediaBox().height);
         }
         if (this.msg.contentType === 'video' && !this.autoplayInlineVideo()) {
-          this.playBadge(Math.min(58, Math.min(this.mediaBox().width, this.mediaBox().height) * 0.36));
-          Text(this.formatDuration(this.msg.videoDuration))
+          // Don't cover the thumbnail's loader with a second center control.
+          if (this.msg.photoPath !== '' || this.msg.photoFileId === 0 || this.msg.photoFailed) {
+            this.videoActionBadge(
+              Math.min(56, Math.min(this.mediaBox().width, this.mediaBox().height) * 0.34));
+          }
+        }
+        if (this.msg.contentType === 'video' && this.videoMetaText() !== '') {
+          Text(this.videoMetaText())
             .fontSize(11).fontColor(Color.White).backgroundColor('#00000066')
             .borderRadius(4).padding({ left: 5, right: 5, top: 1, bottom: 1 })
-            .position({ x: 8, y: 8 });
+            .position({ x: 8, y: Math.max(8, this.mediaBox().height - 25) });
         }
       }
       .width(this.mediaBox().width).height(this.mediaBox().height)
-      .onClick((e: ClickEvent) => { this.onMediaTap(this.msg.id, e.windowX, e.windowY); });
+      .accessibilityText(this.msg.contentType === 'video'
+        ? this.videoAccessibilityText()
+        : (this.msg.photoFailed ? '图片加载失败，点击重试' : '打开图片'))
+      .onVisibleAreaChange([0.0, 0.08], (visible: boolean, ratio: number): void => {
+        const nextVisible = visible && ratio > 0.02;
+        if (this.mediaVisible !== nextVisible) {
+          this.mediaVisible = nextVisible;
+          if (nextVisible) {
+            this.requestAutoplayDownload();
+          }
+        }
+      })
+      .onClick((e: ClickEvent) => {
+        if (this.msg.isAnimation) {
+          this.onAnimationTap(this.msg.id, this.autoplayInlineVideo());
+        } else {
+          this.onMediaTap(this.msg.id, e.windowX, e.windowY);
+        }
+      });
       // Media caption shown below the media, within the same bubble.
       if (this.msg.text !== '') {
-        this.richContent(this.msg.text, this.msg.textEntities, this.inlineMaxW(),
-          this.timeReserveInText());
+        Column() {
+          this.richContent(this.msg.text, this.msg.textEntities, this.inlineMaxW(),
+            this.timeReserveInText());
+        }.margin({ top: 6 });
       }
     } else if (this.msg.contentType === 'voice') {
       // Voice note with live playback progress — VoiceBubble subscribes to the
@@ -587,93 +1237,361 @@ export struct MessageBubble {
         msgId: this.msg.id,
         durationSec: this.msg.videoDuration,
         isOutgoing: this.msg.isOutgoing,
+        voiceFileId: this.msg.videoFileId,
         voicePath: this.msg.videoPath,
-        onNeedDownload: (): void => { this.onVoiceTap(this.msg.id); }
+        downloadProgress: this.msg.videoProgress,
+        downloadFailed: this.msg.videoFailed,
+        waveform: this.msg.voiceWaveform,
+        listened: this.msg.voiceListened,
+        onNeedDownload: (): void => { this.onVoiceTap(this.msg.id); },
+        onPlaybackStarted: (): void => { this.onVoicePlaybackStarted(this.msg.id); }
       });
-    } else if (this.msg.contentType === 'file') {
-      // Document card: icon circle + file name + size (download progress /
-      // "已下载" once local). Tap opens/downloads; the top-right arrow saves a
-      // copy to a user-chosen location.
-      Stack({ alignContent: Alignment.TopEnd }) {
-        Row({ space: 10 }) {
-          Stack() {
-            Circle({ width: 42, height: 42 }).fill(this.msg.isOutgoing ? '#5CA853' : COLOR_PRIMARY);
-            if (this.msg.videoPath === '' && this.msg.videoProgress > 0 && this.msg.videoProgress < 100) {
-              Progress({ value: this.msg.videoProgress, total: 100, type: ProgressType.Ring })
-                .width(42).height(42).color(Color.White);
-              Text(`${this.msg.videoProgress}`).fontSize(11).fontColor(Color.White);
-            } else {
-              SymbolGlyph($r(this.msg.videoPath !== '' ? 'sys.symbol.checkmark' : 'sys.symbol.doc_text'))
-                .fontSize(20).fontColor([Color.White]);
-            }
-          }.width(42).height(42);
-          Column({ space: 2 }) {
-            Text(this.msg.videoFileName !== '' ? this.msg.videoFileName : '文件')
-              .fontSize(15).fontColor(COLOR_BUBBLE_TEXT).fontWeight(FontWeight.Medium)
-              .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-              .constraintSize({ maxWidth: this.inlineMaxW() - 84 });
-            Text(this.fileSubtitle())
-              .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
-          }.alignItems(HorizontalAlign.Start);
-        }
-        .alignItems(VerticalAlign.Center)
-        .padding({ top: 2, bottom: 2, right: 30 })
-        .onClick(() => { this.onFileTap(this.msg.id); });
-        SymbolGlyph($r('sys.symbol.arrow_down_circle'))
-          .fontSize(20).fontColor([COLOR_TEXT_SECONDARY])
-          .onClick(() => { this.onFileSave(this.msg.id); });
-      }
+    } else if (this.msg.contentType === 'audio') {
+      // Music is intentionally distinct from a voice note: album artwork and
+      // metadata lead the card, while the shared player guarantees that only
+      // one voice/music item owns audio focus at a time.
+      MusicBubble({
+        msgId: this.msg.id,
+        durationSec: this.msg.videoDuration,
+        isOutgoing: this.msg.isOutgoing,
+        audioFileId: this.msg.videoFileId,
+        audioPath: this.msg.videoPath,
+        fileSize: this.msg.videoFileSize,
+        fileName: this.msg.videoFileName,
+        title: this.msg.audioTitle,
+        performer: this.msg.audioPerformer,
+        coverPath: this.msg.photoPath,
+        coverFailed: this.msg.photoFailed,
+        downloadProgress: this.msg.videoProgress,
+        downloadFailed: this.msg.videoFailed,
+        downloadActive: this.msg.mediaDownloadActive,
+        queuePosition: this.audioQueuePosition,
+        queueLength: this.audioQueueLength,
+        hasPrevious: this.audioHasPrevious,
+        hasNext: this.audioHasNext,
+        maxWidth: this.inlineMaxW(),
+        onToggle: (): void => { this.onAudioTap(this.msg.id); },
+        onPrevious: (): void => { this.onAudioPrevious(this.msg.id); },
+        onNext: (): void => { this.onAudioNext(this.msg.id); },
+        onSeek: (fraction: number): void => { this.onAudioSeek(this.msg.id, fraction); }
+      });
       if (this.msg.text !== '') {
-        this.richContent(this.msg.text, this.msg.textEntities, this.inlineMaxW(),
-          this.timeReserveInText());
+        Column() {
+          this.richContent(this.msg.text, this.msg.textEntities, this.inlineMaxW(),
+            this.timeReserveInText());
+        }.margin({ top: 5 });
       }
+    } else if (this.msg.contentType === 'file') {
+      FileBubble({
+        fileId: this.msg.videoFileId,
+        fileName: this.msg.videoFileName,
+        mimeType: this.msg.videoMimeType,
+        fileSize: this.msg.videoFileSize,
+        filePath: this.msg.videoPath,
+        downloadProgress: this.msg.videoProgress,
+        downloadFailed: this.msg.videoFailed,
+        downloadActive: this.msg.mediaDownloadActive,
+        maxWidth: this.inlineMaxW(),
+        onOpen: (): void => { this.onFileTap(this.msg.id); },
+        onSave: (): void => { this.onFileSave(this.msg.id); }
+      });
+      if (this.msg.text !== '') {
+        Column() {
+          this.richContent(this.msg.text, this.msg.textEntities, this.inlineMaxW(),
+            this.timeReserveInText());
+        }.margin({ top: 5 });
+      }
+    } else if (this.msg.contentType === 'contact') {
+      ContactBubble({
+        firstName: this.msg.contactFirstName,
+        lastName: this.msg.contactLastName,
+        phone: this.msg.contactPhone,
+        vcard: this.msg.contactVcard,
+        userId: this.msg.contactUserId,
+        avatarPath: this.msg.contactAvatarPath,
+        maxWidth: this.inlineMaxW(),
+        onOpen: (): void => {
+          this.onContactOpen(
+            this.msg.contactUserId,
+            this.msg.contactPhone,
+            this.msg.contactVcard
+          );
+        },
+        onCall: (): void => { this.onPhoneOpen(this.msg.contactPhone); }
+      });
+    } else if (this.msg.contentType === 'location' || this.msg.contentType === 'venue') {
+      LocationBubble({
+        latitude: this.msg.locationLatitude,
+        longitude: this.msg.locationLongitude,
+        accuracy: this.msg.locationAccuracy,
+        valid: this.msg.locationValid,
+        livePeriod: this.msg.locationLivePeriod,
+        expiresIn: this.msg.locationExpiresIn,
+        messageDate: this.msg.date,
+        nowSec: this.nowSec,
+        venueTitle: this.msg.venueTitle,
+        venueAddress: this.msg.venueAddress,
+        venueProvider: this.msg.venueProvider,
+        proximityRadius: this.msg.locationProximityRadius,
+        maxWidth: this.inlineMaxW(),
+        onOpen: (): void => {
+          this.onLocationOpen(
+            this.msg.locationLatitude,
+            this.msg.locationLongitude,
+            this.locationLabel(),
+            this.msg.locationValid
+          );
+        }
+      });
+    } else if (this.msg.contentType === 'poll') {
+      PollBubble({
+        messageId: this.msg.id,
+        question: this.msg.pollQuestion,
+        options: this.msg.pollOptions,
+        totalVoterCount: this.msg.pollTotalVoterCount,
+        isAnonymous: this.msg.pollIsAnonymous,
+        isQuiz: this.msg.pollIsQuiz,
+        allowMultiple: this.msg.pollAllowMultiple,
+        correctOptionId: this.msg.pollCorrectOptionId,
+        explanation: this.msg.pollExplanation,
+        closeDate: this.msg.pollCloseDate,
+        isClosed: this.msg.pollIsClosed,
+        pending: this.msg.pollVotePending,
+        errorText: this.msg.pollVoteError,
+        nowSec: this.nowSec,
+        revision: this.pollRevision(),
+        maxWidth: this.inlineMaxW(),
+        onVote: (messageId: number, optionIds: number[]): void => {
+          this.onPollVote(messageId, optionIds);
+        }
+      });
+    } else if (this.msg.contentType === 'dice') {
+      DiceBubble({
+        emoji: this.msg.diceEmoji,
+        value: this.msg.diceValue,
+        hasFinalState: this.msg.diceHasFinalState,
+        successFrame: this.msg.diceSuccessFrame
+      });
+    } else if (this.msg.contentType === 'game') {
+      GameBubble({
+        messageId: this.msg.id,
+        title: this.msg.gameTitle,
+        shortName: this.msg.gameShortName,
+        description: this.msg.gameDescription,
+        gameText: this.msg.gameText,
+        photoPath: this.msg.photoPath,
+        photoFileId: this.msg.photoFileId,
+        photoProgress: this.msg.photoProgress,
+        photoFailed: this.msg.photoFailed,
+        maxWidth: this.inlineMaxW(),
+        onOpen: (messageId: number): void => { this.onGameOpen(messageId); },
+        onRetryPhoto: (messageId: number): void => { this.onGamePhotoRetry(messageId); }
+      });
+    } else if (this.msg.contentType === 'paidMedia') {
+      PaidMediaBubble({
+        messageId: this.msg.id,
+        locked: this.msg.paidMediaLocked,
+        starCount: this.msg.paidMediaStarCount,
+        mediaCount: this.msg.paidMediaCount,
+        mediaKind: this.msg.paidMediaKind,
+        caption: this.msg.text,
+        photoPath: this.msg.photoPath,
+        photoFileId: this.msg.photoFileId,
+        photoProgress: this.msg.photoProgress,
+        photoFailed: this.msg.photoFailed,
+        pending: this.paidMediaPending,
+        maxWidth: this.inlineMaxW(),
+        onUnlock: (messageId: number): void => { this.onPaidMediaUnlock(messageId); },
+        onOpen: (messageId: number): void => { this.onPaidMediaOpen(messageId); },
+        onRetryPhoto: (messageId: number): void => {
+          this.onSpecialPhotoRetry(messageId);
+        }
+      });
+    } else if (this.msg.contentType === 'gift') {
+      GiftBubble({
+        messageId: this.msg.id,
+        kind: this.msg.giftKind,
+        title: this.msg.giftTitle,
+        value: this.msg.giftValue,
+        status: this.msg.giftStatus,
+        text: this.msg.text,
+        code: this.msg.giftCode,
+        refunded: this.msg.giftRefunded,
+        photoPath: this.msg.photoPath,
+        photoFileId: this.msg.photoFileId,
+        photoProgress: this.msg.photoProgress,
+        photoFailed: this.msg.photoFailed,
+        maxWidth: this.inlineMaxW(),
+        onRetryPhoto: (messageId: number): void => {
+          this.onSpecialPhotoRetry(messageId);
+        },
+        onCopyCode: (code: string): void => { this.onGiftCodeCopy(code); }
+      });
+    } else if (this.msg.contentType === 'giveaway') {
+      GiveawayBubble({
+        messageId: this.msg.id,
+        state: this.msg.giveawayState,
+        winnerCount: this.msg.giveawayWinnerCount,
+        prize: this.msg.giveawayPrize,
+        description: this.msg.giveawayDescription,
+        selectionDate: this.msg.giveawaySelectionDate,
+        unclaimedCount: this.msg.giveawayUnclaimedCount,
+        originalMessageId: this.msg.giveawayMessageId,
+        boostedChatId: this.msg.giveawayBoostedChatId,
+        refunded: this.msg.giveawayRefunded,
+        onlyNewMembers: this.msg.giveawayOnlyNewMembers,
+        photoPath: this.msg.photoPath,
+        maxWidth: this.inlineMaxW(),
+        onOpenOriginal: (chatId: number, messageId: number): void => {
+          this.onGiveawayOpen(chatId, messageId);
+        }
+      });
     } else if (this.msg.contentType === 'emoji' || this.msg.contentType === 'customEmoji') {
-      // Animated-emoji fallback: the emoji itself, big and bare (no bubble).
-      Text(this.msg.text).fontSize(56).padding({ bottom: 4 });
-    } else if (this.msg.contentType === 'sticker') {
-      // Sticker, bare (no bubble): TGS animates via Lottie once its source file
-      // is local; static WEBP (and WEBM's raster still) render as an image.
-      // 聊天设置 → 减弱动态效果: show the sticker's static thumbnail instead of
-      // spinning up a Lottie/video player for every one of them.
-      if (this.reduceAnim && this.msg.photoPath !== '') {
-        Image(this.msg.photoPath.startsWith('/') ? `file://${this.msg.photoPath}` : this.msg.photoPath)
-          .width(this.stickerW()).height(this.stickerH()).objectFit(ImageFit.Contain);
-      } else if (this.msg.stickerFormat === 'tgs' && this.msg.stickerPath !== '') {
-        TgsStickerView({ tgsPath: this.msg.stickerPath, thumbPath: this.msg.photoPath,
-          boxWidth: this.stickerW(), boxHeight: this.stickerH(),
-          powerCategory: this.msg.customEmojiId !== '' ? 'emojiChat' : 'sticker' });
-      } else if (this.msg.stickerFormat === 'webm' && this.msg.stickerPath !== '') {
-        SmartLoopVideo({ videoPath: this.msg.stickerPath, thumbPath: this.msg.photoPath,
-          boxWidth: this.stickerW(), boxHeight: this.stickerH(),
-          powerCategory: this.msg.customEmojiId !== '' ? 'emojiChat' : 'sticker' });
-      } else if (this.msg.photoPath !== '') {
-        Image(this.msg.photoPath.startsWith('/') ? `file://${this.msg.photoPath}` : this.msg.photoPath)
-          .width(this.stickerW()).height(this.stickerH()).objectFit(ImageFit.Contain)
-          .transition(TransitionEffect.OPACITY.animation({
-            duration: this.effectDuration(250), curve: Curve.EaseOut
-          }));
-      } else {
-        Stack() {
-          this.loadingRing(32, this.msg.photoProgress);
-        }.width(this.stickerW()).height(this.stickerH());
+      // Keep the Unicode alternative visible while a custom emoji resolves;
+      // a small corner state communicates loading without replacing it.
+      Stack() {
+        if (this.msg.text !== '') {
+          Text(this.msg.text)
+            .fontSize(this.msg.contentType === 'customEmoji' ? 52 : 56)
+            .textAlign(TextAlign.Center);
+        } else {
+          Text('表情不可用')
+            .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).fontWeight(FontWeight.Medium);
+        }
+        if (this.msg.contentType === 'customEmoji') {
+          Column() {
+            if (this.msg.photoFailed) {
+              this.stickerStatusBadge(true, 0);
+            } else {
+              LoadingProgress().width(14).height(14).color(COLOR_PRIMARY)
+                .backgroundColor('#CCFFFFFF').borderRadius(9).padding(2);
+            }
+          }
+          .width('100%').height('100%')
+          .padding({ right: 1, top: 1 })
+          .justifyContent(FlexAlign.Start)
+          .alignItems(HorizontalAlign.End);
+        }
       }
+      .width(72).height(68)
+      .alignContent(Alignment.Center)
+      .onClick(() => {
+        if (this.msg.contentType === 'customEmoji' && this.msg.photoFailed) {
+          this.onStickerRetry(this.msg.id);
+        }
+      })
+      .accessibilityText(this.msg.contentType === 'customEmoji'
+        ? (this.msg.photoFailed ? '自定义表情加载失败，点击重试' : '正在加载自定义表情')
+        : this.msg.text);
+    } else if (this.msg.contentType === 'sticker') {
+      Stack() {
+        if (this.stickerAnimationSuspended() && this.msg.photoPath === '') {
+          this.stickerPausedFallback();
+        } else if (this.stickerPlaybackFailed && this.msg.photoPath !== '') {
+          Image(this.msg.photoPath.startsWith('/') ? `file://${this.msg.photoPath}` : this.msg.photoPath)
+            .width(this.stickerW()).height(this.stickerH()).objectFit(ImageFit.Contain);
+        } else if (this.stickerAnimationSuspended() && this.msg.photoPath !== '') {
+          Image(this.msg.photoPath.startsWith('/') ? `file://${this.msg.photoPath}` : this.msg.photoPath)
+            .width(this.stickerW()).height(this.stickerH()).objectFit(ImageFit.Contain);
+        } else if (!this.stickerPlaybackFailed &&
+          this.msg.stickerFormat === 'tgs' && this.msg.stickerPath !== '') {
+          TgsStickerView({ tgsPath: this.msg.stickerPath, thumbPath: this.msg.photoPath,
+            boxWidth: this.stickerW(), boxHeight: this.stickerH(),
+            powerCategory: this.msg.isEmojiSticker ? 'emojiChat' : 'sticker',
+            onFailed: (): void => { this.stickerPlaybackFailed = true; } })
+            .hitTestBehavior(HitTestMode.None);
+        } else if (!this.stickerPlaybackFailed &&
+          this.msg.stickerFormat === 'webm' && this.msg.stickerPath !== '') {
+          SmartLoopVideo({ videoPath: this.msg.stickerPath, thumbPath: this.msg.photoPath,
+            boxWidth: this.stickerW(), boxHeight: this.stickerH(),
+            powerCategory: this.msg.isEmojiSticker ? 'emojiChat' : 'sticker',
+            onPlaybackFailed: (): void => { this.stickerPlaybackFailed = true; } })
+            .hitTestBehavior(HitTestMode.None);
+        } else if (this.msg.photoPath !== '') {
+          Image(this.msg.photoPath.startsWith('/') ? `file://${this.msg.photoPath}` : this.msg.photoPath)
+            .width(this.stickerW()).height(this.stickerH()).objectFit(ImageFit.Contain)
+            .transition(TransitionEffect.OPACITY.animation({
+              duration: this.effectDuration(180), curve: Curve.EaseOut
+            }));
+        } else if (this.msg.photoFileId === 0 && this.msg.stickerFileId === 0) {
+          this.stickerUnavailable();
+        } else {
+          Stack()
+            .width(this.stickerW()).height(this.stickerH())
+            .backgroundColor('#10000000').borderRadius(18);
+        }
+
+        if (this.msg.stickerPath === '' && this.msg.stickerFileId !== 0) {
+          Column() {
+            this.stickerStatusBadge(this.msg.stickerFailed,
+              this.msg.stickerProgress > 0 ? this.msg.stickerProgress : this.msg.photoProgress);
+          }
+          .width('100%').height('100%')
+          .padding({ right: 7, top: 7 })
+          .justifyContent(FlexAlign.Start)
+          .alignItems(HorizontalAlign.End);
+        } else if (this.msg.photoPath === '' && this.msg.photoFileId !== 0) {
+          Column() {
+            this.stickerStatusBadge(this.msg.photoFailed, this.msg.photoProgress);
+          }
+          .width('100%').height('100%')
+          .justifyContent(FlexAlign.Center)
+          .alignItems(HorizontalAlign.Center);
+        } else if (this.stickerPlaybackFailed) {
+          Column() {
+            this.stickerStatusBadge(true, 0);
+          }
+          .width('100%').height('100%')
+          .padding({ right: 7, top: 7 })
+          .justifyContent(FlexAlign.Start)
+          .alignItems(HorizontalAlign.End);
+        }
+      }
+      .width(this.stickerW()).height(this.stickerH())
+      .onClick(() => {
+        if (this.stickerPlaybackFailed) {
+          this.stickerPlaybackFailed = false;
+          return;
+        }
+        if (this.msg.stickerFailed || this.msg.photoFailed) {
+          this.onStickerRetry(this.msg.id);
+        }
+      })
+      .accessibilityText(this.msg.stickerFailed || this.msg.photoFailed || this.stickerPlaybackFailed
+        ? '贴纸加载失败，点击重试' : '贴纸');
+    } else if (this.msg.isUnsupportedMessage) {
+      Row({ space: 8 }) {
+        SymbolGlyph($r('sys.symbol.info_circle'))
+          .fontSize(20).fontColor([COLOR_PRIMARY]).width(22);
+        Column({ space: 1 }) {
+          Text(this.fallbackLabel())
+            .fontSize(13).fontColor(COLOR_BUBBLE_TEXT).fontWeight(FontWeight.Medium)
+            .maxLines(3).textOverflow({ overflow: TextOverflow.Ellipsis });
+          Text() {
+            Span('当前版本暂无法展示完整内容').fontColor(COLOR_TEXT_SECONDARY);
+            Span(this.timeReserve()).fontSize(12).fontColor(Color.Transparent);
+          }.fontSize(11);
+        }.alignItems(HorizontalAlign.Start);
+      }
+      .constraintSize({ maxWidth: this.inlineMaxW() })
+      .padding({ top: 2, bottom: 2 })
+      .accessibilityText(`${this.fallbackLabel()}，当前版本暂无法展示完整内容`);
     } else {
       Text() {
-        Span(this.msg.placeholderLabel).fontColor(COLOR_TEXT_SECONDARY);
+        Span(this.fallbackLabel()).fontColor(COLOR_TEXT_SECONDARY);
         Span(this.timeReserve()).fontSize(14).fontColor(Color.Transparent);
       }.fontSize(this.msgTextSize);
     }
   }
 
-  // Document card subtitle: size while idle, percent while downloading, 已下载 when local.
-  private fileSubtitle(): string {
-    if (this.msg.videoPath !== '') {
-      return `${formatFileSize(this.msg.videoFileSize)} · 已下载`;
-    }
-    if (this.msg.videoProgress > 0 && this.msg.videoProgress < 100) {
-      return `下载中 ${this.msg.videoProgress}%`;
-    }
-    return formatFileSize(this.msg.videoFileSize);
+  private pollRevision(): string {
+    let revision = `${this.msg.pollId}_${this.msg.pollIsClosed}_${this.msg.pollTotalVoterCount}` +
+      `_${this.msg.pollVotePending}_${this.msg.pollCorrectOptionId}`;
+    this.msg.pollOptions.forEach((option, index: number): void => {
+      revision += `_${index}_${option.voterCount}_${option.votePercentage}` +
+        `_${option.isChosen}_${option.isBeingChosen}`;
+    });
+    return revision;
   }
 
   // Big bare emoji / stickers render without bubble background/tail, like bare media.
@@ -695,16 +1613,45 @@ export struct MessageBubble {
     return h >= w ? STICKER_MAX : Math.round(STICKER_MAX * (h / w));
   }
 
+  private stickerAnimationSuspended(): boolean {
+    if (this.msg.stickerFormat !== 'tgs' && this.msg.stickerFormat !== 'webm') {
+      return false;
+    }
+    if (this.powerSaving || this.reduceAnim) {
+      return true;
+    }
+    if (this.msg.isEmojiSticker) {
+      return !this.emojiEnabled || !this.emojiChatEnabled;
+    }
+    return !this.stickersEnabled || !this.stickerAutoplay;
+  }
+
+  private locationLabel(): string {
+    const title = this.msg.venueTitle.trim();
+    const address = this.msg.venueAddress.trim();
+    if (title !== '' && address !== '') {
+      return `${title}，${address}`;
+    }
+    return title !== '' ? title : address;
+  }
+
   // Whether the timestamp overlay should reserve space at the end of the last
   // text line (only when the time actually lands there — not when reactions
   // or a comments bar sit below the text).
+  private replyUsesOwnTimeLine(): boolean {
+    return this.msg.replyText !== '';
+  }
+
   private timeReserveInText(): boolean {
-    return this.msg.reactions.length === 0;
+    return !this.replyUsesOwnTimeLine() && this.msg.reactions.length === 0;
   }
 
   // Bare media at the bubble's bottom edge → the timestamp needs a translucent
   // chip over the image instead of plain gray text.
   private timeOnMedia(): boolean {
+    if (this.replyUsesOwnTimeLine()) {
+      return false;
+    }
     if (this.msg.reactions.length > 0) {
       return false;
     }
@@ -722,8 +1669,14 @@ export struct MessageBubble {
   @Builder
   timeOverlay() {
     Row({ space: 4 }) {
-      Text(formatTime(this.msg.date, this.nowSec)).fontSize(11)
-        .fontColor(this.timeOnMedia() ? Color.White : COLOR_TEXT_SECONDARY);
+      if (this.msg.editDate > 0) {
+        Text('已编辑').fontSize(10.5)
+          .fontColor(this.timeOnMedia() ? Color.White : COLOR_TEXT_SECONDARY);
+      }
+      if (this.messageTimeText() !== '') {
+        Text(this.messageTimeText()).fontSize(11)
+          .fontColor(this.timeOnMedia() ? Color.White : COLOR_TEXT_SECONDARY);
+      }
       if (this.msg.isOutgoing) {
         this.statusIcon();
       }
@@ -731,7 +1684,8 @@ export struct MessageBubble {
     .padding(this.timeOnMedia() ? { left: 5, right: 5, top: 1, bottom: 1 } : { left: 0 })
     .backgroundColor(this.timeOnMedia() ? '#00000066' : Color.Transparent)
     .borderRadius(8)
-    .margin(this.timeOnMedia() ? { right: 6, bottom: 6 } : { right: 0, bottom: 2 });
+    .margin(this.timeOnMedia() ? { right: 6, bottom: 6 } : { right: 0, bottom: 2 })
+    .animation({ duration: this.effectDuration(140), curve: Curve.EaseOut });
   }
 
   // Service/system messages (title/photo changes, joins, pins, ...) render as
@@ -742,17 +1696,69 @@ export struct MessageBubble {
     return this.msg.isVideoChatStarted && this.liveGroupCallId > 0;
   }
 
+  private systemPillIcon(): string {
+    if (this.msg.systemKind === 'people') {
+      return 'sys.symbol.person_2';
+    }
+    if (this.msg.systemKind === 'pin') {
+      return 'sys.symbol.pin';
+    }
+    if (this.msg.systemKind === 'call') {
+      return 'sys.symbol.video';
+    }
+    if (this.msg.systemKind === 'timer') {
+      return 'sys.symbol.clock';
+    }
+    if (this.msg.systemKind === 'payment') {
+      return 'sys.symbol.gift';
+    }
+    if (this.msg.systemKind === 'security') {
+      return 'sys.symbol.lock_fill';
+    }
+    if (this.msg.systemKind === 'topic') {
+      return 'sys.symbol.message';
+    }
+    return 'sys.symbol.info_circle';
+  }
+
   @Builder
   systemPill() {
-    Text(this.msg.placeholderLabel)
-      .fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
-      .textAlign(TextAlign.Center)
-      .constraintSize({ maxWidth: this.screenW * 0.8 })
-      .backgroundColor($r('app.color.system_pill')).borderRadius(10)
-      .padding({ left: 10, right: 10, top: 4, bottom: 4 })
-      .onClick(this.liveVideoChatTappable()
-        ? (() => { this.onLiveStreamTap(this.liveGroupCallId); })
-        : undefined);
+    Row({ space: 5 }) {
+      SymbolGlyph($r(this.systemPillIcon()))
+        .fontSize(12.5)
+        .fontColor([this.liveVideoChatTappable() ? COLOR_PRIMARY : COLOR_TEXT_SECONDARY])
+        .width(14);
+      Text(this.fallbackLabel())
+        .fontSize(12)
+        .fontColor(this.liveVideoChatTappable() ? COLOR_PRIMARY : COLOR_TEXT_SECONDARY)
+        .fontWeight(this.liveVideoChatTappable() ? FontWeight.Medium : FontWeight.Regular)
+        .textAlign(TextAlign.Center)
+        .constraintSize({ maxWidth: this.screenW * 0.68 });
+      if (this.liveVideoChatTappable()) {
+        SymbolGlyph($r('sys.symbol.chevron_right'))
+          .fontSize(10).fontColor([COLOR_PRIMARY]).width(10);
+      }
+    }
+    .constraintSize({ maxWidth: this.screenW * 0.82 })
+    .backgroundColor(this.liveVideoChatTappable() ? '#183478F6' : $r('app.color.system_pill'))
+    .border({
+      width: 0.5,
+      color: this.liveVideoChatTappable() ? '#303478F6' : '#16FFFFFF'
+    })
+    .borderRadius(12)
+    .padding({ left: 9, right: 9, top: 4, bottom: 4 })
+    .stateStyles({
+      normal: this.systemPillNormalStyle,
+      pressed: this.systemPillPressedStyle
+    })
+    .animation({ duration: this.effectDuration(100), curve: Curve.EaseOut })
+    .onClick((): void => {
+      if (this.liveVideoChatTappable()) {
+        this.onLiveStreamTap(this.liveGroupCallId);
+      }
+    })
+    .accessibilityText(this.liveVideoChatTappable()
+      ? `${this.fallbackLabel()}，双击进入` : this.fallbackLabel());
   }
 
   build() {
@@ -807,11 +1813,13 @@ export struct MessageBubble {
       }
       // Telegram-style bubble tail poking out of the bottom corner (left for
       // incoming, right for outgoing); the adjacent bubble corner is squared off.
-      if (!this.msg.isOutgoing && !this.isBareEmoji()) {
+      if (!this.msg.isOutgoing && this.hasBubbleTail()) {
         Polygon({ width: 8, height: 12 })
           .points([[8, 0], [0, 12], [8, 12]])
           .fill(COLOR_BUBBLE_IN)
           .margin({ right: -1 });
+      } else if (!this.msg.isOutgoing && !this.isBareEmoji()) {
+        Column().width(7);
       }
       Column() {
         if (this.msg.forwardFrom !== '') {
@@ -838,7 +1846,12 @@ export struct MessageBubble {
             if (this.msg.reactions.length > 0) {
               this.reactionsRow();
             }
-          }.alignItems(HorizontalAlign.Start);
+          }
+          .alignItems(HorizontalAlign.Start)
+          // A reply preview can be wider/taller than the new content. Keep the
+          // timestamp in a dedicated bottom strip so the Stack overlay never
+          // lands on the gray quoted-message surface.
+          .padding({ bottom: this.replyUsesOwnTimeLine() ? 18 : 0 });
           this.timeOverlay();
         }
         if (this.isChannel && this.msg.commentCount > 0) {
@@ -846,28 +1859,44 @@ export struct MessageBubble {
         }
       }
       .alignItems(HorizontalAlign.Start)
-      .constraintSize({ maxWidth: '78%' })
+      .constraintSize({ maxWidth: this.bubbleMaxW() })
       .backgroundColor(this.isBareEmoji() ? Color.Transparent
         : (this.msg.isOutgoing ? COLOR_BUBBLE_OUT : COLOR_BUBBLE_IN))
-      // The tail corner stays tight (min 2vp) however round the rest gets.
+      // Adjacent rows share a restrained 7vp corner. Only the final row gets
+      // the tight tail corner; a single-row run keeps the configured top arc.
       .borderRadius({
-        topLeft: this.bubbleRadius, topRight: this.bubbleRadius,
-        bottomLeft: this.msg.isOutgoing ? this.bubbleRadius : 2,
-        bottomRight: this.msg.isOutgoing ? 2 : this.bubbleRadius
+        topLeft: this.msg.isOutgoing ? this.bubbleRadius :
+          (this.showSenderName ? this.bubbleRadius : this.runCornerRadius()),
+        topRight: this.msg.isOutgoing ?
+          (this.showSenderName ? this.bubbleRadius : this.runCornerRadius()) : this.bubbleRadius,
+        bottomLeft: this.msg.isOutgoing ? this.bubbleRadius :
+          (this.showAvatar ? this.tailCornerRadius() : this.runCornerRadius()),
+        bottomRight: this.msg.isOutgoing ?
+          (this.showAvatar ? this.tailCornerRadius() : this.runCornerRadius()) : this.bubbleRadius
       })
       .padding(this.isBareEmoji() ? 0 : 8)
       .shadow(this.isBareEmoji() ? { radius: 0, color: Color.Transparent, offsetX: 0, offsetY: 0 }
         : { radius: 2, color: '#14000000', offsetX: 0, offsetY: 1 })
+      .stateStyles({
+        normal: this.bubbleNormalStyle,
+        pressed: this.bubblePressedStyle
+      })
+      .animation({ duration: this.effectDuration(110), curve: Curve.EaseOut })
       .onAreaChange((_old: Area, area: Area) => { this.bubbleW = area.width as number; })
       .bindContextMenu(this.msgContextMenu(), ResponseType.LongPress);
-      if (this.msg.isOutgoing && !this.isBareEmoji()) {
+      if (this.msg.isOutgoing && this.hasBubbleTail()) {
         Polygon({ width: 8, height: 12 })
           .points([[0, 0], [8, 12], [0, 12]])
           .fill(COLOR_BUBBLE_OUT)
           .margin({ left: -1 });
+      } else if (this.msg.isOutgoing && !this.isBareEmoji()) {
+        Column().width(7);
       }
       }
-      .width('100%').padding({ left: 10, right: 10, top: 3, bottom: 3 })
+      .width('100%').padding({
+        left: 10, right: 10,
+        top: this.rowTopPadding(), bottom: this.rowBottomPadding()
+      })
       .justifyContent(this.msg.isOutgoing ? FlexAlign.End : FlexAlign.Start)
       .alignItems(VerticalAlign.Bottom);
       if (this.msg.inlineButtons.length > 0) {

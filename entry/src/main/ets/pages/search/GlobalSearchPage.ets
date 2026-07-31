@@ -1,4 +1,4 @@
-import { router } from '@kit.ArkUI';
+import { promptAction, router } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { getTdClient, getTdFilesDirectory } from '../../tdkit/Globals';
@@ -9,7 +9,14 @@ import { GlobalSearchStore, SearchRow } from '../../store/GlobalSearchStore';
 import { AvatarView } from '../chatlist/AvatarView';
 import { formatPreview } from '../../util/formatPreview';
 import { formatTime } from '../../util/formatTime';
-import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import {
+  COLOR_PRIMARY,
+  COLOR_TEXT_PRIMARY,
+  COLOR_TEXT_SECONDARY,
+  COLOR_TAB_SELECTED,
+  COLOR_TAB_UNSELECTED,
+  COLOR_TAB_PILL_BG
+} from '../../util/theme';
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
 
 interface FoundItem {
@@ -28,18 +35,22 @@ interface FoundItem {
   isChannelChat: boolean; // resolved chat type — 频道 tab filters messages by it
 }
 
-const TABS: string[] = ['聊天', '频道', '应用', '帖子', '公开贴文', '媒体', '下载', '链接', '文件', '音频', '语音'];
+// Telegram global-search categories. Public post search belongs to 帖子;
+// hashtag search is a mode of that tab, not a second visible category.
+const TABS: string[] = ['聊天', '频道', '应用', '帖子', '媒体', '下载', '链接', '文件', '音乐', '语音'];
 const TAB_CHATS: number = 0;
 const TAB_CHANNELS: number = 1;
 const TAB_APPS: number = 2;
 const TAB_POSTS: number = 3;
-const TAB_PUBLIC_POSTS: number = 4;
-const TAB_MEDIA: number = 5;
-const TAB_DOWNLOADS: number = 6;
-const TAB_LINKS: number = 7;
-const TAB_FILES: number = 8;
-const TAB_AUDIO: number = 9;
-const TAB_VOICE: number = 10;
+const TAB_MEDIA: number = 4;
+const TAB_DOWNLOADS: number = 5;
+const TAB_LINKS: number = 6;
+const TAB_FILES: number = 7;
+const TAB_AUDIO: number = 8;
+const TAB_VOICE: number = 9;
+const SEARCH_TAB_BAR_HEIGHT: number = 44;
+const SEARCH_TAB_INDICATOR_HEIGHT: number = 32;
+const SEARCH_RESULT_DIVIDER_INSET: number = 72;
 
 // TDLib message filter for the typed-message tabs ('' = no filter).
 function filterTypeForTab(tab: number): string {
@@ -91,36 +102,119 @@ struct GlobalSearchPage {
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @State query: string = '';
   @State tab: number = 0;
+  @State searchFocused: boolean = false;
+  @State searchPending: boolean = false;
+  @State clearPressed: boolean = false;
+  @State cancelPressed: boolean = false;
+  @State closingSearch: boolean = false;
+  @State searchHeaderVisible: boolean = false;
+  @State resultOpeningKey: string = '';
   @State topUsers: SearchRow[] = [];
   @State recent: SearchRow[] = [];
+  @State recentlyOpened: SearchRow[] = [];
+  @State topLoaded: boolean = false;
+  @State recentLoaded: boolean = false;
+  @State openedLoaded: boolean = false;
+  @State topFailed: boolean = false;
+  @State recentFailed: boolean = false;
+  @State openedFailed: boolean = false;
+  @State clearingRecent: boolean = false;
   @State chatResults: SearchRow[] = [];
   @State chatSearching: boolean = false;
+  @State chatSearchFailed: boolean = false;
   @State joinedChannels: SearchRow[] = [];
   @State similarChannels: SearchRow[] = [];
   @State apps: SearchRow[] = [];
+  @State joinedLoaded: boolean = false;
+  @State similarLoaded: boolean = false;
+  @State appsLoaded: boolean = false;
+  @State joinedFailed: boolean = false;
+  @State similarFailed: boolean = false;
+  @State appsFailed: boolean = false;
   // 帖子 (message) search state.
   @State items: FoundItem[] = [];
   @State loading: boolean = false;
+  @State pagingBusy: boolean = false;
+  @State messageError: string = '';
+  @State pagingError: boolean = false;
+  @State loadedPageCount: number = 0;
   @State nextOffset: string = '';
   @State searchedOnce: boolean = false;
   private nowSec: number = Math.floor(Date.now() / 1000);
   private seq: number = 0;
-  private pagingBusy: boolean = false;
+  private failedPagingOffset: string = '';
   private autoPages: number = 0; // consecutive auto-fetched pages that rendered nothing
   private debounceTimer: number = -1;
+  private searchHeaderTimer: number = -1;
+  private closeSearchTimer: number = -1;
+  private hashtagSearchSeq: number = 0;
+  private postsQuotaSeq: number = 0;
+  private resultOpeningTimer: number = -1;
+  private clearRecentDialogOpen: boolean = false;
   private store: GlobalSearchStore | null = null;
   private unsub: (() => void) | null = null;
   // Sliding selection pill (same pattern as the chat-list tab bar): frames are
   // recorded per pill; the pill interpolates during content swipes.
   @State indicatorX: number = 8;
   @State indicatorW: number = 0;
-  @State indicatorH: number = 30;
   private tabXs: number[] = [];
   private tabWs: number[] = [];
   private tabsWidth: number = 0;
   private tabViewW: number = 0;
   private tabScroller: Scroller = new Scroller();
   private controller: TabsController = new TabsController();
+
+  @Styles
+  tabNormalStyle() {
+    .opacity(1)
+  }
+
+  @Styles
+  tabPressedStyle() {
+    .opacity(0.62)
+  }
+
+  @Styles
+  resultRowNormalStyle() {
+    .backgroundColor($r('app.color.surface'))
+  }
+
+  @Styles
+  resultRowPressedStyle() {
+    .backgroundColor($r('app.color.surface_alt'))
+  }
+
+  @Styles
+  mediaResultNormalStyle() {
+    .opacity(1)
+  }
+
+  @Styles
+  mediaResultPressedStyle() {
+    .opacity(0.82)
+  }
+
+  @Styles
+  landingActionNormalStyle() {
+    .backgroundColor(Color.Transparent)
+  }
+
+  @Styles
+  landingActionPressedStyle() {
+    .backgroundColor($r('app.color.surface_alt'))
+  }
+
+  @Styles
+  retryActionNormalStyle() {
+    .backgroundColor($r('app.color.surface_alt'))
+    .opacity(1)
+  }
+
+  @Styles
+  retryActionPressedStyle() {
+    .backgroundColor('#18229ED9')
+    .opacity(0.72)
+  }
 
   private moveIndicatorTo(pos: number): void {
     const n = TABS.length;
@@ -153,14 +247,28 @@ struct GlobalSearchPage {
       target = x + w - this.tabViewW + 8;
     }
     if (target >= 0) {
-      this.tabScroller.scrollTo({ xOffset: target, yOffset: 0, animation: { duration: 200, curve: Curve.EaseOut } });
+      this.tabScroller.scrollTo({
+        xOffset: target,
+        yOffset: 0,
+        animation: {
+          duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 200),
+          curve: Curve.EaseOut
+        }
+      });
     }
   }
 
   // Tab became current (tap or settled swipe): update state, settle the pill,
   // keep it visible, and fire the tab's data loads.
   private onTabSelected(index: number): void {
+    if (this.debounceTimer !== -1) {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = -1;
+    }
+    this.searchPending = false;
     this.tab = index;
+    this.hashtagSearchSeq++;
+    this.postsQuotaSeq++;
     animateTo({
       duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 200), curve: Curve.EaseOut
     }, () => { this.moveIndicatorTo(index); });
@@ -173,16 +281,41 @@ struct GlobalSearchPage {
   }
 
   aboutToAppear(): void {
+    if (this.closeSearchTimer !== -1) {
+      clearTimeout(this.closeSearchTimer);
+      this.closeSearchTimer = -1;
+    }
+    this.closingSearch = false;
+    this.resetResultOpening();
+    this.searchHeaderVisible = false;
+    this.searchHeaderTimer = setTimeout((): void => {
+      this.searchHeaderTimer = -1;
+      this.searchHeaderVisible = true;
+    }, powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 30));
     const store = new GlobalSearchStore(getTdClient());
     this.store = store;
     this.unsub = store.subscribe(() => {
       this.topUsers = store.topUsers;
       this.recent = store.recent;
+      this.recentlyOpened = store.recentlyOpened;
+      this.topLoaded = store.topLoaded;
+      this.recentLoaded = store.recentLoaded;
+      this.openedLoaded = store.openedLoaded;
+      this.topFailed = store.topFailed;
+      this.recentFailed = store.recentFailed;
+      this.openedFailed = store.openedFailed;
       this.chatResults = store.results;
       this.chatSearching = store.searching;
+      this.chatSearchFailed = store.searchFailed;
       this.joinedChannels = store.joinedChannels;
       this.similarChannels = store.similarChannels;
       this.apps = store.apps;
+      this.joinedLoaded = store.joinedLoaded;
+      this.similarLoaded = store.similarLoaded;
+      this.appsLoaded = store.appsLoaded;
+      this.joinedFailed = store.joinedFailed;
+      this.similarFailed = store.similarFailed;
+      this.appsFailed = store.appsFailed;
     });
     store.open();
     const params = router.getParams() as Record<string, Object> | undefined;
@@ -198,6 +331,25 @@ struct GlobalSearchPage {
   aboutToDisappear(): void {
     if (this.unsubFile !== null) { this.unsubFile(); this.unsubFile = null; }
     if (this.debounceTimer !== -1) { clearTimeout(this.debounceTimer); this.debounceTimer = -1; }
+    if (this.searchHeaderTimer !== -1) {
+      clearTimeout(this.searchHeaderTimer);
+      this.searchHeaderTimer = -1;
+    }
+    if (this.closeSearchTimer !== -1) {
+      clearTimeout(this.closeSearchTimer);
+      this.closeSearchTimer = -1;
+    }
+    this.resetResultOpening();
+    this.hashtagSearchSeq++;
+    this.postsQuotaSeq++;
+    this.searchPending = false;
+    this.searchFocused = false;
+    this.clearPressed = false;
+    this.cancelPressed = false;
+    this.clearingRecent = false;
+    this.clearRecentDialogOpen = false;
+    this.closingSearch = false;
+    this.searchHeaderVisible = false;
     if (this.unsub !== null) { this.unsub(); this.unsub = null; }
     if (this.store !== null) { this.store.close(); this.store = null; }
   }
@@ -206,11 +358,132 @@ struct GlobalSearchPage {
     this.query = v;
     if (this.debounceTimer !== -1) {
       clearTimeout(this.debounceTimer);
+      this.debounceTimer = -1;
     }
+    this.hashtagSearchSeq++;
+    this.postsQuotaSeq++;
+    this.cancelInFlight();
+    this.items = [];
+    this.hashtagPosts = [];
+    this.searchedOnce = false;
+    this.autoPages = 0;
+    this.postsQuota = '';
+    if (this.store !== null) {
+      this.store.searchChats('');
+    }
+    if (v.trim() === '') {
+      this.searchPending = false;
+      this.runSearch();
+      return;
+    }
+    this.searchPending = true;
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = -1;
+      this.searchPending = false;
       this.runSearch();
     }, SEARCH_DEBOUNCE_MS);
+  }
+
+  private submitSearch(): void {
+    if (this.debounceTimer !== -1) {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = -1;
+    }
+    this.searchPending = false;
+    if (this.tab === TAB_POSTS && this.query.trim() !== '') {
+      this.searchMessages('');
+    } else {
+      this.runSearch();
+    }
+  }
+
+  private clearSearch(): void {
+    if (this.query === '') {
+      return;
+    }
+    if (this.debounceTimer !== -1) {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = -1;
+    }
+    this.searchPending = false;
+    this.hashtagSearchSeq++;
+    this.postsQuotaSeq++;
+    this.query = '';
+    this.chatResults = [];
+    this.items = [];
+    this.hashtagPosts = [];
+    this.searchedOnce = false;
+    this.autoPages = 0;
+    this.postsQuota = '';
+    if (this.store !== null) {
+      this.store.searchChats('');
+    }
+    this.runSearch();
+  }
+
+  private closeSearch(): void {
+    if (this.closingSearch) {
+      return;
+    }
+    if (this.debounceTimer !== -1) {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = -1;
+    }
+    this.searchPending = false;
+    this.hashtagSearchSeq++;
+    this.postsQuotaSeq++;
+    this.cancelInFlight();
+    if (this.store !== null) {
+      this.store.searchChats('');
+    }
+    this.closingSearch = true;
+    this.cancelPressed = false;
+    this.closeSearchTimer = setTimeout((): void => {
+      this.closeSearchTimer = -1;
+      this.closingSearch = false;
+    }, 650);
+    try {
+      router.back();
+    } catch (caught) {
+      if (this.closeSearchTimer !== -1) {
+        clearTimeout(this.closeSearchTimer);
+        this.closeSearchTimer = -1;
+      }
+      this.closingSearch = false;
+      console.error(`GlobalSearchPage.closeSearch failed: ${caught}`);
+    }
+  }
+
+  private searchPlaceholder(): string {
+    if (this.tab === TAB_DOWNLOADS) {
+      return '搜索下载内容';
+    }
+    if (this.tab === TAB_MEDIA) {
+      return '搜索照片和视频';
+    }
+    if (this.tab === TAB_LINKS) {
+      return '搜索链接消息';
+    }
+    if (this.tab === TAB_FILES) {
+      return '搜索文件消息';
+    }
+    if (this.tab === TAB_AUDIO || this.tab === TAB_VOICE) {
+      return '搜索音乐和语音';
+    }
+    if (this.tab === TAB_POSTS) {
+      return '搜索公开贴文';
+    }
+    return '搜索聊天和消息';
+  }
+
+  private searchBusy(): boolean {
+    if (this.searchPending) {
+      return true;
+    }
+    if (this.tab === TAB_CHATS || this.tab === TAB_CHANNELS) {
+      return this.chatSearching || this.loading;
+    }
+    return this.loading;
   }
 
   @State downloads: DownloadItem[] = [];      // completed, from the filesystem scan
@@ -354,16 +627,28 @@ struct GlobalSearchPage {
   // Rows the current tab actually shows: the 频道 tab keeps only messages from
   // channels, so a page of hits can render as nothing at all.
   private visibleItems(): FoundItem[] {
+    const resolved = this.items.filter((it: FoundItem) => it.chatTitle !== '');
     return this.tab === TAB_CHANNELS
-      ? this.items.filter((it: FoundItem) => it.isChannelChat)
-      : this.items;
+      ? resolved.filter((it: FoundItem) => it.isChannelChat)
+      : resolved;
+  }
+
+  private visibleHashtagPosts(): FoundItem[] {
+    return this.hashtagPosts.filter((it: FoundItem) => it.chatTitle !== '');
+  }
+
+  private resolvingMessageRows(): boolean {
+    return this.items.some((it: FoundItem) => it.chatTitle === '');
   }
 
   // The 频道 filter can discard an entire page of hits, leaving a screen with
   // nothing to scroll — onReachEnd would never fire and the tab would look
   // empty while more pages exist. Pull the next pages ourselves, bounded.
   private maybeAutoPage(): void {
-    if (this.tab !== TAB_CHANNELS || this.loading || this.pagingBusy) {
+    if (this.tab !== TAB_CHANNELS || this.loading || this.pagingBusy || this.pagingError) {
+      return;
+    }
+    if (this.resolvingMessageRows()) {
       return;
     }
     if (this.visibleItems().length > 0 || this.nextOffset === '' || this.autoPages >= MAX_AUTO_PAGES) {
@@ -376,7 +661,10 @@ struct GlobalSearchPage {
   // True once paging has stopped for good — only then may the tab claim there
   // is nothing to show (a hit whose chat type is still resolving isn't a miss).
   private searchExhausted(): boolean {
-    if (this.loading || this.pagingBusy) {
+    if (this.loading || this.pagingBusy || this.pagingError || this.messageError !== '') {
+      return false;
+    }
+    if (this.items.some((it: FoundItem) => it.chatTitle === '')) {
       return false;
     }
     return this.tab !== TAB_CHANNELS || this.nextOffset === '' || this.autoPages >= MAX_AUTO_PAGES;
@@ -384,6 +672,22 @@ struct GlobalSearchPage {
 
   private isFilterTab(): boolean {
     return filterTypeForTab(this.tab) !== '';
+  }
+
+  private mergeFoundItems(current: FoundItem[], fresh: FoundItem[], replace: boolean): FoundItem[] {
+    const merged: FoundItem[] = replace ? [] : [...current];
+    const seen: Set<string> = new Set<string>();
+    for (const item of merged) {
+      seen.add(`${item.chatId}:${item.messageId}`);
+    }
+    for (const item of fresh) {
+      const key = `${item.chatId}:${item.messageId}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        merged.push(item);
+      }
+    }
+    return merged;
   }
 
 
@@ -395,20 +699,45 @@ struct GlobalSearchPage {
     this.seq++;
     this.pagingBusy = false;
     this.loading = false;
+    this.messageError = '';
+    this.pagingError = false;
+    this.failedPagingOffset = '';
+    this.loadedPageCount = 0;
     this.nextOffset = '';
+  }
+
+  private retryMessageSearch(): void {
+    if (!this.loading) {
+      this.searchMessages('');
+    }
+  }
+
+  private retryPaging(): void {
+    if (!this.loading && !this.pagingBusy && this.failedPagingOffset !== '') {
+      this.searchMessages(this.failedPagingOffset);
+    }
+  }
+
+  private retryChatSearch(): void {
+    if (this.store !== null && this.query.trim() !== '') {
+      this.store.searchChats(this.query);
+    }
   }
 
   private runSearch(): void {
     if (this.tab === TAB_POSTS) {
-      // Keyword post search burns server quota — never auto-fire; typing
-      // resets back to the prompt with its explicit 搜索 button.
-      this.cancelInFlight();
-      this.searchedOnce = false;
-      this.items = [];
-      this.loadPostsQuota();
-    } else if (this.tab === TAB_PUBLIC_POSTS) {
-      // Free hashtag API — search right away.
-      this.searchMessages('');
+      if (this.query.trim().startsWith('#') && this.query.trim().length > 1) {
+        // A hashtag is another mode of the official 帖子 tab. It uses TDLib's
+        // tag endpoint immediately and does not consume keyword-search quota.
+        this.searchMessages('');
+      } else {
+        // Keyword post search burns server quota — never auto-fire; typing
+        // resets back to the prompt with its explicit 搜索 button.
+        this.cancelInFlight();
+        this.searchedOnce = false;
+        this.items = [];
+        this.loadPostsQuota();
+      }
     } else if (this.isFilterTab()) {
       this.searchMessages('');
     } else if (this.tab === TAB_DOWNLOADS) {
@@ -434,9 +763,14 @@ struct GlobalSearchPage {
   // Remaining free public-post searches today (field names probed defensively —
   // the raw object is logged for calibration).
   private loadPostsQuota(): void {
+    const requestSeq = ++this.postsQuotaSeq;
+    const requestQuery = this.query.trim();
     const req: TdRequest = { '@type': 'getPublicPostSearchLimits' };
-    req['query'] = this.query.trim();
+    req['query'] = requestQuery;
     getTdClient().send(req).then((res: TdObject) => {
+      if (requestSeq !== this.postsQuotaSeq || this.query.trim() !== requestQuery) {
+        return;
+      }
       console.info(`GlobalSearchPage.postSearchLimits: ${JSON.stringify(res)}`);
       const remaining = (res['remaining_free_query_count'] as number | undefined)
         ?? ((res['remaining_count'] as number | undefined)
@@ -450,11 +784,12 @@ struct GlobalSearchPage {
   private searchMessages(offset: string): void {
     const q = this.query.trim();
     const filterType = filterTypeForTab(this.tab);
-    // posts: quota-limited keyword post search; tagposts: free hashtag post
-    // search (公开贴文); filter: typed tabs (query optional); all: the 消息
+    // posts: quota-limited keyword post search; tagposts: hashtag mode of the
+    // same 帖子 tab; filter: typed tabs (query optional); all: the 消息
     // section under 聊天/频道/应用.
-    const mode: string = this.tab === TAB_POSTS ? 'posts'
-      : (this.tab === TAB_PUBLIC_POSTS ? 'tagposts' : (filterType !== '' ? 'filter' : 'all'));
+    const mode: string = this.tab === TAB_POSTS
+      ? (q.startsWith('#') ? 'tagposts' : 'posts')
+      : (filterType !== '' ? 'filter' : 'all');
     if (q === '' && mode !== 'filter') {
       this.cancelInFlight();
       this.items = [];
@@ -463,10 +798,24 @@ struct GlobalSearchPage {
     }
     if (offset !== '') {
       // Scroll-driven pagination: one in-flight page at a time.
-      if (this.pagingBusy) {
+      if (this.loading || this.pagingBusy) {
         return;
       }
       this.pagingBusy = true;
+      this.pagingError = false;
+      this.failedPagingOffset = '';
+    } else {
+      // A category/query change is a new result set. Never expose rows from
+      // the previous category if this first page subsequently fails.
+      this.pagingBusy = false;
+      this.pagingError = false;
+      this.failedPagingOffset = '';
+      this.messageError = '';
+      this.items = [];
+      this.nextOffset = '';
+      this.searchedOnce = false;
+      this.loadedPageCount = 0;
+      this.autoPages = 0;
     }
     const seq = ++this.seq;
     this.loading = offset === '';
@@ -476,6 +825,14 @@ struct GlobalSearchPage {
       req['chat_list'] = { '@type': 'chatListMain' } as TdObject;
       if (filterType !== '') {
         req['filter'] = { '@type': filterType } as TdObject;
+      }
+      if (this.tab === TAB_CHANNELS) {
+        // Match Telegram Android: make channel type part of the TDLib message
+        // search itself. Fetching all message types and filtering them after
+        // pagination loses valid channel hits whenever other chats fill a page.
+        req['chat_type_filter'] = {
+          '@type': 'searchMessagesChatTypeFilterChannel'
+        } as TdObject;
       }
     }
     if (mode === 'tagposts') {
@@ -487,13 +844,20 @@ struct GlobalSearchPage {
     req['offset'] = offset;
     req['limit'] = 30;
     getTdClient().send(req).then((res: TdObject) => {
-      this.pagingBusy = false;
       if (seq !== this.seq) {
         return;
       }
+      this.pagingBusy = false;
       this.loading = false;
+      this.messageError = '';
+      this.pagingError = false;
+      this.failedPagingOffset = '';
       this.searchedOnce = true;
-      this.nextOffset = (res['next_offset'] as string | undefined) ?? '';
+      const responseOffset = (res['next_offset'] as string | undefined) ?? '';
+      // A non-advancing cursor would otherwise retrigger forever at the same
+      // scroll position.
+      this.nextOffset = responseOffset === offset ? '' : responseOffset;
+      this.loadedPageCount = offset === '' ? 1 : this.loadedPageCount + 1;
       const msgs = (res['messages'] as TdObject[] | undefined) ?? [];
       const fresh: FoundItem[] = [];
       for (const m of msgs) {
@@ -506,21 +870,30 @@ struct GlobalSearchPage {
         }
         fresh.push(item);
       }
-      this.items = offset === '' ? fresh : [...this.items, ...fresh];
-      if (this.tab === TAB_POSTS) {
+      this.items = this.mergeFoundItems(this.items, fresh, offset === '');
+      if (mode === 'posts') {
         this.loadPostsQuota(); // a search just burned one — refresh the count
       }
-      // Whether a hit belongs to a channel is only known once getChat resolves,
-      // so the 频道 filter cannot be judged here — maybeAutoPage() runs again as
-      // each chat lands (see resolveTitle).
+      // getChat still resolves the title/avatar and defensively verifies the
+      // type, while TDLib already limits the 频道 tab to channel messages.
       if (offset === '') {
         this.autoPages = 0;
       }
       this.maybeAutoPage();
     }).catch((e: TdError) => {
+      if (seq !== this.seq) {
+        return;
+      }
       this.pagingBusy = false;
       this.loading = false;
       this.searchedOnce = true;
+      if (offset === '') {
+        this.messageError = '搜索失败，请检查网络后重试';
+        this.nextOffset = '';
+      } else {
+        this.pagingError = true;
+        this.failedPagingOffset = offset;
+      }
       console.error(`GlobalSearchPage.searchMessages failed: ${e.message}`);
     });
   }
@@ -550,11 +923,15 @@ struct GlobalSearchPage {
 
   private loadHashtagPosts(offset: string): void {
     const tag = this.query.trim();
+    const requestSeq = ++this.hashtagSearchSeq;
     const req: TdRequest = { '@type': 'searchPublicMessagesByTag' };
     req['tag'] = tag;
     req['offset'] = offset;
     req['limit'] = 5;
     getTdClient().send(req).then((res: TdObject) => {
+      if (requestSeq !== this.hashtagSearchSeq || this.query.trim() !== tag) {
+        return;
+      }
       const msgs = (res['messages'] as TdObject[] | undefined) ?? [];
       const fresh: FoundItem[] = [];
       for (const m of msgs) {
@@ -563,7 +940,7 @@ struct GlobalSearchPage {
           fresh.push(item);
         }
       }
-      this.hashtagPosts = offset === '' ? fresh : [...this.hashtagPosts, ...fresh];
+      this.hashtagPosts = this.mergeFoundItems(this.hashtagPosts, fresh, offset === '');
     }).catch((e: TdError) => {
       console.error(`GlobalSearchPage.searchPublicMessagesByTag failed: ${e.message}`);
     });
@@ -613,7 +990,8 @@ struct GlobalSearchPage {
       if (path === '') {
         return;
       }
-      this.items = this.items.map((it: FoundItem): FoundItem => it.messageId === item.messageId
+      this.items = this.items.map((it: FoundItem): FoundItem =>
+        it.chatId === item.chatId && it.messageId === item.messageId
         ? {
           chatId: it.chatId, messageId: it.messageId, chatTitle: it.chatTitle,
           preview: it.preview, date: it.date,
@@ -649,7 +1027,6 @@ struct GlobalSearchPage {
         && ((type['@type'] as string | undefined) ?? '') === 'chatTypeSupergroup'
         && (((type as TdObject)['is_channel'] as boolean | undefined) ?? false);
       this.channelFlags.set(chatId, isChannel);
-      this.maybeAutoPage();
       this.patchItems(chatId, (it: FoundItem): FoundItem => ({
         chatId: it.chatId, messageId: it.messageId, chatTitle: title,
         preview: it.preview, date: it.date,
@@ -658,6 +1035,7 @@ struct GlobalSearchPage {
         initials: title.length > 0 ? title.substring(0, 1).toUpperCase() : '?',
         isChannelChat: isChannel
       }));
+      this.maybeAutoPage();
       const photo = chat['photo'] as TdObject | undefined;
       const small = photo !== undefined ? (photo['small'] as TdObject | undefined) : undefined;
       const fileId = small !== undefined ? ((small['id'] as number | undefined) ?? 0) : 0;
@@ -683,6 +1061,14 @@ struct GlobalSearchPage {
         });
       }
     }).catch((e: TdError) => {
+      // A permanently unresolved row keeps the whole result screen in its
+      // loading branch. Drop only that chat's unusable hits and allow paging or
+      // the empty/error state to settle; a later search may resolve it again.
+      this.titles.delete(chatId);
+      this.channelFlags.delete(chatId);
+      this.items = this.items.filter((it: FoundItem) => it.chatId !== chatId);
+      this.hashtagPosts = this.hashtagPosts.filter((it: FoundItem) => it.chatId !== chatId);
+      this.maybeAutoPage();
       console.error(`GlobalSearchPage.getChat failed: ${e.message}`);
     });
   }
@@ -692,30 +1078,68 @@ struct GlobalSearchPage {
     this.hashtagPosts = this.hashtagPosts.map((it: FoundItem): FoundItem => it.chatId === chatId ? fn(it) : it);
   }
 
-  // Opening a chat that a typed query matched carries the query along: the chat
-  // page lands in its in-chat search, showing that chat's hits for the same
-  // words. Landing rows (frequent/recent) have no query, so they open normally.
-  private openChat(chatId: number): void {
-    const params: Record<string, Object> = { 'chatId': chatId };
-    const q = this.query.trim();
-    if (q !== '') {
-      params['searchQuery'] = q;
+  private resetResultOpening(): void {
+    if (this.resultOpeningTimer !== -1) {
+      clearTimeout(this.resultOpeningTimer);
+      this.resultOpeningTimer = -1;
     }
-    router.pushUrl({ url: 'pages/chat/ChatPage', params: params });
+    this.resultOpeningKey = '';
+  }
+
+  private beginResultOpening(key: string): boolean {
+    if (this.resultOpeningKey !== '') {
+      return false;
+    }
+    this.resultOpeningKey = key;
+    // Route requests normally make this page disappear and reset the guard.
+    // Keep a fallback in case the router accepts no navigation.
+    this.resultOpeningTimer = setTimeout((): void => {
+      this.resultOpeningTimer = -1;
+      this.resultOpeningKey = '';
+    }, 900);
+    return true;
+  }
+
+  // A chat-name result opens the conversation normally. Only message results
+  // should enter in-chat search and jump to a concrete hit.
+  private openChat(chatId: number): void {
+    const openingKey = `chat:${chatId}`;
+    if (!this.beginResultOpening(openingKey)) {
+      return;
+    }
+    if (this.query.trim() !== '' && this.store !== null) {
+      this.store.rememberFoundChat(chatId);
+    }
+    const params: Record<string, Object> = { 'chatId': chatId };
+    router.pushUrl({ url: 'pages/chat/ChatPage', params: params }).catch((e: Error) => {
+      this.resetResultOpening();
+      console.error(`GlobalSearchPage.openChat failed: ${e.message}`);
+    });
   }
 
   // App (mini-app bot) rows open the bot's chat — running the web app itself
   // needs a WebView container we don't have yet.
   private openApp(userId: number): void {
+    const openingKey = `app:${userId}`;
+    if (!this.beginResultOpening(openingKey)) {
+      return;
+    }
     const req: TdRequest = { '@type': 'createPrivateChat' };
     req['user_id'] = userId;
     req['force'] = false;
     getTdClient().send(req).then((chat: TdObject) => {
       const id = (chat['id'] as number | undefined) ?? 0;
       if (id !== 0) {
-        this.openChat(id);
+        const params: Record<string, Object> = { 'chatId': id };
+        router.pushUrl({ url: 'pages/chat/ChatPage', params: params }).catch((e: Error) => {
+          this.resetResultOpening();
+          console.error(`GlobalSearchPage.openApp route failed: ${e.message}`);
+        });
+      } else {
+        this.resetResultOpening();
       }
     }).catch((e: TdError) => {
+      this.resetResultOpening();
       console.error(`GlobalSearchPage.openApp failed: ${e.message}`);
     });
   }
@@ -724,88 +1148,329 @@ struct GlobalSearchPage {
   // in its in-chat search with the tapped message as the current hit — ∧/∨ then
   // walk this chat's other hits for the same words.
   private openResult(it: FoundItem): void {
+    const openingKey = `message:${it.chatId}:${it.messageId}`;
+    if (!this.beginResultOpening(openingKey)) {
+      return;
+    }
     const params: Record<string, Object> = { 'chatId': it.chatId, 'jumpTo': it.messageId };
     const q = this.query.trim();
     if (q !== '') {
       params['searchQuery'] = q;
     }
-    router.pushUrl({ url: 'pages/chat/ChatPage', params: params });
+    router.pushUrl({ url: 'pages/chat/ChatPage', params: params }).catch((e: Error) => {
+      this.resetResultOpening();
+      console.error(`GlobalSearchPage.openResult failed: ${e.message}`);
+    });
+  }
+
+  private resolvedTopUsers(): SearchRow[] {
+    return this.topUsers.filter((row: SearchRow) => row.title !== '');
+  }
+
+  private resolvedRecent(): SearchRow[] {
+    return this.recent.filter((row: SearchRow) => row.title !== '');
+  }
+
+  private resolvedRecentlyOpened(): SearchRow[] {
+    const foundIds = new Set<number>();
+    for (const row of this.recent) {
+      foundIds.add(row.chatId);
+    }
+    return this.recentlyOpened.filter((row: SearchRow) =>
+      row.title !== '' && !foundIds.has(row.chatId));
+  }
+
+  private landingResolving(): boolean {
+    return !this.topLoaded || !this.recentLoaded || !this.openedLoaded
+      || this.topUsers.some((row: SearchRow) => row.title === '')
+      || this.recent.some((row: SearchRow) => row.title === '')
+      || this.recentlyOpened.some((row: SearchRow) => row.title === '');
+  }
+
+  private landingFailed(): boolean {
+    return this.topFailed || this.recentFailed || this.openedFailed;
+  }
+
+  private retryLanding(): void {
+    if (this.store !== null) {
+      this.store.retryLanding();
+    }
+  }
+
+  private retryChannels(): void {
+    if (this.store !== null) {
+      this.store.retryChannels();
+    }
+  }
+
+  private retryApps(): void {
+    if (this.store !== null) {
+      this.store.retryApps();
+    }
+  }
+
+  private confirmClearRecent(): void {
+    if (this.clearRecentDialogOpen || this.clearingRecent || this.resolvedRecent().length === 0) {
+      return;
+    }
+    this.clearRecentDialogOpen = true;
+    promptAction.showDialog({
+      title: '清空最近访问',
+      message: '确定清空搜索页的最近访问记录吗？聊天和消息不会被删除。',
+      buttons: [
+        { text: '取消', color: COLOR_TEXT_SECONDARY as string },
+        { text: '清空', color: '#E64646' }
+      ]
+    }).then((result: promptAction.ShowDialogSuccessResponse): void => {
+      this.clearRecentDialogOpen = false;
+      if (result.index === 1) {
+        this.performClearRecent();
+      }
+    }).catch((): void => {
+      this.clearRecentDialogOpen = false;
+    });
+  }
+
+  private performClearRecent(): void {
+    if (this.store === null || this.clearingRecent) {
+      return;
+    }
+    this.clearingRecent = true;
+    this.store.clearRecent().then((): void => {
+      this.clearingRecent = false;
+    }).catch((): void => {
+      this.clearingRecent = false;
+      promptAction.showToast({ message: '清空失败，请稍后重试', duration: 1800 });
+    });
   }
 
   @Builder
   searchBar() {
-    Row({ space: 8 }) {
-      SymbolGlyph($r('sys.symbol.magnifyingglass')).fontSize(18).fontColor([COLOR_TEXT_SECONDARY])
-        .margin({ left: 14 });
-      TextInput({ text: this.query, placeholder: '搜索聊天' })
-        .layoutWeight(1).height(44).fontSize(17)
-        .backgroundColor(Color.Transparent).padding(0)
-        .placeholderColor(COLOR_TEXT_SECONDARY)
-        .defaultFocus(true)
-        .onChange((v: string) => { this.onQueryChanged(v); })
-        .onSubmit(() => { this.runSearch(); });
-      SymbolGlyph($r('sys.symbol.xmark')).fontSize(18).fontColor([COLOR_TEXT_SECONDARY])
-        .margin({ right: 14 })
-        .onClick(() => {
-          if (this.query === '') {
-            router.back();
+    Row({ space: 10 }) {
+      Row({ space: 8 }) {
+        Stack({ alignContent: Alignment.Center }) {
+          if (this.searchBusy()) {
+            LoadingProgress()
+              .width(18)
+              .height(18)
+              .color(COLOR_PRIMARY)
+              .transition(TransitionEffect.OPACITY
+                .combine(TransitionEffect.scale({ x: 0.72, y: 0.72 }))
+                .animation({
+                  duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 150),
+                  curve: Curve.EaseOut
+                }));
           } else {
-            this.query = '';
-            this.chatResults = [];
-            this.items = [];
-            this.searchedOnce = false;
+            SymbolGlyph($r('sys.symbol.magnifyingglass'))
+              .fontSize(18)
+              .fontColor([this.searchFocused ? COLOR_PRIMARY : COLOR_TEXT_SECONDARY])
+              .transition(TransitionEffect.OPACITY
+                .combine(TransitionEffect.scale({ x: 0.84, y: 0.84 }))
+                .animation({
+                  duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 150),
+                  curve: Curve.EaseOut
+                }));
           }
+        }
+        .width(22)
+        .height(22);
+
+        TextInput({ text: this.query, placeholder: this.searchPlaceholder() })
+          .layoutWeight(1)
+          .height(44)
+          .fontSize(16)
+          .backgroundColor(Color.Transparent)
+          .padding(0)
+          .borderRadius(0)
+          .placeholderColor(COLOR_TEXT_SECONDARY)
+          .caretColor(COLOR_PRIMARY)
+          .enterKeyType(EnterKeyType.Search)
+          .defaultFocus(true)
+          .enabled(!this.closingSearch)
+          .onFocus((): void => { this.searchFocused = true; })
+          .onBlur((): void => { this.searchFocused = false; })
+          .onChange((value: string): void => { this.onQueryChanged(value); })
+          .onSubmit((): void => { this.submitSearch(); });
+
+        if (this.query !== '') {
+          Row() {
+            SymbolGlyph($r('sys.symbol.xmark_circle'))
+              .fontSize(19)
+              .fontColor([COLOR_TEXT_SECONDARY]);
+          }
+          .width(32)
+          .height(32)
+          .borderRadius(16)
+          .justifyContent(FlexAlign.Center)
+          .backgroundColor(this.clearPressed
+            ? $r('app.color.selected_pill') : Color.Transparent)
+          .scale({
+            x: this.clearPressed ? 0.9 : 1,
+            y: this.clearPressed ? 0.9 : 1
+          })
+          .animation({
+            duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 110),
+            curve: Curve.EaseOut
+          })
+          .accessibilityText('清空搜索')
+          .onTouch((event: TouchEvent): void => {
+            if (event.type === TouchType.Down) {
+              this.clearPressed = true;
+            } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+              this.clearPressed = false;
+            }
+          })
+          .onClick((): void => {
+            this.clearPressed = false;
+            this.clearSearch();
+          })
+          .transition(TransitionEffect.OPACITY
+            .combine(TransitionEffect.scale({ x: 0.72, y: 0.72 }))
+            .animation({
+              duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 150),
+              curve: Curve.EaseOut
+            }));
+        }
+      }
+      .layoutWeight(1)
+      .height(48)
+      .padding({ left: 13, right: 8 })
+      .backgroundColor($r('app.color.surface'))
+      .borderRadius(24)
+      .border({
+        width: this.searchFocused ? 1.5 : 0.5,
+        color: this.searchFocused ? COLOR_PRIMARY : $r('app.color.divider')
+      })
+      .shadow({
+        radius: this.searchFocused ? 6 : 0,
+        color: this.searchFocused ? '#18000000' : '#00000000',
+        offsetX: 0,
+        offsetY: 2
+      })
+      .alignItems(VerticalAlign.Center)
+      .animation({
+        duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 160),
+        curve: Curve.EaseOut
+      });
+
+      Text(this.closingSearch ? '关闭中' : '取消')
+        .width(50)
+        .height(44)
+        .fontSize(15)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.closingSearch ? COLOR_TEXT_SECONDARY : COLOR_PRIMARY)
+        .textAlign(TextAlign.Center)
+        .opacity(this.cancelPressed ? 0.55 : 1)
+        .scale({
+          x: this.cancelPressed ? 0.94 : 1,
+          y: this.cancelPressed ? 0.94 : 1
+        })
+        .animation({
+          duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 110),
+          curve: Curve.EaseOut
+        })
+        .enabled(!this.closingSearch)
+        .accessibilityText('关闭全局搜索')
+        .onTouch((event: TouchEvent): void => {
+          if (event.type === TouchType.Down && !this.closingSearch) {
+            this.cancelPressed = true;
+          } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+            this.cancelPressed = false;
+          }
+        })
+        .onClick((): void => {
+          this.closeSearch();
         });
     }
-    .width('100%').height(52)
-    .backgroundColor($r('app.color.surface')).borderRadius(26)
-    .alignItems(VerticalAlign.Center);
+    .width('100%')
+    .height(52)
+    .alignItems(VerticalAlign.Center)
+    .opacity(this.searchHeaderVisible ? 1 : 0)
+    .translate({ y: this.searchHeaderVisible ? 0 : -8 })
+    .animation({
+      duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 200),
+      curve: Curve.EaseOut
+    });
+  }
+
+  @Builder
+  searchTabPill(title: string, index: number) {
+    Row() {
+      Text(title)
+        .fontSize(14)
+        .fontWeight(this.tab === index ? FontWeight.Medium : FontWeight.Normal)
+        .fontColor(this.tab === index ? COLOR_TAB_SELECTED : COLOR_TAB_UNSELECTED)
+        .maxLines(1);
+    }
+    .height(SEARCH_TAB_BAR_HEIGHT)
+    .padding({ left: 12, right: 12 })
+    .margin({ right: 2 })
+    .borderRadius(SEARCH_TAB_BAR_HEIGHT / 2)
+    .stateStyles({
+      normal: this.tabNormalStyle,
+      pressed: this.tabPressedStyle
+    })
+    .onAreaChange((_old: Area, area: Area) => {
+      this.tabXs[index] = area.position.x as number;
+      this.tabWs[index] = area.width as number;
+      if (index === this.tab) {
+        this.moveIndicatorTo(index);
+      }
+    })
+    .accessibilityText(this.tab === index ? `${title}，已选择` : title)
+    .onClick((): void => {
+      if (index !== this.tab) {
+        this.controller.changeIndex(index);
+      }
+    });
   }
 
   @Builder
   tabsBar() {
-    Scroll(this.tabScroller) {
-      Stack({ alignContent: Alignment.TopStart }) {
-        // Sliding selection pill behind the labels — follows the finger
-        // during content swipes (same as the chat-list tab bar).
-        Row()
-          .width(this.indicatorW).height(this.indicatorH)
-          .borderRadius(this.indicatorH / 2)
-          .backgroundColor($r('app.color.selected_pill'))
-          .position({ x: this.indicatorX, y: (44 - this.indicatorH) / 2 });
-        Row({ space: 6 }) {
-          ForEach(TABS, (t: string, idx: number) => {
-            Text(t)
-              .fontSize(15)
-              .fontWeight(this.tab === idx ? FontWeight.Medium : FontWeight.Normal)
-              .fontColor(this.tab === idx ? COLOR_PRIMARY : COLOR_TEXT_PRIMARY)
-              .borderRadius(17)
-              .padding({ left: 16, right: 16, top: 7, bottom: 7 })
-              .onAreaChange((_old: Area, area: Area) => {
-                this.tabXs[idx] = area.position.x as number;
-                this.tabWs[idx] = area.width as number;
-                this.indicatorH = area.height as number;
-                if (idx === this.tab) {
-                  this.moveIndicatorTo(idx);
-                }
-              })
-              .onClick(() => { this.controller.changeIndex(idx); });
-          }, (t: string) => t);
-        }.padding({ left: 8, right: 8 }).height(44);
+    Column() {
+      Scroll(this.tabScroller) {
+        Stack({ alignContent: Alignment.TopStart }) {
+          // Match the home folder bar: a fixed-height pill follows horizontal
+          // content swipes and settles under the newly selected category.
+          Row()
+            .width(this.indicatorW)
+            .height(SEARCH_TAB_INDICATOR_HEIGHT)
+            .borderRadius(SEARCH_TAB_INDICATOR_HEIGHT / 2)
+            .backgroundColor(COLOR_TAB_PILL_BG)
+            .position({
+              x: this.indicatorX,
+              y: (SEARCH_TAB_BAR_HEIGHT - SEARCH_TAB_INDICATOR_HEIGHT) / 2
+            });
+          Row() {
+            ForEach(TABS, (title: string, index: number) => {
+              this.searchTabPill(title, index);
+            }, (title: string) => title);
+          }
+          .padding({ left: 8, right: 8 })
+          .height(SEARCH_TAB_BAR_HEIGHT);
+        }
       }
+      .scrollable(ScrollDirection.Horizontal)
+      .scrollBar(BarState.Off)
+      .align(Alignment.Start)
+      .width('100%')
+      .onAreaChange((_old: Area, area: Area) => {
+        this.tabViewW = area.width as number;
+        this.ensureTabVisible(this.tab);
+      });
     }
-    .scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
-    .width('100%')
-    .backgroundColor($r('app.color.surface')).borderRadius(24)
-    .margin({ top: 8 })
-    .onAreaChange((_old: Area, area: Area) => { this.tabViewW = area.width as number; });
+    .backgroundColor($r('app.color.surface'))
+    .borderRadius(SEARCH_TAB_BAR_HEIGHT / 2)
+    .clip(true)
+    .margin({ top: 6 });
   }
 
   @Builder
   chatRow(r: SearchRow, showDivider: boolean) {
     Column() {
       if (showDivider) {
-        Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 72 });
+        Divider().color($r('app.color.divider')).strokeWidth(0.7)
+          .margin({ left: SEARCH_RESULT_DIVIDER_INSET });
       }
       Row({ space: 12 }) {
         AvatarView({ avatarPath: r.avatarPath, initials: r.initials, colorSeed: r.chatId, avatarSize: 48 });
@@ -818,56 +1483,327 @@ struct GlobalSearchPage {
               .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
           }
         }.alignItems(HorizontalAlign.Start).layoutWeight(1);
+        if (this.resultOpeningKey === `chat:${r.chatId}`) {
+          LoadingProgress().width(18).height(18).color(COLOR_PRIMARY);
+        }
       }
-      .width('100%').padding({ left: 14, right: 14, top: 8, bottom: 8 })
+      .width('100%')
+      .constraintSize({ minHeight: 64 })
+      .padding({ left: 14, right: 14, top: 8, bottom: 8 })
       .alignItems(VerticalAlign.Center)
+      .stateStyles({
+        normal: this.resultRowNormalStyle,
+        pressed: this.resultRowPressedStyle
+      })
+      .accessibilityText(`${r.title}${r.subtitle !== '' ? '，' + r.subtitle : ''}`)
       .onClick(() => { this.openChat(r.chatId); });
     }
   }
 
-  // Empty-query landing: frequent contacts strip + recently opened list.
+  @Builder
+  frequentSection() {
+    Column() {
+      Row() {
+        Text('常用联系人')
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(COLOR_TEXT_PRIMARY);
+      }
+      .width('100%')
+      .padding({ left: 14, right: 14, top: 12, bottom: 4 });
+
+      Scroll() {
+        Row({ space: 4 }) {
+          ForEach(this.resolvedTopUsers(), (row: SearchRow) => {
+            Column({ space: 6 }) {
+              Stack({ alignContent: Alignment.Center }) {
+                AvatarView({
+                  avatarPath: row.avatarPath,
+                  initials: row.initials,
+                  colorSeed: row.chatId,
+                  avatarSize: 58
+                });
+                if (this.resultOpeningKey === `chat:${row.chatId}`) {
+                  Circle({ width: 58, height: 58 }).fill('#66000000');
+                  LoadingProgress().width(20).height(20).color(Color.White);
+                }
+              }
+              Text(row.title)
+                .fontSize(13)
+                .fontColor(COLOR_TEXT_PRIMARY)
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .width(68)
+                .textAlign(TextAlign.Center);
+            }
+            .width(78)
+            .height(92)
+            .padding({ top: 6 })
+            .borderRadius(14)
+            .stateStyles({
+              normal: this.landingActionNormalStyle,
+              pressed: this.landingActionPressedStyle
+            })
+            .accessibilityText(`常用联系人，${row.title}`)
+            .onClick((): void => { this.openChat(row.chatId); });
+          }, (row: SearchRow) => `top_${row.chatId}_${row.title}_${row.avatarPath}`);
+        }
+        .padding({ left: 8, right: 8, bottom: 8 });
+      }
+      .scrollable(ScrollDirection.Horizontal)
+      .scrollBar(BarState.Off)
+      .width('100%');
+    }
+    .width('calc(100% - 20vp)')
+    .margin({ left: 10, right: 10, top: 8 })
+    .backgroundColor($r('app.color.surface'))
+    .borderRadius(18)
+    .clip(true)
+    .transition(TransitionEffect.OPACITY
+      .combine(TransitionEffect.translate({ y: 5 }))
+      .animation({
+        duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+        curve: Curve.EaseOut
+      }));
+  }
+
+  @Builder
+  recentSection() {
+    Column() {
+      Row() {
+        Row({ space: 6 }) {
+          SymbolGlyph($r('sys.symbol.clock'))
+            .fontSize(16)
+            .fontColor([COLOR_TEXT_SECONDARY]);
+          Text('最近访问')
+            .fontSize(14)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(COLOR_TEXT_PRIMARY);
+        }
+        .layoutWeight(1);
+
+        Row() {
+          if (this.clearingRecent) {
+            LoadingProgress().width(16).height(16).color(COLOR_PRIMARY);
+          } else {
+            Text('清空')
+              .fontSize(14)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(COLOR_PRIMARY);
+          }
+        }
+        .width(58)
+        .height(32)
+        .borderRadius(16)
+        .justifyContent(FlexAlign.Center)
+        .stateStyles({
+          normal: this.landingActionNormalStyle,
+          pressed: this.landingActionPressedStyle
+        })
+        .enabled(!this.clearingRecent)
+        .accessibilityText('清空最近访问')
+        .onClick((): void => { this.confirmClearRecent(); });
+      }
+      .width('100%')
+      .height(46)
+      .padding({ left: 14, right: 8 });
+
+      Divider()
+        .color($r('app.color.divider'))
+        .strokeWidth(0.7)
+        .margin({ left: 14 });
+
+      Column() {
+        ForEach(this.resolvedRecent(), (row: SearchRow, index: number) => {
+          this.chatRow(row, index > 0);
+        }, (row: SearchRow) =>
+          `recent_${row.chatId}_${row.title}_${row.subtitle}_${row.avatarPath}`);
+      }
+      .width('100%');
+    }
+    .width('calc(100% - 20vp)')
+    .margin({ left: 10, right: 10, top: 10, bottom: 10 })
+    .backgroundColor($r('app.color.surface'))
+    .borderRadius(18)
+    .clip(true)
+    .transition(TransitionEffect.OPACITY
+      .combine(TransitionEffect.translate({ y: 5 }))
+      .animation({
+        duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+        curve: Curve.EaseOut
+      }));
+  }
+
+  @Builder
+  recentlyOpenedSection() {
+    Column() {
+      Row({ space: 6 }) {
+        SymbolGlyph($r('sys.symbol.clock'))
+          .fontSize(16)
+          .fontColor([COLOR_TEXT_SECONDARY]);
+        Text('最近聊天')
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(COLOR_TEXT_PRIMARY);
+      }
+      .width('100%')
+      .height(46)
+      .padding({ left: 14, right: 14 });
+
+      Divider()
+        .color($r('app.color.divider'))
+        .strokeWidth(0.7)
+        .margin({ left: 14 });
+
+      Column() {
+        ForEach(this.resolvedRecentlyOpened(), (row: SearchRow, index: number) => {
+          this.chatRow(row, index > 0);
+        }, (row: SearchRow) =>
+          `opened_${row.chatId}_${row.title}_${row.subtitle}_${row.avatarPath}`);
+      }
+      .width('100%');
+    }
+    .width('calc(100% - 20vp)')
+    .margin({ left: 10, right: 10, top: 10, bottom: 10 })
+    .backgroundColor($r('app.color.surface'))
+    .borderRadius(18)
+    .clip(true)
+    .transition(TransitionEffect.OPACITY
+      .combine(TransitionEffect.translate({ y: 5 }))
+      .animation({
+        duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+        curve: Curve.EaseOut
+      }));
+  }
+
+  @Builder
+  landingLoadingState() {
+    Row({ space: 10 }) {
+      LoadingProgress().width(22).height(22).color(COLOR_PRIMARY);
+      Text('正在加载最近访问')
+        .fontSize(14)
+        .fontColor(COLOR_TEXT_SECONDARY);
+    }
+    .width('100%')
+    .height(116)
+    .justifyContent(FlexAlign.Center);
+  }
+
+  @Builder
+  landingEmptyState() {
+    Column({ space: 9 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        Circle({ width: 62, height: 62 }).fill($r('app.color.surface_alt'));
+        SymbolGlyph($r('sys.symbol.magnifyingglass'))
+          .fontSize(28)
+          .fontColor([COLOR_TEXT_SECONDARY]);
+      }
+      Text('搜索聊天和消息')
+        .fontSize(17)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(COLOR_TEXT_PRIMARY);
+      Text('在上方输入关键词，查找聊天、频道、消息和文件')
+        .fontSize(13)
+        .lineHeight(19)
+        .fontColor(COLOR_TEXT_SECONDARY)
+        .textAlign(TextAlign.Center)
+        .constraintSize({ maxWidth: 250 });
+    }
+    .width('calc(100% - 24vp)')
+    .height(214)
+    .margin({ left: 12, right: 12, top: 12 })
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor($r('app.color.surface'))
+    .borderRadius(20)
+    .transition(TransitionEffect.OPACITY
+      .combine(TransitionEffect.scale({ x: 0.97, y: 0.97 }))
+      .animation({
+        duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+        curve: Curve.EaseOut
+      }));
+  }
+
+  @Builder
+  landingErrorState() {
+    Column({ space: 8 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        Circle({ width: 58, height: 58 }).fill('#18E64646');
+        SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+          .fontSize(28)
+          .fontColor(['#E64646']);
+      }
+      Text('最近访问加载失败')
+        .fontSize(17)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(COLOR_TEXT_PRIMARY);
+      Text('网络或服务暂时不可用')
+        .fontSize(13)
+        .fontColor(COLOR_TEXT_SECONDARY);
+      Row({ space: 6 }) {
+        SymbolGlyph($r('sys.symbol.arrow_clockwise'))
+          .fontSize(15)
+          .fontColor([COLOR_PRIMARY]);
+        Text('重新加载')
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(COLOR_PRIMARY);
+      }
+      .height(38)
+      .padding({ left: 16, right: 16 })
+      .margin({ top: 4 })
+      .borderRadius(19)
+      .stateStyles({
+        normal: this.retryActionNormalStyle,
+        pressed: this.retryActionPressedStyle
+      })
+      .accessibilityText('重新加载最近访问')
+      .onClick((): void => { this.retryLanding(); });
+    }
+    .width('calc(100% - 24vp)')
+    .height(220)
+    .margin({ left: 12, right: 12, top: 12 })
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor($r('app.color.surface'))
+    .borderRadius(20)
+    .transition(TransitionEffect.OPACITY
+      .combine(TransitionEffect.scale({ x: 0.97, y: 0.97 }))
+      .animation({
+        duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+        curve: Curve.EaseOut
+      }));
+  }
+
+  // Empty-query landing: frequent contacts, recently searched chats and a
+  // useful first-run state once both sources have settled.
   @Builder
   landing() {
     Scroll() {
       Column() {
-        if (this.topUsers.length > 0) {
-          Scroll() {
-            Row({ space: 18 }) {
-              ForEach(this.topUsers, (r: SearchRow) => {
-                Column({ space: 6 }) {
-                  AvatarView({ avatarPath: r.avatarPath, initials: r.initials, colorSeed: r.chatId, avatarSize: 62 });
-                  Text(r.title).fontSize(13).fontColor(COLOR_TEXT_PRIMARY)
-                    .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-                    .constraintSize({ maxWidth: 70 });
-                }
-                .onClick(() => { this.openChat(r.chatId); });
-              }, (r: SearchRow) => `top_${r.chatId}_${r.avatarPath}_${r.title}`);
-            }.padding({ left: 16, right: 16, top: 14, bottom: 12 });
-          }
-          .scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
-          .width('100%')
-          .backgroundColor($r('app.color.surface'));
+        if (this.resolvedTopUsers().length > 0) {
+          this.frequentSection();
         }
-        if (this.recent.length > 0) {
-          Row() {
-            Text('最近访问').fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_SECONDARY)
-              .layoutWeight(1);
-            Text('全部清空').fontSize(14).fontColor(COLOR_PRIMARY)
-              .onClick(() => { if (this.store !== null) { this.store.clearRecent(); } });
-          }
-          .width('100%').padding({ left: 16, right: 16, top: 10, bottom: 6 })
-          .backgroundColor($r('app.color.page_bg'));
-          Column() {
-            ForEach(this.recent, (r: SearchRow, idx: number) => {
-              this.chatRow(r, idx > 0);
-            }, (r: SearchRow) => `recent_${r.chatId}_${r.avatarPath}_${r.title}_${r.subtitle}`);
-          }
-          .width('100%')
-          .backgroundColor($r('app.color.surface'));
+        if (this.resolvedRecent().length > 0) {
+          this.recentSection();
         }
-      }.width('100%');
+        if (this.resolvedRecentlyOpened().length > 0) {
+          this.recentlyOpenedSection();
+        }
+        if (this.resolvedTopUsers().length === 0 && this.resolvedRecent().length === 0 &&
+          this.resolvedRecentlyOpened().length === 0) {
+          if (this.landingResolving()) {
+            this.landingLoadingState();
+          } else if (this.landingFailed()) {
+            this.landingErrorState();
+          } else {
+            this.landingEmptyState();
+          }
+        }
+      }
+      .width('100%')
+      .padding({ bottom: 8 });
     }
-    .layoutWeight(1).width('100%')
+    .layoutWeight(1)
+    .width('100%')
     .align(Alignment.Top)
     .edgeEffect(EdgeEffect.Spring)
     .scrollBar(BarState.Off);
@@ -877,6 +1813,111 @@ struct GlobalSearchPage {
   sectionHeader(label: string) {
     Text(label).fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_SECONDARY)
       .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 6 });
+  }
+
+  @Builder
+  catalogLoadingState(label: string) {
+    Column({ space: 10 }) {
+      LoadingProgress().width(32).height(32).color(COLOR_PRIMARY);
+      Text(label)
+        .fontSize(14)
+        .fontColor(COLOR_TEXT_SECONDARY);
+    }
+    .width('100%')
+    .height(170)
+    .justifyContent(FlexAlign.Center)
+    .transition(TransitionEffect.OPACITY.animation({
+      duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 160),
+      curve: Curve.EaseOut
+    }));
+  }
+
+  @Builder
+  catalogErrorState(title: string, tab: number) {
+    Column({ space: 8 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        Circle({ width: 56, height: 56 }).fill('#18E64646');
+        SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+          .fontSize(27)
+          .fontColor(['#E64646']);
+      }
+      Text(title)
+        .fontSize(17)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(COLOR_TEXT_PRIMARY);
+      Text('网络或服务暂时不可用')
+        .fontSize(13)
+        .fontColor(COLOR_TEXT_SECONDARY);
+      Row({ space: 6 }) {
+        SymbolGlyph($r('sys.symbol.arrow_clockwise'))
+          .fontSize(15)
+          .fontColor([COLOR_PRIMARY]);
+        Text('重新加载')
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(COLOR_PRIMARY);
+      }
+      .height(38)
+      .padding({ left: 16, right: 16 })
+      .margin({ top: 4 })
+      .borderRadius(19)
+      .stateStyles({
+        normal: this.retryActionNormalStyle,
+        pressed: this.retryActionPressedStyle
+      })
+      .accessibilityText(title)
+      .onClick((): void => {
+        if (tab === TAB_CHANNELS) {
+          this.retryChannels();
+        } else {
+          this.retryApps();
+        }
+      });
+    }
+    .width('calc(100% - 24vp)')
+    .height(214)
+    .margin({ left: 12, right: 12, top: 12 })
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor($r('app.color.surface'))
+    .borderRadius(20)
+    .transition(TransitionEffect.OPACITY
+      .combine(TransitionEffect.scale({ x: 0.97, y: 0.97 }))
+      .animation({
+        duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+        curve: Curve.EaseOut
+      }));
+  }
+
+  @Builder
+  catalogEmptyState(title: string, detail: string, symbol: Resource) {
+    Column({ space: 8 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        Circle({ width: 58, height: 58 }).fill($r('app.color.surface_alt'));
+        SymbolGlyph(symbol)
+          .fontSize(27)
+          .fontColor([COLOR_TEXT_SECONDARY]);
+      }
+      Text(title)
+        .fontSize(17)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(COLOR_TEXT_PRIMARY);
+      Text(detail)
+        .fontSize(13)
+        .fontColor(COLOR_TEXT_SECONDARY)
+        .textAlign(TextAlign.Center);
+    }
+    .width('calc(100% - 24vp)')
+    .height(194)
+    .margin({ left: 12, right: 12, top: 12 })
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor($r('app.color.surface'))
+    .borderRadius(20)
+    .transition(TransitionEffect.OPACITY
+      .combine(TransitionEffect.scale({ x: 0.97, y: 0.97 }))
+      .animation({
+        duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+        curve: Curve.EaseOut
+      }));
   }
 
   // 频道 tab landing: joined channels + server-recommended channels.
@@ -889,7 +1930,7 @@ struct GlobalSearchPage {
           Column() {
             ForEach(this.joinedChannels, (r: SearchRow, idx: number) => {
               this.chatRow(r, idx > 0);
-            }, (r: SearchRow) => `jc_${r.chatId}_${r.avatarPath}_${r.subtitle}`);
+            }, (r: SearchRow) => `jc_${r.chatId}_${r.title}_${r.subtitle}_${r.avatarPath}`);
           }.width('100%').backgroundColor($r('app.color.surface'));
         }
         if (this.similarChannels.length > 0) {
@@ -897,11 +1938,21 @@ struct GlobalSearchPage {
           Column() {
             ForEach(this.similarChannels, (r: SearchRow, idx: number) => {
               this.chatRow(r, idx > 0);
-            }, (r: SearchRow) => `sc_${r.chatId}_${r.avatarPath}_${r.subtitle}`);
+            }, (r: SearchRow) => `sc_${r.chatId}_${r.title}_${r.subtitle}_${r.avatarPath}`);
           }.width('100%').backgroundColor($r('app.color.surface'));
         }
         if (this.joinedChannels.length === 0 && this.similarChannels.length === 0) {
-          Text('加载中...').fontSize(14).fontColor(COLOR_TEXT_SECONDARY).margin({ top: 48 });
+          if (!this.joinedLoaded || !this.similarLoaded) {
+            this.catalogLoadingState('正在加载频道');
+          } else if (this.joinedFailed || this.similarFailed) {
+            this.catalogErrorState('频道加载失败', TAB_CHANNELS);
+          } else {
+            this.catalogEmptyState(
+              '暂无推荐频道',
+              '加入频道后会在这里显示',
+              $r('sys.symbol.message')
+            );
+          }
         }
       }.width('100%');
     }
@@ -915,7 +1966,8 @@ struct GlobalSearchPage {
   appRow(r: SearchRow, showDivider: boolean) {
     Column() {
       if (showDivider) {
-        Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 72 });
+        Divider().color($r('app.color.divider')).strokeWidth(0.7)
+          .margin({ left: SEARCH_RESULT_DIVIDER_INSET });
       }
       Row({ space: 12 }) {
         AvatarView({ avatarPath: r.avatarPath, initials: r.initials, colorSeed: r.userId, avatarSize: 48 });
@@ -928,13 +1980,27 @@ struct GlobalSearchPage {
               .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
           }
         }.alignItems(HorizontalAlign.Start).layoutWeight(1);
-        Text('打开').fontSize(14).fontWeight(FontWeight.Medium).fontColor(Color.White)
-          .backgroundColor(COLOR_PRIMARY).borderRadius(15)
-          .padding({ left: 16, right: 16, top: 6, bottom: 6 })
-          .onClick(() => { this.openApp(r.userId); });
+        Row() {
+          if (this.resultOpeningKey === `app:${r.userId}`) {
+            LoadingProgress().width(16).height(16).color(Color.White);
+          } else {
+            Text('打开').fontSize(14).fontWeight(FontWeight.Medium).fontColor(Color.White);
+          }
+        }
+        .width(58).height(30)
+        .justifyContent(FlexAlign.Center)
+        .backgroundColor(COLOR_PRIMARY)
+        .borderRadius(15);
       }
-      .width('100%').padding({ left: 14, right: 14, top: 8, bottom: 8 })
+      .width('100%')
+      .constraintSize({ minHeight: 64 })
+      .padding({ left: 14, right: 14, top: 8, bottom: 8 })
       .alignItems(VerticalAlign.Center)
+      .stateStyles({
+        normal: this.resultRowNormalStyle,
+        pressed: this.resultRowPressedStyle
+      })
+      .accessibilityText(`${r.title}${r.subtitle !== '' ? '，' + r.subtitle : ''}，打开`)
       .onClick(() => { this.openApp(r.userId); });
     }
   }
@@ -946,14 +2012,23 @@ struct GlobalSearchPage {
       Column() {
         this.sectionHeader('热门应用');
         Column() {
-          ForEach(this.apps.filter((r: SearchRow) =>
-            this.query.trim() === '' || r.title.toLowerCase().includes(this.query.trim().toLowerCase())),
+          ForEach(this.filteredAppResults(),
             (r: SearchRow, idx: number) => {
               this.appRow(r, idx > 0);
-            }, (r: SearchRow) => `app_${r.userId}_${r.avatarPath}_${r.title}_${r.subtitle}`);
+            }, (r: SearchRow) => `app_${r.userId}_${r.title}_${r.subtitle}_${r.avatarPath}`);
         }.width('100%').backgroundColor($r('app.color.surface'));
-        if (this.apps.length === 0) {
-          Text('加载中...').fontSize(14).fontColor(COLOR_TEXT_SECONDARY).margin({ top: 48 });
+        if (this.filteredAppResults().length === 0 && this.query.trim() === '') {
+          if (!this.appsLoaded || this.apps.some((row: SearchRow) => row.title === '')) {
+            this.catalogLoadingState('正在加载热门应用');
+          } else if (this.appsFailed) {
+            this.catalogErrorState('应用加载失败', TAB_APPS);
+          } else {
+            this.catalogEmptyState(
+              '暂无热门应用',
+              '可稍后再来看看',
+              $r('sys.symbol.dot_grid_1x2')
+            );
+          }
         }
       }.width('100%');
     }
@@ -967,7 +2042,8 @@ struct GlobalSearchPage {
   downloadRow(it: DownloadItem, showDivider: boolean) {
     Column() {
       if (showDivider) {
-        Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 72 });
+        Divider().color($r('app.color.divider')).strokeWidth(0.7)
+          .margin({ left: SEARCH_RESULT_DIVIDER_INSET });
       }
       Row({ space: 12 }) {
         if (it.kind === 'photo') {
@@ -997,6 +2073,11 @@ struct GlobalSearchPage {
       }
       .width('100%').padding({ left: 14, right: 14, top: 8, bottom: 8 })
       .alignItems(VerticalAlign.Center)
+      .stateStyles({
+        normal: this.resultRowNormalStyle,
+        pressed: this.resultRowPressedStyle
+      })
+      .accessibilityText(`${it.name}，${it.progress < 100 ? '下载中' : it.sizeLabel}`)
       .onClick(() => {
         if (it.progress >= 100 && it.path !== '') {
           openLocalFile(getContext(this) as common.UIAbilityContext, it.path, '');
@@ -1023,6 +2104,17 @@ struct GlobalSearchPage {
       q === '' || it.name.toLowerCase().includes(q));
   }
 
+  private filteredChatResults(): SearchRow[] {
+    return this.chatResults.filter((row: SearchRow) =>
+      row.title !== '' && (this.tab === TAB_CHATS || row.isChannel));
+  }
+
+  private filteredAppResults(): SearchRow[] {
+    const q = this.query.trim().toLowerCase();
+    return this.apps.filter((row: SearchRow) =>
+      row.title !== '' && (q === '' || row.title.toLowerCase().includes(q)));
+  }
+
   @Builder
   downloadsList() {
     List() {
@@ -1030,7 +2122,8 @@ struct GlobalSearchPage {
         ListItem() {
           this.downloadRow(it, idx > 0);
         }.backgroundColor($r('app.color.surface'));
-      }, (it: DownloadItem) => `dl_${it.fileId}_${it.path}_${it.progress}`);
+      }, (it: DownloadItem) =>
+        `dl_${it.fileId}_${it.path}_${it.progress}_${it.sizeLabel}_${it.dateLabel}`);
       if (this.downloads.length === 0 && this.activeDownloads.length === 0) {
         ListItem() {
           Text('暂无下载记录').fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
@@ -1038,7 +2131,256 @@ struct GlobalSearchPage {
         }
       }
     }
-    .layoutWeight(1).width('100%');
+    .layoutWeight(1)
+    .width('calc(100% - 24vp)')
+    .margin({ left: 12, right: 12, top: 12, bottom: 12 })
+    .backgroundColor($r('app.color.surface'))
+    .borderRadius(20)
+    .clip(true);
+  }
+
+  @Builder
+  messageLoadingState(compact: boolean) {
+    Column({ space: 10 }) {
+      LoadingProgress()
+        .width(compact ? 28 : 36)
+        .height(compact ? 28 : 36)
+        .color(COLOR_PRIMARY);
+      Text('正在搜索')
+        .fontSize(compact ? 13 : 15)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(COLOR_TEXT_PRIMARY);
+      if (!compact) {
+        Text('正在查找相关消息，请稍候')
+          .fontSize(13)
+          .fontColor(COLOR_TEXT_SECONDARY);
+      }
+    }
+    .layoutWeight(compact ? 0 : 1)
+    .width(compact ? '100%' : 'calc(100% - 24vp)')
+    .height(compact ? 106 : '100%')
+    .margin({
+      left: compact ? 0 : 12,
+      right: compact ? 0 : 12,
+      top: compact ? 0 : 12,
+      bottom: compact ? 0 : 12
+    })
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor($r('app.color.surface'))
+    .borderRadius(compact ? 0 : 20)
+    .transition(TransitionEffect.OPACITY
+      .combine(TransitionEffect.translate({ y: 3 }))
+      .animation({
+        duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 160),
+        curve: Curve.EaseOut
+      }));
+  }
+
+  @Builder
+  messageErrorState(compact: boolean) {
+    Column({ space: 8 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        Circle({ width: compact ? 46 : 58, height: compact ? 46 : 58 }).fill('#18E64646');
+        SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+          .fontSize(compact ? 23 : 28)
+          .fontColor(['#E64646']);
+      }
+      Text(compact ? '消息搜索失败' : '搜索失败')
+        .fontSize(compact ? 15 : 17)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(COLOR_TEXT_PRIMARY);
+      Text(this.messageError !== '' ? this.messageError : '网络或服务暂时不可用')
+        .fontSize(13)
+        .fontColor(COLOR_TEXT_SECONDARY);
+      Row({ space: 6 }) {
+        SymbolGlyph($r('sys.symbol.arrow_clockwise'))
+          .fontSize(15)
+          .fontColor([COLOR_PRIMARY]);
+        Text('重新搜索')
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(COLOR_PRIMARY);
+      }
+      .height(38)
+      .padding({ left: 16, right: 16 })
+      .margin({ top: 3 })
+      .borderRadius(19)
+      .stateStyles({
+        normal: this.retryActionNormalStyle,
+        pressed: this.retryActionPressedStyle
+      })
+      .accessibilityText('重新搜索')
+      .onClick((): void => { this.retryMessageSearch(); });
+    }
+    .layoutWeight(compact ? 0 : 1)
+    .width(compact ? '100%' : 'calc(100% - 24vp)')
+    .height(compact ? 166 : '100%')
+    .margin({
+      left: compact ? 0 : 12,
+      right: compact ? 0 : 12,
+      top: compact ? 0 : 12,
+      bottom: compact ? 0 : 12
+    })
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor($r('app.color.surface'))
+    .borderRadius(compact ? 0 : 20)
+    .transition(TransitionEffect.OPACITY
+      .combine(TransitionEffect.translate({ y: 3 }))
+      .animation({
+        duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+        curve: Curve.EaseOut
+      }));
+  }
+
+  @Builder
+  paginationFooter() {
+    if (this.pagingBusy) {
+      Row({ space: 8 }) {
+        LoadingProgress().width(20).height(20).color(COLOR_PRIMARY);
+        Text('正在加载更多')
+          .fontSize(13)
+          .fontColor(COLOR_TEXT_SECONDARY);
+      }
+      .width('100%')
+      .height(54)
+      .justifyContent(FlexAlign.Center)
+      .accessibilityText('正在加载更多结果')
+      .transition(TransitionEffect.OPACITY
+        .combine(TransitionEffect.translate({ y: 4 }))
+        .animation({
+          duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 150),
+          curve: Curve.EaseOut
+        }));
+    } else if (this.pagingError) {
+      Row({ space: 9 }) {
+        SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+          .fontSize(17)
+          .fontColor(['#E64646']);
+        Text('加载更多失败')
+          .fontSize(13)
+          .fontColor(COLOR_TEXT_SECONDARY);
+        Row({ space: 4 }) {
+          SymbolGlyph($r('sys.symbol.arrow_clockwise'))
+            .fontSize(13)
+            .fontColor([COLOR_PRIMARY]);
+          Text('重试')
+            .fontSize(13)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(COLOR_PRIMARY);
+        }
+        .height(32)
+        .padding({ left: 11, right: 11 })
+        .borderRadius(16)
+        .stateStyles({
+          normal: this.retryActionNormalStyle,
+          pressed: this.retryActionPressedStyle
+        })
+        .accessibilityText('重试加载更多结果')
+        .onClick((): void => { this.retryPaging(); });
+      }
+      .width('100%')
+      .height(58)
+      .justifyContent(FlexAlign.Center)
+      .transition(TransitionEffect.OPACITY
+        .combine(TransitionEffect.translate({ y: 4 }))
+        .animation({
+          duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 160),
+          curve: Curve.EaseOut
+        }));
+    } else if (this.loadedPageCount > 1 && this.nextOffset === '') {
+      Text('已显示全部结果')
+        .width('100%')
+        .height(48)
+        .fontSize(12)
+        .fontColor(COLOR_TEXT_SECONDARY)
+        .textAlign(TextAlign.Center)
+        .transition(TransitionEffect.OPACITY.animation({
+          duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 150),
+          curve: Curve.EaseOut
+        }));
+    }
+  }
+
+  @Builder
+  chatSearchInlineState() {
+    if (this.chatSearching) {
+      Row({ space: 8 }) {
+        LoadingProgress().width(19).height(19).color(COLOR_PRIMARY);
+        Text(this.tab === TAB_CHANNELS ? '正在搜索频道' : '正在搜索聊天')
+          .fontSize(13)
+          .fontColor(COLOR_TEXT_SECONDARY);
+      }
+      .width('100%')
+      .height(48)
+      .justifyContent(FlexAlign.Center);
+    } else if (this.chatSearchFailed) {
+      Row({ space: 8 }) {
+        SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+          .fontSize(17)
+          .fontColor(['#E64646']);
+        Text(this.tab === TAB_CHANNELS ? '频道搜索失败' : '聊天搜索失败')
+          .fontSize(13)
+          .fontColor(COLOR_TEXT_SECONDARY);
+        Row() {
+          Text('重试')
+            .fontSize(13)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(COLOR_PRIMARY);
+        }
+        .height(32)
+        .padding({ left: 12, right: 12 })
+        .borderRadius(16)
+        .stateStyles({
+          normal: this.retryActionNormalStyle,
+          pressed: this.retryActionPressedStyle
+        })
+        .onClick((): void => { this.retryChatSearch(); });
+      }
+      .width('100%')
+      .height(52)
+      .justifyContent(FlexAlign.Center);
+    }
+  }
+
+  @Builder
+  appSearchInlineState() {
+    if (!this.appsLoaded || this.apps.some((row: SearchRow) => row.title === '')) {
+      Row({ space: 8 }) {
+        LoadingProgress().width(19).height(19).color(COLOR_PRIMARY);
+        Text('正在搜索应用')
+          .fontSize(13)
+          .fontColor(COLOR_TEXT_SECONDARY);
+      }
+      .width('100%')
+      .height(48)
+      .justifyContent(FlexAlign.Center);
+    } else if (this.appsFailed) {
+      Row({ space: 8 }) {
+        SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+          .fontSize(17)
+          .fontColor(['#E64646']);
+        Text('应用加载失败')
+          .fontSize(13)
+          .fontColor(COLOR_TEXT_SECONDARY);
+        Row() {
+          Text('重试')
+            .fontSize(13)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(COLOR_PRIMARY);
+        }
+        .height(32)
+        .padding({ left: 12, right: 12 })
+        .borderRadius(16)
+        .stateStyles({
+          normal: this.retryActionNormalStyle,
+          pressed: this.retryActionPressedStyle
+        })
+        .onClick((): void => { this.retryApps(); });
+      }
+      .width('100%')
+      .height(52)
+      .justifyContent(FlexAlign.Center);
+    }
   }
 
   // 聊天/频道 tabs: name-search results (频道 keeps only channels).
@@ -1048,38 +2390,49 @@ struct GlobalSearchPage {
       Column() {
         LoadingProgress().width(36).height(36).color(COLOR_TEXT_SECONDARY);
       }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
-    } else if (this.chatResults.filter((r: SearchRow) => this.tab === 0 || r.isChannel).length === 0) {
+    } else if (this.filteredChatResults().length === 0) {
       Column() {
-        Text(this.tab === 1 ? '未找到相关频道' : '未找到相关聊天')
+        Text(this.tab === TAB_CHANNELS ? '未找到相关频道' : '未找到相关聊天')
           .fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
       }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
     } else {
       List() {
-        ForEach(this.chatResults.filter((r: SearchRow) => this.tab === 0 || r.isChannel),
+        ForEach(this.filteredChatResults(),
           (r: SearchRow, idx: number) => {
             ListItem() {
               this.chatRow(r, idx > 0);
             }.backgroundColor($r('app.color.surface'));
-          }, (r: SearchRow) => `res_${r.chatId}_${r.avatarPath}_${r.title}_${r.subtitle}`);
+          }, (r: SearchRow) => `res_${r.chatId}_${r.title}_${r.subtitle}_${r.avatarPath}`);
       }
-      .layoutWeight(1).width('100%');
+      .layoutWeight(1)
+      .width('calc(100% - 24vp)')
+      .margin({ left: 12, right: 12, top: 12, bottom: 12 })
+      .backgroundColor($r('app.color.surface'))
+      .borderRadius(20)
+      .clip(true);
     }
   }
 
   // 媒体 tab: 3-column photo/video thumbnail grid.
   @Builder
   mediaGrid() {
-    if (this.loading) {
-      Column() {
-        LoadingProgress().width(36).height(36).color(COLOR_TEXT_SECONDARY);
-      }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
-    } else if (this.items.length === 0 && this.searchedOnce) {
+    if (this.messageError !== '') {
+      this.messageErrorState(false);
+    } else if (this.loading || (this.resolvingMessageRows() && this.visibleItems().length === 0)) {
+      this.messageLoadingState(false);
+    } else if (this.visibleItems().length === 0 && this.searchedOnce && this.searchExhausted()) {
       Column() {
         Text('没有媒体消息').fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
-      }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
+      }
+      .layoutWeight(1)
+      .width('calc(100% - 24vp)')
+      .margin({ left: 12, right: 12, top: 12, bottom: 12 })
+      .justifyContent(FlexAlign.Center)
+      .backgroundColor($r('app.color.surface'))
+      .borderRadius(20);
     } else {
       Grid() {
-        ForEach(this.items, (it: FoundItem) => {
+        ForEach(this.visibleItems(), (it: FoundItem) => {
           GridItem() {
             Stack({ alignContent: Alignment.BottomEnd }) {
               if (it.thumbPath !== '') {
@@ -1100,15 +2453,33 @@ struct GlobalSearchPage {
             }
             .width('100%').aspectRatio(1)
             .clip(true)
+            .stateStyles({
+              normal: this.mediaResultNormalStyle,
+              pressed: this.mediaResultPressedStyle
+            })
+            .accessibilityText(`${it.isVideo ? '视频' : '图片'}，${it.chatTitle}`)
             .onClick(() => { this.openResult(it); });
           }
-        }, (it: FoundItem) => `m_${it.chatId}_${it.messageId}_${it.thumbPath}`);
+        }, (it: FoundItem) => `m_${it.chatId}_${it.messageId}_${it.chatTitle}_${it.thumbPath}`);
+        if (this.pagingBusy || this.pagingError ||
+          (this.loadedPageCount > 1 && this.nextOffset === '')) {
+          GridItem() {
+            this.paginationFooter();
+          }
+          .columnStart(0)
+          .columnEnd(2);
+        }
       }
       .columnsTemplate('1fr 1fr 1fr')
       .columnsGap(2).rowsGap(2)
-      .layoutWeight(1).width('100%')
+      .layoutWeight(1)
+      .width('calc(100% - 24vp)')
+      .margin({ left: 12, right: 12, top: 12, bottom: 12 })
+      .backgroundColor($r('app.color.surface'))
+      .borderRadius(20)
+      .clip(true)
       .onReachEnd(() => {
-        if (this.nextOffset !== '' && !this.loading) {
+        if (this.nextOffset !== '' && !this.loading && !this.pagingError) {
           this.searchMessages(this.nextOffset);
         }
       });
@@ -1125,7 +2496,11 @@ struct GlobalSearchPage {
             .fontSize(15).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
             .layoutWeight(1);
-          Text(formatTime(it.date, this.nowSec)).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+          if (this.resultOpeningKey === `message:${it.chatId}:${it.messageId}`) {
+            LoadingProgress().width(16).height(16).color(COLOR_PRIMARY);
+          } else {
+            Text(formatTime(it.date, this.nowSec)).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+          }
         }.width('100%');
         Text(it.preview).fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
           .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis });
@@ -1136,7 +2511,12 @@ struct GlobalSearchPage {
     .width('100%')
     .alignItems(VerticalAlign.Center)
     .padding({ left: 14, right: 14, top: 10, bottom: 10 })
-    .backgroundColor($r('app.color.surface'))
+    .constraintSize({ minHeight: 66 })
+    .stateStyles({
+      normal: this.resultRowNormalStyle,
+      pressed: this.resultRowPressedStyle
+    })
+    .accessibilityText(`${it.chatTitle}，${it.preview}`)
     .onClick(() => { this.openResult(it); });
   }
 
@@ -1147,75 +2527,95 @@ struct GlobalSearchPage {
   combinedResults() {
     Scroll() {
       Column() {
-        if (this.hashtagPosts.length > 0) {
+        if (this.visibleHashtagPosts().length > 0) {
           Row() {
             Text('公开贴文').fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_SECONDARY)
               .layoutWeight(1);
             Text('显示更多 ›').fontSize(14).fontColor(COLOR_PRIMARY)
               .onClick(() => {
-                // Full list lives in the dedicated 公开贴文 tab (free API).
-                this.controller.changeIndex(TAB_PUBLIC_POSTS);
+                // Hashtag results expand into the official 帖子 category.
+                this.controller.changeIndex(TAB_POSTS);
               });
           }.width('100%').padding({ left: 16, right: 16, top: 10, bottom: 6 });
           Column() {
-            ForEach(this.hashtagPosts.slice(0, 3), (it: FoundItem, idx: number) => {
+            ForEach(this.visibleHashtagPosts().slice(0, 3), (it: FoundItem, idx: number) => {
               if (idx > 0) {
-                Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 70 });
+                Divider().color($r('app.color.divider')).strokeWidth(0.7)
+                  .margin({ left: SEARCH_RESULT_DIVIDER_INSET });
               }
               this.msgRow(it);
-            }, (it: FoundItem) => `ht_${it.chatId}_${it.messageId}_${it.chatTitle}_${it.avatarPath}`);
+            }, (it: FoundItem) =>
+              `ht_${it.chatId}_${it.messageId}_${it.chatTitle}_${it.avatarPath}`);
           }.width('100%');
         }
         if (this.tab === TAB_APPS) {
+          if (this.filteredAppResults().length > 0) {
+            this.sectionHeader('应用');
+          }
           Column() {
-            ForEach(this.apps.filter((r: SearchRow) =>
-              r.title.toLowerCase().includes(this.query.trim().toLowerCase())),
+            ForEach(this.filteredAppResults(),
               (r: SearchRow, idx: number) => {
                 this.appRow(r, idx > 0);
-              }, (r: SearchRow) => `capp_${r.userId}_${r.avatarPath}_${r.title}`);
+              }, (r: SearchRow) => `capp_${r.userId}_${r.title}_${r.subtitle}_${r.avatarPath}`);
           }.width('100%').backgroundColor($r('app.color.surface'));
+          if (this.filteredAppResults().length === 0 &&
+            (!this.appsLoaded || this.appsFailed ||
+              this.apps.some((row: SearchRow) => row.title === ''))) {
+            this.appSearchInlineState();
+          }
         } else {
+          if (this.filteredChatResults().length > 0) {
+            this.sectionHeader(this.tab === TAB_CHANNELS ? '频道' : '聊天与联系人');
+          }
           Column() {
-            ForEach(this.chatResults.filter((r: SearchRow) => this.tab === TAB_CHATS || r.isChannel),
+            ForEach(this.filteredChatResults(),
               (r: SearchRow, idx: number) => {
                 this.chatRow(r, idx > 0);
-              }, (r: SearchRow) => `cres_${r.chatId}_${r.avatarPath}_${r.title}_${r.subtitle}`);
+              }, (r: SearchRow) => `cres_${r.chatId}_${r.title}_${r.subtitle}_${r.avatarPath}`);
           }.width('100%').backgroundColor($r('app.color.surface'));
+          if (this.filteredChatResults().length === 0 &&
+            (this.chatSearching || this.chatSearchFailed)) {
+            this.chatSearchInlineState();
+          }
         }
         this.sectionHeader('消息');
-        if (this.loading && this.items.length === 0) {
-          Row() {
-            LoadingProgress().width(26).height(26).color(COLOR_TEXT_SECONDARY);
-          }.width('100%').justifyContent(FlexAlign.Center).padding(16);
+        if (this.messageError !== '') {
+          this.messageErrorState(true);
+        } else if ((this.loading || this.resolvingMessageRows()) && this.visibleItems().length === 0) {
+          this.messageLoadingState(true);
         } else {
           Column() {
             ForEach(this.visibleItems(), (it: FoundItem, idx: number) => {
               if (idx > 0) {
-                Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 70 });
+                Divider().color($r('app.color.divider')).strokeWidth(0.7)
+                  .margin({ left: SEARCH_RESULT_DIVIDER_INSET });
               }
               this.msgRow(it);
-            }, (it: FoundItem) => `cm_${it.chatId}_${it.messageId}_${it.chatTitle}_${it.avatarPath}`);
+            }, (it: FoundItem) =>
+              `cm_${it.chatId}_${it.messageId}_${it.chatTitle}_${it.avatarPath}`);
           }.width('100%');
           if (this.visibleItems().length === 0 && this.searchedOnce && this.searchExhausted()) {
             Text('未找到相关消息').fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
               .width('100%').textAlign(TextAlign.Center).padding(16);
           }
-          // Only while a page is actually being fetched — `nextOffset !== ''`
-          // alone would leave a spinner parked under an idle list.
-          if (this.pagingBusy) {
-            Row() {
-              LoadingProgress().width(22).height(22).color(COLOR_TEXT_SECONDARY);
-            }.width('100%').justifyContent(FlexAlign.Center).padding(10);
+          if (this.pagingBusy || this.pagingError ||
+            (this.loadedPageCount > 1 && this.nextOffset === '')) {
+            this.paginationFooter();
           }
         }
       }.width('100%');
     }
-    .layoutWeight(1).width('100%')
+    .layoutWeight(1)
+    .width('calc(100% - 24vp)')
+    .margin({ left: 12, right: 12, top: 12, bottom: 12 })
     .align(Alignment.Top)
     .edgeEffect(EdgeEffect.Spring)
     .scrollBar(BarState.Off)
+    .backgroundColor($r('app.color.surface'))
+    .borderRadius(20)
+    .clip(true)
     .onReachEnd(() => {
-      if (this.nextOffset !== '' && !this.loading) {
+      if (this.nextOffset !== '' && !this.loading && !this.pagingError) {
         this.searchMessages(this.nextOffset);
       }
     });
@@ -1251,41 +2651,55 @@ struct GlobalSearchPage {
 
   @Builder
   messageResults() {
-    if (this.loading) {
-      Column() {
-        LoadingProgress().width(36).height(36).color(COLOR_TEXT_SECONDARY);
-      }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
-    } else if (this.items.length === 0 && this.searchedOnce) {
+    if (this.messageError !== '') {
+      this.messageErrorState(false);
+    } else if (this.loading || (this.resolvingMessageRows() && this.visibleItems().length === 0)) {
+      this.messageLoadingState(false);
+    } else if (this.visibleItems().length === 0 && this.searchedOnce && this.searchExhausted()) {
       Column() {
         Text(this.tab === TAB_LINKS ? '没有链接消息'
           : (this.tab === TAB_FILES ? '没有文件消息'
-            : (this.tab === TAB_AUDIO ? '没有音频消息'
-              : (this.tab === TAB_VOICE ? '没有语音消息'
-                : (this.tab === TAB_PUBLIC_POSTS ? '没有相关公开贴文' : '未找到相关消息')))))
+            : (this.tab === TAB_AUDIO ? '没有音乐消息'
+              : (this.tab === TAB_VOICE ? '没有语音消息' : '未找到相关消息'))))
           .fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
-      }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
+      }
+      .layoutWeight(1)
+      .width('calc(100% - 24vp)')
+      .margin({ left: 12, right: 12, top: 12, bottom: 12 })
+      .justifyContent(FlexAlign.Center)
+      .backgroundColor($r('app.color.surface'))
+      .borderRadius(20);
     } else {
       List() {
-        ForEach(this.items, (it: FoundItem) => {
+        ForEach(this.visibleItems(), (it: FoundItem) => {
           ListItem() {
             this.msgRow(it);
           }
-        }, (it: FoundItem) => `${it.chatId}_${it.messageId}_${it.chatTitle}_${it.avatarPath}`);
-        // Spin only while a page is in flight — a spinner parked under an idle
-        // list reads as "stuck loading".
-        if (this.pagingBusy) {
+        }, (it: FoundItem) =>
+          `${it.chatId}_${it.messageId}_${it.chatTitle}_${it.avatarPath}`);
+        if (this.pagingBusy || this.pagingError ||
+          (this.loadedPageCount > 1 && this.nextOffset === '')) {
           ListItem() {
-            Row() {
-              LoadingProgress().width(22).height(22).color(COLOR_TEXT_SECONDARY);
-            }.width('100%').justifyContent(FlexAlign.Center).padding(10);
+            this.paginationFooter();
           }
         }
       }
-      .layoutWeight(1).width('100%')
-      .divider({ strokeWidth: 0.7, color: $r('app.color.divider'), startMargin: 14, endMargin: 14 })
+      .layoutWeight(1)
+      .width('calc(100% - 24vp)')
+      .margin({ left: 12, right: 12, top: 12, bottom: 12 })
+      .backgroundColor($r('app.color.surface'))
+      .borderRadius(20)
+      .clip(true)
+      .divider({
+        strokeWidth: 0.7,
+        color: $r('app.color.divider'),
+        startMargin: SEARCH_RESULT_DIVIDER_INSET,
+        endMargin: 0
+      })
       // Prefetch the next page a few rows before the bottom (no tap needed).
       .onScrollIndex((_start: number, end: number) => {
-        if (this.nextOffset !== '' && !this.loading && end >= this.items.length - 5) {
+        if (this.nextOffset !== '' && !this.loading && !this.pagingError &&
+          end >= this.items.length - 5) {
           this.searchMessages(this.nextOffset);
         }
       });
@@ -1301,7 +2715,7 @@ struct GlobalSearchPage {
     } else if (idx === TAB_MEDIA) {
       this.mediaGrid();
     } else if (filterTypeForTab(idx) !== '') {
-      // 链接/文件/音频/语音: typed-message results, query optional.
+      // 链接/文件/音乐/语音: typed-message results, query optional.
       this.messageResults();
     } else if (idx === TAB_POSTS) {
       // Prompt (with explicit 搜索 button) until a search actually ran.
@@ -1309,16 +2723,6 @@ struct GlobalSearchPage {
         this.messageResults();
       } else {
         this.postsPrompt();
-      }
-    } else if (idx === TAB_PUBLIC_POSTS) {
-      if (this.query.trim() === '') {
-        Column({ space: 8 }) {
-          Text('公开贴文').fontSize(17).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
-          Text('输入话题关键词搜索公开频道的贴文')
-            .fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
-        }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
-      } else {
-        this.messageResults();
       }
     } else if (this.query.trim() === '') {
       if (idx === TAB_CHATS) {

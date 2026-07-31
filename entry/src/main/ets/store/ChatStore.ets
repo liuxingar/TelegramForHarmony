@@ -19,8 +19,16 @@ export class ChatStore {
   private chats: Map<number, ChatEntry> = new Map();
   private positions: Map<string, Map<number, PositionInfo>> = new Map();
   private subs: Sub[] = [];
+  private changeListeners: Array<() => void> = [];
+  private activeLoads: Map<string, Promise<boolean>> = new Map();
+  private initializedLists: Set<string> = new Set();
+  private exhaustedLists: Set<string> = new Set();
   private groupCallChats: Map<number, number> = new Map();
   private groupCallLoading: Set<number> = new Set();
+  private defaultBackgroundLight: TdObject | null = null;
+  private defaultBackgroundDark: TdObject | null = null;
+  private defaultBackgroundLightKnown: boolean = false;
+  private defaultBackgroundDarkKnown: boolean = false;
 
   constructor(client: TdClient, users: UserStore) {
     this.client = client;
@@ -34,6 +42,9 @@ export class ChatStore {
     client.onUpdate('updateChatNotificationSettings', (u: TdObject) => this.onNotify(u));
     client.onUpdate('updateChatMessageAutoDeleteTime', (u: TdObject) => this.onAutoDelete(u));
     client.onUpdate('updateChatIsMarkedAsUnread', (u: TdObject) => this.onMarkedUnread(u));
+    client.onUpdate('updateChatBackground', (u: TdObject) => this.onBackground(u));
+    client.onUpdate('updateChatTheme', (u: TdObject) => this.onTheme(u));
+    client.onUpdate('updateDefaultBackground', (u: TdObject) => this.onDefaultBackground(u));
     client.onUpdate('updateChatVideoChat', (u: TdObject) => this.onVideoChat(u));
     client.onUpdate('updateGroupCall', (u: TdObject) => this.onGroupCall(u));
   }
@@ -44,6 +55,17 @@ export class ChatStore {
     listener(this.getChats(listKey));
     return (): void => {
       this.subs = this.subs.filter((s: Sub) => s !== sub);
+    };
+  }
+
+  // Lightweight invalidation signal for derived UI such as folder unread
+  // badges. Unlike subscribe(), this does not rebuild and sort a chat list on
+  // every TDLib update.
+  subscribeChanges(listener: () => void): () => void {
+    this.changeListeners = [...this.changeListeners, listener];
+    listener();
+    return (): void => {
+      this.changeListeners = this.changeListeners.filter((l: () => void) => l !== listener);
     };
   }
 
@@ -106,7 +128,7 @@ export class ChatStore {
     let count = 0;
     bucket.forEach((_pos: PositionInfo, id: number) => {
       const e = this.chats.get(id);
-      if (e !== undefined && e.unreadCount > 0 && !e.isMuted) {
+      if (e !== undefined && (e.unreadCount > 0 || e.isMarkedUnread) && !e.isMuted) {
         count += 1;
       }
     });
@@ -122,18 +144,53 @@ export class ChatStore {
     return this.chats.get(chatId);
   }
 
-  async load(listKey: string = MAIN): Promise<void> {
+  defaultBackground(forDarkTheme: boolean): TdObject | null {
+    return forDarkTheme ? this.defaultBackgroundDark : this.defaultBackgroundLight;
+  }
+
+  defaultBackgroundKnown(forDarkTheme: boolean): boolean {
+    return forDarkTheme ? this.defaultBackgroundDarkKnown : this.defaultBackgroundLightKnown;
+  }
+
+  load(listKey: string = MAIN): Promise<boolean> {
+    if (this.exhaustedLists.has(listKey)) {
+      return Promise.resolve(true);
+    }
+    const active = this.activeLoads.get(listKey);
+    if (active !== undefined) {
+      return active;
+    }
     const req: TdRequest = { '@type': 'loadChats' };
     req['chat_list'] = chatListOf(listKey);
     req['limit'] = PAGE_LIMIT;
-    try {
-      await this.client.send(req);
-    } catch (e) {
-      const code = (e as TdError).code;
-      if (code !== 404) {
-        console.error(`ChatStore.load(${listKey}) failed: ${(e as TdError).message}`);
+    const task = this.client.send(req).then((_result: TdObject): boolean => {
+      this.activeLoads.delete(listKey);
+      return true;
+    }).catch((error: TdError): boolean => {
+      this.activeLoads.delete(listKey);
+      if (error.code === 404) {
+        this.exhaustedLists.add(listKey);
+        return true;
       }
+      console.error(`ChatStore.load(${listKey}) failed: ${error.message}`);
+      return false;
+    });
+    this.activeLoads.set(listKey, task);
+    return task;
+  }
+
+  // Request the first page at most once. Parent folder tabs and their child
+  // lists can safely call this concurrently without consuming two TDLib pages.
+  ensureLoaded(listKey: string = MAIN): Promise<boolean> {
+    if (this.initializedLists.has(listKey)) {
+      return Promise.resolve(true);
     }
+    return this.load(listKey).then((success: boolean): boolean => {
+      if (success) {
+        this.initializedLists.add(listKey);
+      }
+      return success;
+    });
   }
 
   async loadMore(listKey: string = MAIN): Promise<void> {
@@ -217,6 +274,10 @@ export class ChatStore {
       ? ((videoChat['group_call_id'] as number | undefined) ?? 0) : 0;
   }
 
+  private backgroundOf(value: Object | null | undefined): TdObject | null {
+    return value !== undefined && value !== null ? value as TdObject : null;
+  }
+
   private rememberGroupCall(chatId: number, previousId: number, groupCallId: number): void {
     if (previousId > 0 && this.groupCallChats.get(previousId) === chatId) {
       this.groupCallChats.delete(previousId);
@@ -267,12 +328,17 @@ export class ChatStore {
       return;
     }
     const id = chat['id'] as number;
-    const previousGroupCallId = this.chats.get(id)?.liveGroupCallId ?? 0;
+    const previous = this.chats.get(id);
+    const previousGroupCallId = previous?.liveGroupCallId ?? 0;
     const title = (chat['title'] as string | undefined) ?? '';
     const lastMsg = chat['last_message'] as TdObject | undefined;
     const groupCallId = this.videoChatId(chat['video_chat'] as TdObject | undefined);
+    const photoFileId = this.smallPhotoId(chat['photo'] as TdObject | undefined);
+    const samePhoto = previous !== undefined && previous.photoFileId === photoFileId;
+    const sameGroupCall = previous !== undefined && previous.liveGroupCallId === groupCallId;
     const entry: ChatEntry = {
       id,
+      revision: previous !== undefined ? previous.revision + 1 : 0,
       title,
       isMuted: isMutedFrom(chat['notification_settings'] as TdObject | undefined),
       unreadCount: (chat['unread_count'] as number | undefined) ?? 0,
@@ -280,15 +346,19 @@ export class ChatStore {
       lastMessageDate: lastMsg !== undefined ? ((lastMsg['date'] as number | undefined) ?? 0) : 0,
       lastMessageId: lastMsg !== undefined ? ((lastMsg['id'] as number | undefined) ?? 0) : 0,
       lastSenderName: this.senderName(lastMsg),
-      photoFileId: this.smallPhotoId(chat['photo'] as TdObject | undefined),
-      avatarPath: '',
+      photoFileId,
+      // getChat/updateNewChat may refresh a chat after its avatar has already
+      // completed. Preserve the resolved path when the photo itself is unchanged.
+      avatarPath: samePhoto ? previous!.avatarPath : '',
       initials: computeInitials(title),
       autoDeleteTime: (chat['message_auto_delete_time'] as number | undefined) ?? 0,
       kind: chatKindOf(chat['type'] as TdObject | undefined),
       isMarkedUnread: (chat['is_marked_as_unread'] as boolean | undefined) ?? false,
+      background: this.backgroundOf(chat['background']),
+      themeName: (chat['theme_name'] as string | undefined) ?? '',
       liveGroupCallId: groupCallId,
-      isLive: false,
-      isRtmpLive: false
+      isLive: sameGroupCall ? previous!.isLive : false,
+      isRtmpLive: sameGroupCall ? previous!.isRtmpLive : false
     };
     this.chats.set(id, entry);
     this.rememberGroupCall(id, previousGroupCallId, groupCallId);
@@ -390,6 +460,54 @@ export class ChatStore {
     this.notify();
   }
 
+  private onBackground(update: TdObject): void {
+    const id = update['chat_id'] as number;
+    const e = this.chats.get(id);
+    if (e === undefined) {
+      return;
+    }
+    const background = this.backgroundOf(update['background']);
+    if (e.background === background) {
+      return;
+    }
+    const c = cloneEntry(e);
+    c.background = background;
+    this.chats.set(id, c);
+    this.notify();
+  }
+
+  private onTheme(update: TdObject): void {
+    const id = update['chat_id'] as number;
+    const e = this.chats.get(id);
+    if (e === undefined) {
+      return;
+    }
+    const themeName = (update['theme_name'] as string | undefined) ?? '';
+    if (e.themeName === themeName) {
+      return;
+    }
+    const c = cloneEntry(e);
+    c.themeName = themeName;
+    this.chats.set(id, c);
+    this.notify();
+  }
+
+  private onDefaultBackground(update: TdObject): void {
+    const forDarkTheme = (update['for_dark_theme'] as boolean | undefined) ?? false;
+    const background = this.backgroundOf(update['background']);
+    if (forDarkTheme) {
+      this.defaultBackgroundDark = background;
+      this.defaultBackgroundDarkKnown = true;
+    } else {
+      this.defaultBackgroundLight = background;
+      this.defaultBackgroundLightKnown = true;
+    }
+    console.info(
+      `[ChatBackground] default dark=${forDarkTheme} background=${background !== null}`
+    );
+    this.notify();
+  }
+
   private onAutoDelete(update: TdObject): void {
     const id = update['chat_id'] as number;
     const e = this.chats.get(id);
@@ -427,6 +545,9 @@ export class ChatStore {
   private notify(): void {
     for (const s of this.subs) {
       s.listener(this.getChats(s.listKey));
+    }
+    for (const listener of this.changeListeners) {
+      listener();
     }
   }
 }

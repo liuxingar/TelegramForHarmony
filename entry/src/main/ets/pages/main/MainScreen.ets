@@ -6,12 +6,15 @@ import { ContactsPage } from './ContactsPage';
 import { SettingsPage } from './SettingsPage';
 import { MyProfilePage } from './MyProfilePage';
 import { TdObject, TdRequest, TdError } from '../../tdkit/TdTypes';
-import { COLOR_PRIMARY, COLOR_TAB_UNSELECTED } from '../../util/theme';
+import { COLOR_DIVIDER, COLOR_PRIMARY, COLOR_TAB_PILL_BG, COLOR_TAB_UNSELECTED } from '../../util/theme';
+import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
 
 const DOCK_BG: ResourceColor = $r('app.color.surface');
 const BADGE_BG: string = '#4CD964';
-const DOCK_H: number = 62;      // capsule height
+const DOCK_H: number = 64;      // capsule height
 const DOCK_GAP: number = 12;    // gap below the capsule (above it: content padding)
+const DOCK_ITEM_INSET: number = 5;
+const DOCK_SWITCH_DURATION: number = 240;
 
 // Root screen after login: a floating capsule dock (聊天/联系人/设置/个人资料)
 // over four keep-alive tab bodies. The dock is a rounded pill that hovers above
@@ -26,6 +29,7 @@ export struct MainScreen {
   @State myId: number = 0;
   @State meAvatar: string = '';
   @State meInitials: string = '?';
+  @State dockWidth: number = 0;
   private controller: TabsController = new TabsController();
   private store: ProfileStore | null = null;
   private unsubStore: (() => void) | null = null;
@@ -61,8 +65,30 @@ export struct MainScreen {
   }
 
   private select(index: number): void {
-    this.tab = index;
+    if (index === this.tab) {
+      return;
+    }
+    animateTo({
+      duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, DOCK_SWITCH_DURATION),
+      curve: Curve.EaseOut
+    }, (): void => { this.tab = index; });
     this.controller.changeIndex(index);
+  }
+
+  private dockItemWidth(): number {
+    return this.dockWidth > 0 ? this.dockWidth / 4 : 0;
+  }
+
+  @Styles
+  dockItemNormalStyle() {
+    .opacity(1)
+    .scale({ x: 1, y: 1 })
+  }
+
+  @Styles
+  dockItemPressedStyle() {
+    .opacity(0.72)
+    .scale({ x: 0.92, y: 0.92 })
   }
 
   @Builder
@@ -70,13 +96,24 @@ export struct MainScreen {
     Column({ space: 2 }) {
       Stack({ alignContent: Alignment.TopEnd }) {
         SymbolGlyph($r(icon)).fontSize(24)
-          .fontColor([this.tab === index ? COLOR_PRIMARY : COLOR_TAB_UNSELECTED]);
+          .fontColor([this.tab === index ? COLOR_PRIMARY : COLOR_TAB_UNSELECTED])
+          .scale({
+            x: this.tab === index ? 1.06 : 1,
+            y: this.tab === index ? 1.06 : 1
+          })
+          .animation({
+            duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+            curve: Curve.EaseOut
+        });
         if (index === 0 && this.unread > 0) {
-          Text(this.unread > 99 ? '99+' : `${this.unread}`)
-            .fontSize(10).fontColor(Color.White).fontWeight(FontWeight.Medium)
-            .backgroundColor(BADGE_BG).borderRadius(9)
+          Row() {
+            Text(this.unread > 99 ? '99+' : `${this.unread}`)
+              .fontSize(10).fontColor(Color.White).fontWeight(FontWeight.Medium);
+          }
             .constraintSize({ minWidth: 18 }).height(18)
-            .textAlign(TextAlign.Center).padding({ left: 5, right: 5 })
+            .padding({ left: 5, right: 5 })
+            .justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
+            .backgroundColor(BADGE_BG).borderRadius(9)
             .offset({ x: 12, y: -7 });
         }
       }
@@ -85,6 +122,14 @@ export struct MainScreen {
     }
     .layoutWeight(1).height('100%')
     .justifyContent(FlexAlign.Center)
+    .borderRadius((DOCK_H - DOCK_ITEM_INSET * 2) / 2)
+    .stateStyles({
+      normal: this.dockItemNormalStyle,
+      pressed: this.dockItemPressedStyle
+    })
+    .accessibilityText(index === 0 && this.unread > 0
+      ? `${label}，${this.unread} 个未读${this.tab === index ? '，已选中' : ''}`
+      : `${label}${this.tab === index ? '，已选中' : ''}`)
     .onClick(() => { this.select(index); });
   }
 
@@ -94,13 +139,20 @@ export struct MainScreen {
       Stack() {
         AvatarView({ avatarPath: this.meAvatar, initials: this.meInitials, colorSeed: this.myId, avatarSize: 24 });
       }
-      .borderRadius(14).padding(2)
-      .border({ width: this.tab === 3 ? 2 : 0, color: COLOR_PRIMARY });
+      .width(32).height(32).borderRadius(16).padding(2)
+      // A constant border width avoids a size jump when this tab is selected.
+      .border({ width: 2, color: this.tab === 3 ? COLOR_PRIMARY : Color.Transparent });
       Text('个人资料').fontSize(10)
         .fontColor(this.tab === 3 ? COLOR_PRIMARY : COLOR_TAB_UNSELECTED);
     }
     .layoutWeight(1).height('100%')
     .justifyContent(FlexAlign.Center)
+    .borderRadius((DOCK_H - DOCK_ITEM_INSET * 2) / 2)
+    .stateStyles({
+      normal: this.dockItemNormalStyle,
+      pressed: this.dockItemPressedStyle
+    })
+    .accessibilityText(`个人资料${this.tab === 3 ? '，已选中' : ''}`)
     .onClick(() => { this.select(3); });
   }
 
@@ -110,17 +162,40 @@ export struct MainScreen {
   @Builder
   dock() {
     Column() {
-      Row() {
-        this.dockItem(0, 'sys.symbol.message', '聊天');
-        this.dockItem(1, 'sys.symbol.person_2', '联系人');
-        this.dockItem(2, 'sys.symbol.gearshape', '设置');
-        this.profileDockItem();
+      Stack({ alignContent: Alignment.TopStart }) {
+        if (this.dockWidth > 0) {
+          Row()
+            .width(Math.max(0, this.dockItemWidth() - DOCK_ITEM_INSET * 2))
+            .height(DOCK_H - DOCK_ITEM_INSET * 2)
+            .backgroundColor(COLOR_TAB_PILL_BG)
+            .borderRadius((DOCK_H - DOCK_ITEM_INSET * 2) / 2)
+            .position({
+              x: this.tab * this.dockItemWidth() + DOCK_ITEM_INSET,
+              y: DOCK_ITEM_INSET
+            })
+            .animation({
+              duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, DOCK_SWITCH_DURATION),
+              curve: Curve.EaseOut
+            })
+            .hitTestBehavior(HitTestMode.None);
+        }
+        Row() {
+          this.dockItem(0, 'sys.symbol.message', '聊天');
+          this.dockItem(1, 'sys.symbol.person_2', '联系人');
+          this.dockItem(2, 'sys.symbol.gearshape', '设置');
+          this.profileDockItem();
+        }
+        .width('100%').height('100%')
+        .alignItems(VerticalAlign.Center);
       }
       .width('100%').height(DOCK_H)
       .backgroundColor(DOCK_BG)
       .borderRadius(DOCK_H / 2)
-      .alignItems(VerticalAlign.Center)
-      .shadow({ radius: 18, color: '#26000000', offsetX: 0, offsetY: 5 });
+      .border({ width: 0.5, color: COLOR_DIVIDER })
+      .shadow({ radius: 14, color: '#24000000', offsetX: 0, offsetY: 4 })
+      .onAreaChange((_old: Area, area: Area) => {
+        this.dockWidth = area.width as number;
+      });
     }
     .width('100%')
     .padding({ left: 16, right: 16 })
@@ -133,12 +208,31 @@ export struct MainScreen {
         TabContent() { ChatListPage(); }
         TabContent() { ContactsPage(); }
         TabContent() { SettingsPage(); }
-        TabContent() { MyProfilePage(); }
+        TabContent() {
+          MyProfilePage({
+            active: this.tab === 3,
+            onOpenSettings: (): void => { this.select(2); }
+          });
+        }
       }
       .barHeight(0)
       .scrollable(false)
-      .animationDuration(0)
-      .onChange((index: number) => { this.tab = index; })
+      .animationDuration(powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, DOCK_SWITCH_DURATION))
+      .onAnimationStart((_currentIndex: number, targetIndex: number) => {
+        if (this.tab !== targetIndex) {
+          animateTo({
+            duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, DOCK_SWITCH_DURATION),
+            curve: Curve.EaseOut
+          }, (): void => { this.tab = targetIndex; });
+        }
+      })
+      .onChange((index: number) => {
+        // Keep the dock synced if Tabs changes its final index after a rapid
+        // sequence of taps.
+        if (this.tab !== index) {
+          this.tab = index;
+        }
+      })
       .width('100%').height('100%');
 
       this.dock();

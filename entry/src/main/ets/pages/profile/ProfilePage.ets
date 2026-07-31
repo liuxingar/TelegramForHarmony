@@ -57,12 +57,22 @@ struct ProfilePage {
   @State availGifts: AvailGift[] = [];
   @State showGiftPicker: boolean = false;
   private userId: number = 0;
+  private pendingDraftText: string = '';
+  private pendingStartParam: string = '';
+  private pendingJumpTo: number = 0;
   private store: ProfileStore | null = null;
   private unsub: (() => void) | null = null;
 
   aboutToAppear(): void {
     const params = router.getParams() as Record<string, Object> | undefined;
-    this.userId = params !== undefined ? (params['userId'] as number) : 0;
+    this.userId = params !== undefined
+      ? ((params['userId'] as number | undefined) ?? 0) : 0;
+    this.pendingDraftText = params !== undefined
+      ? ((params['draftText'] as string | undefined) ?? '') : '';
+    this.pendingStartParam = params !== undefined
+      ? ((params['startParam'] as string | undefined) ?? '') : '';
+    this.pendingJumpTo = params !== undefined
+      ? ((params['jumpTo'] as number | undefined) ?? 0) : 0;
     const store = new ProfileStore(getTdClient(), this.userId);
     this.store = store;
     this.unsub = store.subscribe(() => { this.refresh(); });
@@ -142,6 +152,12 @@ struct ProfilePage {
 
   private openChat(chatId: number): void {
     const params: Record<string, Object> = { 'chatId': chatId };
+    if (this.pendingDraftText !== '') {
+      params['draftText'] = this.pendingDraftText;
+    }
+    if (this.pendingJumpTo > 0) {
+      params['jumpTo'] = this.pendingJumpTo;
+    }
     router.pushUrl({ url: 'pages/chat/ChatPage', params: params });
   }
 
@@ -154,6 +170,17 @@ struct ProfilePage {
       const id = chat['id'] as number | undefined;
       if (id !== undefined) {
         this.openChat(id);
+        if (this.pendingStartParam !== '') {
+          const start: TdRequest = { '@type': 'sendBotStartMessage' };
+          start['bot_user_id'] = this.userId;
+          start['chat_id'] = id;
+          start['parameter'] = this.pendingStartParam;
+          this.pendingStartParam = '';
+          getTdClient().send(start).catch((e: TdError): void => {
+            console.error(`ProfilePage.sendBotStartMessage failed: ${e.message}`);
+            promptAction.showToast({ message: '发送 /start 失败', duration: 1500 });
+          });
+        }
       }
     }).catch((e: TdError) => {
       console.error(`ProfilePage.createPrivateChat failed: ${e.message}`);

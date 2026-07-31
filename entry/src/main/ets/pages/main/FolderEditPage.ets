@@ -92,10 +92,14 @@ struct FolderEditPage {
 
   private addChat(id: number): void {
     if (this.pickerMode === PICK_INCLUDE) {
-      this.included = [...this.included, id];
+      if (this.included.indexOf(id) < 0) {
+        this.included = [...this.included, id];
+      }
       this.excluded = this.excluded.filter((x: number) => x !== id); // a chat can't be both
     } else {
-      this.excluded = [...this.excluded, id];
+      if (this.excluded.indexOf(id) < 0) {
+        this.excluded = [...this.excluded, id];
+      }
       this.included = this.included.filter((x: number) => x !== id);
     }
   }
@@ -191,26 +195,42 @@ struct FolderEditPage {
     .alignItems(VerticalAlign.Center);
   }
 
-  // Chosen-chat row. Inline in the ForEach rather than a @Builder: its content
-  // must track the @State arrays.
+  // Keep row rendering separate from the stateful lists below. Passing an
+  // @State array into an @Builder as a normal parameter creates a value
+  // snapshot in ArkUI; after the picker closes that builder can therefore keep
+  // rendering the old array even though addChat() already replaced the state.
   @Builder
-  chatList(ids: number[], fromIncluded: boolean) {
-    ForEach(ids, (id: number) => {
-      Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 62 });
-      Row({ space: 12 }) {
-        AvatarView({
-          avatarPath: this.chatEntry(id)?.avatarPath ?? '',
-          initials: this.chatEntry(id)?.initials ?? '?',
-          colorSeed: id, avatarSize: 34
-        });
-        Text(this.chatTitle(id)).fontSize(16).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1)
-          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
-        SymbolGlyph($r('sys.symbol.xmark')).fontSize(16).fontColor([COLOR_TEXT_SECONDARY])
-          .onClick(() => { this.removeChat(id, fromIncluded); });
-      }
-      .width('100%').padding({ left: 16, right: 16, top: 7, bottom: 7 })
-      .alignItems(VerticalAlign.Center);
-    }, (id: number) => `c_${fromIncluded}_${id}`);
+  chatListRow(id: number, fromIncluded: boolean) {
+    Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 62 });
+    Row({ space: 12 }) {
+      AvatarView({
+        avatarPath: this.chatEntry(id)?.avatarPath ?? '',
+        initials: this.chatEntry(id)?.initials ?? '?',
+        colorSeed: id, avatarSize: 34
+      });
+      Text(this.chatTitle(id)).fontSize(16).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1)
+        .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
+      SymbolGlyph($r('sys.symbol.xmark')).fontSize(16).fontColor([COLOR_TEXT_SECONDARY])
+        .onClick(() => { this.removeChat(id, fromIncluded); });
+    }
+    .width('100%').padding({ left: 16, right: 16, top: 7, bottom: 7 })
+    .alignItems(VerticalAlign.Center);
+  }
+
+  // These builders read @State directly so replacing included/excluded causes
+  // an immediate diff of their ForEach children when the sheet is dismissed.
+  @Builder
+  includedChatList() {
+    ForEach(this.included, (id: number) => {
+      this.chatListRow(id, true);
+    }, (id: number) => `c_true_${id}`);
+  }
+
+  @Builder
+  excludedChatList() {
+    ForEach(this.excluded, (id: number) => {
+      this.chatListRow(id, false);
+    }, (id: number) => `c_false_${id}`);
   }
 
   @Builder
@@ -303,7 +323,7 @@ struct FolderEditPage {
                 (v: boolean): void => { this.includeChannels = v; });
               this.typeToggle('机器人', this.includeBots,
                 (v: boolean): void => { this.includeBots = v; });
-              this.chatList(this.included, true);
+              this.includedChatList();
               Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 16 });
               this.addRow('添加聊天', PICK_INCLUDE);
             }
@@ -318,7 +338,7 @@ struct FolderEditPage {
                 (v: boolean): void => { this.excludeRead = v; });
               this.typeToggle('已归档', this.excludeArchived,
                 (v: boolean): void => { this.excludeArchived = v; });
-              this.chatList(this.excluded, false);
+              this.excludedChatList();
               Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 16 });
               this.addRow('添加聊天', PICK_EXCLUDE);
             }

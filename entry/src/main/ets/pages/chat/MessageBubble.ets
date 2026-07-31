@@ -1638,20 +1638,13 @@ export struct MessageBubble {
   // Whether the timestamp overlay should reserve space at the end of the last
   // text line (only when the time actually lands there — not when reactions
   // or a comments bar sit below the text).
-  private replyUsesOwnTimeLine(): boolean {
-    return this.msg.replyText !== '';
-  }
-
   private timeReserveInText(): boolean {
-    return !this.replyUsesOwnTimeLine() && this.msg.reactions.length === 0;
+    return this.msg.reactions.length === 0;
   }
 
   // Bare media at the bubble's bottom edge → the timestamp needs a translucent
   // chip over the image instead of plain gray text.
   private timeOnMedia(): boolean {
-    if (this.replyUsesOwnTimeLine()) {
-      return false;
-    }
     if (this.msg.reactions.length > 0) {
       return false;
     }
@@ -1662,6 +1655,18 @@ export struct MessageBubble {
       return true;
     }
     return (this.msg.contentType === 'photo' || this.msg.contentType === 'video') && this.msg.text === '';
+  }
+
+  // The timestamp Stack used to shrink to the message body even when a long
+  // sender/forward label or reply preview made the surrounding bubble wider.
+  // Reuse the measured shell width so BottomEnd always means the bubble's real
+  // lower-right corner, while short bubbles can still remain shrink-to-fit.
+  private measuredTimeLayerWidth(): number {
+    if (this.bubbleW <= 0) {
+      return 0;
+    }
+    const horizontalPadding: number = this.isBareEmoji() ? 0 : 16;
+    return Math.min(this.inlineMaxW(), Math.max(0, this.bubbleW - horizontalPadding));
   }
 
   // Timestamp (+ send status) overlaid at the bubble's bottom-right, sharing
@@ -1847,13 +1852,13 @@ export struct MessageBubble {
               this.reactionsRow();
             }
           }
-          .alignItems(HorizontalAlign.Start)
-          // A reply preview can be wider/taller than the new content. Keep the
-          // timestamp in a dedicated bottom strip so the Stack overlay never
-          // lands on the gray quoted-message surface.
-          .padding({ bottom: this.replyUsesOwnTimeLine() ? 18 : 0 });
+          .alignItems(HorizontalAlign.Start);
           this.timeOverlay();
         }
+        .constraintSize({
+          minWidth: this.measuredTimeLayerWidth(),
+          maxWidth: this.inlineMaxW()
+        })
         if (this.isChannel && this.msg.commentCount > 0) {
           this.commentsRow();
         }

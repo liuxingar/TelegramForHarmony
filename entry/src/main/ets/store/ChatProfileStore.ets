@@ -2,11 +2,28 @@ import { TdClient } from '../tdkit/TdClient';
 import { TdObject, TdRequest, TdError } from '../tdkit/TdTypes';
 import { formatUserStatus } from '../util/formatUserStatus';
 import { formatMemberCount } from '../util/formatMemberCount';
+import { formatPreview } from '../util/formatPreview';
+import { formatFileSize } from '../util/formatFileSize';
+import { formatTime } from '../util/formatTime';
 
 type Listener = () => void;
 
 const DL_PRIORITY: number = 1;
 const MEMBER_PAGE: number = 30;
+const CONTENT_PAGE: number = 36;
+const GIFT_SCAN_PAGE: number = 60;
+const MAX_GIFT_AUTO_PAGES: number = 6;
+
+export const PROFILE_TAB_MEMBERS: string = 'members';
+export const PROFILE_TAB_MEDIA: string = 'media';
+export const PROFILE_TAB_FILES: string = 'files';
+export const PROFILE_TAB_LINKS: string = 'links';
+export const PROFILE_TAB_MUSIC: string = 'music';
+export const PROFILE_TAB_POLLS: string = 'polls';
+export const PROFILE_TAB_VOICE: string = 'voice';
+export const PROFILE_TAB_VIDEO_NOTES: string = 'videoNotes';
+export const PROFILE_TAB_GIFS: string = 'gifs';
+export const PROFILE_TAB_GIFTS: string = 'gifts';
 
 export interface MemberItem {
   userId: number;
@@ -14,6 +31,43 @@ export interface MemberItem {
   initials: string;
   avatarPath: string;
   status: string;
+}
+
+export interface ProfileContentItem {
+  messageId: number;
+  date: number;
+  contentType: string;
+  title: string;
+  preview: string;
+  meta: string;
+  thumbPath: string;
+  isVideo: boolean;
+  duration: string;
+}
+
+function durationLabel(totalSeconds: number): string {
+  const seconds = Math.max(0, totalSeconds);
+  const minutes = Math.floor(seconds / 60);
+  const remain = seconds % 60;
+  return `${minutes}:${remain < 10 ? '0' : ''}${remain}`;
+}
+
+function fileSize(file: TdObject | undefined): number {
+  if (file === undefined) {
+    return 0;
+  }
+  return ((file['size'] as number | undefined) ?? 0) ||
+    ((file['expected_size'] as number | undefined) ?? 0);
+}
+
+function formattedText(value: TdObject | undefined): string {
+  return value !== undefined ? ((value['text'] as string | undefined) ?? '') : '';
+}
+
+function isGiftMessage(type: string): boolean {
+  return type === 'messageGiftedPremium' || type === 'messageGiftedStars' ||
+    type === 'messageGiftedTon' || type === 'messagePremiumGiftCode' ||
+    type === 'messageGift' || type === 'messageUpgradedGift';
 }
 
 // Data assembly for the group/channel detail page (ChatProfilePage) — mirrors
@@ -35,6 +89,17 @@ export class ChatProfileStore {
   membershipState: string = 'checking'; // checking | writable | joinable | blocked
   joinByRequest: boolean = false;
   members: MemberItem[] = [];
+  membersState: string = 'loading'; // loading | ready | restricted | error
+  contentTab: string = PROFILE_TAB_MEMBERS;
+  contentItems: ProfileContentItem[] = [];
+  contentState: string = 'idle'; // idle | loading | ready | error
+  contentErrorText: string = '';
+  contentHasMore: boolean = false;
+  contentPaging: boolean = false;
+  contentPagingError: boolean = false;
+  contentTotalCount: number = 0;
+  availableTabs: string[] = [];
+  tabsState: string = 'loading'; // loading | ready
 
   private client: TdClient;
   private chatId: number;
@@ -43,6 +108,12 @@ export class ChatProfileStore {
   private listeners: Listener[] = [];
   private unsubs: Array<() => void> = [];
   private fileApply: Map<number, (path: string) => void> = new Map();
+  private contentSeq: number = 0;
+  private contentNextMessageId: number = 0;
+  private tabProbeSeq: number = 0;
+  private tabProbePending: number = 0;
+  private tabAvailability: Map<string, boolean> = new Map<string, boolean>();
+  private membersAvailable: boolean = false;
 
   constructor(client: TdClient, chatId: number) {
     this.client = client;
@@ -94,6 +165,8 @@ export class ChatProfileStore {
   }
 
   close(): void {
+    this.contentSeq++;
+    this.tabProbeSeq++;
     for (const un of this.unsubs) {
       un();
     }
@@ -142,6 +215,434 @@ export class ChatProfileStore {
     }
   }
 
+  private rebuildAvailableTabs(): void {
+    const order: string[] = [
+      PROFILE_TAB_MEMBERS, PROFILE_TAB_MEDIA, PROFILE_TAB_FILES, PROFILE_TAB_LINKS,
+      PROFILE_TAB_MUSIC, PROFILE_TAB_POLLS, PROFILE_TAB_VOICE,
+      PROFILE_TAB_VIDEO_NOTES, PROFILE_TAB_GIFS, PROFILE_TAB_GIFTS
+    ];
+    const next: string[] = [];
+    for (const tab of order) {
+      const available = tab === PROFILE_TAB_MEMBERS
+        ? this.membersAvailable : (this.tabAvailability.get(tab) ?? false);
+      if (available) {
+        next.push(tab);
+      }
+    }
+    this.availableTabs = next;
+  }
+
+  private probeContentTabs(): void {
+    const tabs: string[] = [
+      PROFILE_TAB_MEDIA, PROFILE_TAB_FILES, PROFILE_TAB_LINKS, PROFILE_TAB_MUSIC,
+      PROFILE_TAB_POLLS, PROFILE_TAB_VOICE, PROFILE_TAB_VIDEO_NOTES, PROFILE_TAB_GIFS
+    ];
+    const seq = ++this.tabProbeSeq;
+    this.tabsState = 'loading';
+    // Native-count tabs decide when the strip may appear. Gift probing scans
+    // message history and can take longer, so a gift result may append later
+    // without holding every ordinary category behind a spinner.
+    this.tabProbePending = tabs.length;
+    this.tabAvailability.clear();
+    this.rebuildAvailableTabs();
+    this.notify();
+    for (const tab of tabs) {
+      const req: TdRequest = { '@type': 'getChatMessageCount' };
+      req['chat_id'] = this.chatId;
+      req['filter'] = { '@type': this.contentFilter(tab) } as TdObject;
+      req['return_local'] = false;
+      this.client.send(req).then((res: TdObject): void => {
+        if (seq !== this.tabProbeSeq) {
+          return;
+        }
+        const count = (res['count'] as number | undefined) ?? 0;
+        this.finishTabProbe(tab, count > 0);
+      }).catch((e: TdError): void => {
+        if (seq !== this.tabProbeSeq) {
+          return;
+        }
+        console.error(`ChatProfileStore.getChatMessageCount(${tab}) failed: ${e.message}`);
+        // A failed capability probe must not create a dead tab. It stays hidden
+        // until a future page refresh can establish that the category exists.
+        this.finishTabProbe(tab, false);
+      });
+    }
+    this.probeGiftPage(seq, 0, 0);
+  }
+
+  private finishTabProbe(tab: string, available: boolean): void {
+    this.tabAvailability.set(tab, available);
+    this.tabProbePending = Math.max(0, this.tabProbePending - 1);
+    if (this.tabProbePending === 0) {
+      this.tabsState = 'ready';
+    }
+    this.rebuildAvailableTabs();
+    this.notify();
+  }
+
+  private probeGiftPage(seq: number, fromMessageId: number, scannedPages: number): void {
+    const req: TdRequest = { '@type': 'searchChatMessages' };
+    req['chat_id'] = this.chatId;
+    req['query'] = '';
+    req['from_message_id'] = fromMessageId;
+    req['offset'] = 0;
+    req['limit'] = GIFT_SCAN_PAGE;
+    this.client.send(req).then((res: TdObject): void => {
+      if (seq !== this.tabProbeSeq) {
+        return;
+      }
+      const raw = (res['messages'] as TdObject[] | undefined) ?? [];
+      for (const message of raw) {
+        const content = message['content'] as TdObject | undefined;
+        const type = (content?.['@type'] as string | undefined) ?? '';
+        if (isGiftMessage(type)) {
+          this.finishTabProbe(PROFILE_TAB_GIFTS, true);
+          return;
+        }
+      }
+      const next = raw.length >= GIFT_SCAN_PAGE && raw.length > 0
+        ? ((raw[raw.length - 1]['id'] as number | undefined) ?? 0) : 0;
+      if (next > 0 && next !== fromMessageId && scannedPages + 1 < MAX_GIFT_AUTO_PAGES) {
+        this.probeGiftPage(seq, next, scannedPages + 1);
+        return;
+      }
+      this.finishTabProbe(PROFILE_TAB_GIFTS, false);
+    }).catch((e: TdError): void => {
+      if (seq !== this.tabProbeSeq) {
+        return;
+      }
+      console.error(`ChatProfileStore.probeGifts failed: ${e.message}`);
+      this.finishTabProbe(PROFILE_TAB_GIFTS, false);
+    });
+  }
+
+  // Chat detail tabs are backed by TDLib's native per-chat message filters.
+  // Gifts are the only exception: this TDLib build has no gift filter, so that
+  // category scans ordinary message pages and keeps just gift message types.
+  selectContentTab(tab: string): void {
+    if (tab === this.contentTab &&
+      (tab === PROFILE_TAB_MEMBERS || this.contentState !== 'idle')) {
+      return;
+    }
+    this.contentSeq++;
+    this.contentTab = tab;
+    this.contentItems = [];
+    this.contentErrorText = '';
+    this.contentHasMore = false;
+    this.contentPaging = false;
+    this.contentPagingError = false;
+    this.contentTotalCount = 0;
+    this.contentNextMessageId = 0;
+    if (tab === PROFILE_TAB_MEMBERS) {
+      this.contentState = 'idle';
+      this.notify();
+      return;
+    }
+    this.contentState = 'loading';
+    this.notify();
+    this.fetchContentPage(0, true, 0);
+  }
+
+  retryContent(): void {
+    if (this.contentTab === PROFILE_TAB_MEMBERS || this.contentState === 'loading') {
+      return;
+    }
+    this.contentSeq++;
+    this.contentItems = [];
+    this.contentState = 'loading';
+    this.contentErrorText = '';
+    this.contentHasMore = false;
+    this.contentPaging = false;
+    this.contentPagingError = false;
+    this.contentNextMessageId = 0;
+    this.notify();
+    this.fetchContentPage(0, true, 0);
+  }
+
+  loadMoreContent(): void {
+    if (this.contentTab === PROFILE_TAB_MEMBERS || this.contentState !== 'ready' ||
+      this.contentPaging || !this.contentHasMore || this.contentNextMessageId <= 0) {
+      return;
+    }
+    this.contentPaging = true;
+    this.contentPagingError = false;
+    this.notify();
+    this.fetchContentPage(this.contentNextMessageId, false, 0);
+  }
+
+  private contentFilter(tab: string): string {
+    if (tab === PROFILE_TAB_MEDIA) {
+      return 'searchMessagesFilterPhotoAndVideo';
+    }
+    if (tab === PROFILE_TAB_FILES) {
+      return 'searchMessagesFilterDocument';
+    }
+    if (tab === PROFILE_TAB_LINKS) {
+      return 'searchMessagesFilterUrl';
+    }
+    if (tab === PROFILE_TAB_MUSIC) {
+      return 'searchMessagesFilterAudio';
+    }
+    if (tab === PROFILE_TAB_POLLS) {
+      return 'searchMessagesFilterPoll';
+    }
+    if (tab === PROFILE_TAB_VOICE) {
+      return 'searchMessagesFilterVoiceNote';
+    }
+    if (tab === PROFILE_TAB_VIDEO_NOTES) {
+      return 'searchMessagesFilterVideoNote';
+    }
+    if (tab === PROFILE_TAB_GIFS) {
+      return 'searchMessagesFilterAnimation';
+    }
+    return '';
+  }
+
+  private mergeContent(fresh: ProfileContentItem[], replace: boolean): void {
+    const merged: ProfileContentItem[] = replace ? [] : [...this.contentItems];
+    const seen: Set<number> = new Set<number>();
+    for (const item of merged) {
+      seen.add(item.messageId);
+    }
+    for (const item of fresh) {
+      if (!seen.has(item.messageId)) {
+        seen.add(item.messageId);
+        merged.push(item);
+      }
+    }
+    this.contentItems = merged;
+  }
+
+  private fetchContentPage(fromMessageId: number, replace: boolean, scannedPages: number): void {
+    const seq = this.contentSeq;
+    const tab = this.contentTab;
+    const giftScan = tab === PROFILE_TAB_GIFTS;
+    const limit = giftScan ? GIFT_SCAN_PAGE : CONTENT_PAGE;
+    const req: TdRequest = { '@type': 'searchChatMessages' };
+    req['chat_id'] = this.chatId;
+    req['query'] = '';
+    req['from_message_id'] = fromMessageId;
+    req['offset'] = 0;
+    req['limit'] = limit;
+    const filter = this.contentFilter(tab);
+    if (filter !== '') {
+      req['filter'] = { '@type': filter } as TdObject;
+    }
+    this.client.send(req).then((res: TdObject): void => {
+      if (seq !== this.contentSeq || tab !== this.contentTab) {
+        return;
+      }
+      const raw = (res['messages'] as TdObject[] | undefined) ?? [];
+      const fresh: ProfileContentItem[] = [];
+      for (const message of raw) {
+        const content = message['content'] as TdObject | undefined;
+        const type = (content?.['@type'] as string | undefined) ?? '';
+        if (giftScan && !isGiftMessage(type)) {
+          continue;
+        }
+        const item = this.parseContentItem(message);
+        if (item !== null) {
+          fresh.push(item);
+        }
+      }
+      this.mergeContent(fresh, replace);
+      const lastId = raw.length > 0
+        ? ((raw[raw.length - 1]['id'] as number | undefined) ?? 0) : 0;
+      const responseNext = (res['next_from_message_id'] as number | undefined) ?? 0;
+      const next = responseNext > 0 ? responseNext
+        : (raw.length >= limit ? lastId : 0);
+      this.contentNextMessageId = next !== fromMessageId ? next : 0;
+      this.contentHasMore = this.contentNextMessageId > 0;
+      this.contentTotalCount = giftScan
+        ? this.contentItems.length
+        : ((res['total_count'] as number | undefined) ?? this.contentItems.length);
+      this.contentErrorText = '';
+      this.contentPagingError = false;
+
+      const shouldKeepScanning = giftScan && this.contentHasMore &&
+        this.contentItems.length < 12 && scannedPages + 1 < MAX_GIFT_AUTO_PAGES;
+      if (shouldKeepScanning) {
+        this.contentState = this.contentItems.length === 0 ? 'loading' : 'ready';
+        this.contentPaging = this.contentItems.length > 0;
+        this.notify();
+        this.fetchContentPage(this.contentNextMessageId, false, scannedPages + 1);
+        return;
+      }
+      this.contentState = 'ready';
+      this.contentPaging = false;
+      this.notify();
+    }).catch((e: TdError): void => {
+      if (seq !== this.contentSeq || tab !== this.contentTab) {
+        return;
+      }
+      console.error(`ChatProfileStore.searchChatMessages(${tab}) failed: ${e.message}`);
+      this.contentPaging = false;
+      if (replace || this.contentItems.length === 0) {
+        this.contentState = 'error';
+        this.contentErrorText = '无法加载此分类，请检查网络后重试';
+        this.contentHasMore = false;
+      } else {
+        this.contentState = 'ready';
+        this.contentPagingError = true;
+      }
+      this.notify();
+    });
+  }
+
+  private parseContentItem(message: TdObject): ProfileContentItem | null {
+    const messageId = (message['id'] as number | undefined) ?? 0;
+    const content = message['content'] as TdObject | undefined;
+    if (messageId <= 0 || content === undefined) {
+      return null;
+    }
+    const type = (content['@type'] as string | undefined) ?? '';
+    const date = (message['date'] as number | undefined) ?? 0;
+    const preview = formatPreview(message);
+    let title = preview !== '' ? preview : '消息';
+    let detail = '';
+    let size = 0;
+    let duration = 0;
+    let thumbnailId = 0;
+    let isVideo = false;
+
+    if (type === 'messagePhoto') {
+      title = '图片';
+      detail = formattedText(content['caption'] as TdObject | undefined);
+      const photo = content['photo'] as TdObject | undefined;
+      const sizes = (photo?.['sizes'] as TdObject[] | undefined) ?? [];
+      let picked: TdObject | undefined = undefined;
+      for (const candidate of sizes) {
+        if ((candidate['type'] as string | undefined) === 'm') {
+          picked = candidate;
+        }
+      }
+      if (picked === undefined && sizes.length > 0) {
+        picked = sizes[Math.max(0, sizes.length - 2)];
+      }
+      const file = picked?.['photo'] as TdObject | undefined;
+      thumbnailId = (file?.['id'] as number | undefined) ?? 0;
+    } else if (type === 'messageVideo') {
+      title = '视频';
+      detail = formattedText(content['caption'] as TdObject | undefined);
+      const video = content['video'] as TdObject | undefined;
+      const thumb = video?.['thumbnail'] as TdObject | undefined;
+      const thumbFile = thumb?.['file'] as TdObject | undefined;
+      const videoFile = video?.['video'] as TdObject | undefined;
+      thumbnailId = (thumbFile?.['id'] as number | undefined) ?? 0;
+      duration = (video?.['duration'] as number | undefined) ?? 0;
+      size = fileSize(videoFile);
+      isVideo = true;
+    } else if (type === 'messageDocument') {
+      const document = content['document'] as TdObject | undefined;
+      const file = document?.['document'] as TdObject | undefined;
+      title = (document?.['file_name'] as string | undefined) ?? '文件';
+      detail = formattedText(content['caption'] as TdObject | undefined);
+      size = fileSize(file);
+    } else if (type === 'messageAudio') {
+      const audio = content['audio'] as TdObject | undefined;
+      const file = audio?.['audio'] as TdObject | undefined;
+      const audioTitle = (audio?.['title'] as string | undefined) ?? '';
+      const fileName = (audio?.['file_name'] as string | undefined) ?? '';
+      title = audioTitle !== '' ? audioTitle : (fileName !== '' ? fileName : '音乐');
+      detail = (audio?.['performer'] as string | undefined) ?? '';
+      duration = (audio?.['duration'] as number | undefined) ?? 0;
+      size = fileSize(file);
+      const cover = audio?.['album_cover_thumbnail'] as TdObject | undefined;
+      const coverFile = cover?.['file'] as TdObject | undefined;
+      thumbnailId = (coverFile?.['id'] as number | undefined) ?? 0;
+    } else if (type === 'messageVoiceNote') {
+      const voice = content['voice_note'] as TdObject | undefined;
+      title = '语音消息';
+      detail = formattedText(content['caption'] as TdObject | undefined);
+      duration = (voice?.['duration'] as number | undefined) ?? 0;
+      size = fileSize(voice?.['voice'] as TdObject | undefined);
+    } else if (type === 'messageVideoNote') {
+      const note = content['video_note'] as TdObject | undefined;
+      title = '圆形视频';
+      duration = (note?.['duration'] as number | undefined) ?? 0;
+      size = fileSize(note?.['video'] as TdObject | undefined);
+      const thumb = note?.['thumbnail'] as TdObject | undefined;
+      const thumbFile = thumb?.['file'] as TdObject | undefined;
+      thumbnailId = (thumbFile?.['id'] as number | undefined) ?? 0;
+      isVideo = true;
+    } else if (type === 'messageAnimation') {
+      const animation = content['animation'] as TdObject | undefined;
+      title = (animation?.['file_name'] as string | undefined) ?? 'GIF 动画';
+      if (title === '') {
+        title = 'GIF 动画';
+      }
+      detail = formattedText(content['caption'] as TdObject | undefined);
+      duration = (animation?.['duration'] as number | undefined) ?? 0;
+      size = fileSize(animation?.['animation'] as TdObject | undefined);
+      const thumb = animation?.['thumbnail'] as TdObject | undefined;
+      const thumbFile = thumb?.['file'] as TdObject | undefined;
+      thumbnailId = (thumbFile?.['id'] as number | undefined) ?? 0;
+      isVideo = true;
+    } else if (type === 'messagePoll') {
+      const poll = content['poll'] as TdObject | undefined;
+      const question = poll?.['question'] as TdObject | undefined;
+      title = formattedText(question);
+      if (title === '') {
+        title = '投票';
+      }
+      const voters = (poll?.['total_voter_count'] as number | undefined) ?? 0;
+      detail = voters > 0 ? `${voters} 人参与` : '';
+    } else if (this.contentTab === PROFILE_TAB_LINKS) {
+      title = '链接消息';
+      detail = preview;
+    } else if (isGiftMessage(type)) {
+      title = preview !== '' ? preview : 'Telegram 礼物';
+      const directSticker = content['sticker'] as TdObject | undefined;
+      const gift = content['gift'] as TdObject | undefined;
+      const model = gift?.['model'] as TdObject | undefined;
+      const sticker = directSticker ?? (gift?.['sticker'] as TdObject | undefined)
+        ?? (model?.['sticker'] as TdObject | undefined);
+      const thumb = sticker?.['thumbnail'] as TdObject | undefined;
+      const thumbFile = thumb?.['file'] as TdObject | undefined;
+      thumbnailId = (thumbFile?.['id'] as number | undefined) ?? 0;
+    }
+
+    const metaParts: string[] = [];
+    if (duration > 0) {
+      metaParts.push(durationLabel(duration));
+    }
+    if (size > 0) {
+      metaParts.push(formatFileSize(size));
+    }
+    const dateLabel = formatTime(date, Math.floor(Date.now() / 1000));
+    if (dateLabel !== '') {
+      metaParts.push(dateLabel);
+    }
+    const item: ProfileContentItem = {
+      messageId,
+      date,
+      contentType: type,
+      title,
+      preview: detail !== '' && detail !== title ? detail : '',
+      meta: metaParts.join(' · '),
+      thumbPath: '',
+      isVideo,
+      duration: duration > 0 ? durationLabel(duration) : ''
+    };
+    if (thumbnailId > 0) {
+      this.download(thumbnailId, (path: string): void => {
+        this.contentItems = this.contentItems.map((existing: ProfileContentItem): ProfileContentItem =>
+          existing.messageId === messageId ? {
+            messageId: existing.messageId,
+            date: existing.date,
+            contentType: existing.contentType,
+            title: existing.title,
+            preview: existing.preview,
+            meta: existing.meta,
+            thumbPath: path,
+            isVideo: existing.isVideo,
+            duration: existing.duration
+          } : existing);
+      });
+    }
+    return item;
+  }
+
   private loadChat(): void {
     const req: TdRequest = { '@type': 'getChat' };
     req['chat_id'] = this.chatId;
@@ -163,6 +664,7 @@ export class ChatProfileStore {
         this.basicGroupId = ((type as TdObject)['basic_group_id'] as number | undefined) ?? 0;
         this.loadBasicGroup();
       }
+      this.probeContentTabs();
       this.loadState = 'ready';
       this.errorText = '';
       this.notify();
@@ -248,10 +750,16 @@ export class ChatProfileStore {
           this.subtitle = `${formatMemberCount(memberCount)} 位${this.isChannel ? '订阅者' : '成员'}`;
         }
         this.notify();
-        // Member lists are only available for groups (channels expose admins only).
         const canGetMembers = (fi['can_get_members'] as boolean | undefined) ?? false;
-        if (!this.isChannel && canGetMembers) {
+        this.membersAvailable = canGetMembers && memberCount > 0;
+        this.rebuildAvailableTabs();
+        if (canGetMembers) {
           this.loadSupergroupMembers();
+        } else {
+          // Ordinary channel subscribers aren't exposed to every account.
+          // Keep that distinct from a network error or a genuinely empty list.
+          this.membersState = this.isChannel ? 'restricted' : 'ready';
+          this.notify();
         }
       });
     });
@@ -268,10 +776,14 @@ export class ChatProfileStore {
 
   private memberOffset: number = 0;
   private membersPending: boolean = false;
+  private memberIds: Set<number> = new Set<number>();
   hasMoreMembers: boolean = false;
 
   private loadSupergroupMembers(): void {
     this.memberOffset = 0;
+    this.members = [];
+    this.memberIds.clear();
+    this.membersState = 'loading';
     this.fetchMembersPage();
   }
 
@@ -289,12 +801,20 @@ export class ChatProfileStore {
     req['supergroup_id'] = this.supergroupId;
     req['offset'] = this.memberOffset;
     req['limit'] = MEMBER_PAGE;
-    this.send(req, 'getSupergroupMembers', (res: TdObject) => {
+    this.client.send(req).then((res: TdObject): void => {
       const raw = (res['members'] as TdObject[] | undefined) ?? [];
       this.memberOffset += raw.length;
       this.hasMoreMembers = raw.length === MEMBER_PAGE;
       this.membersPending = false;
+      this.membersState = 'ready';
+      this.notify();
       this.resolveMembers(raw);
+    }).catch((e: TdError): void => {
+      console.error(`ChatProfileStore.getSupergroupMembers failed: ${e.message}`);
+      this.membersPending = false;
+      this.hasMoreMembers = false;
+      this.membersState = this.members.length > 0 ? 'ready' : 'error';
+      this.notify();
     });
   }
 
@@ -312,9 +832,12 @@ export class ChatProfileStore {
       this.description = (fi['description'] as string | undefined) ?? '';
       this.parsePhotoAnimation(fi['photo'] as TdObject | undefined);
       const members = (fi['members'] as TdObject[] | undefined) ?? [];
+      this.membersAvailable = members.length > 0;
+      this.rebuildAvailableTabs();
       if (members.length > 0) {
         this.subtitle = `${formatMemberCount(members.length)} 位成员`;
       }
+      this.membersState = 'ready';
       this.notify();
       this.resolveMembers(members);
     });
@@ -331,6 +854,10 @@ export class ChatProfileStore {
       if (uid <= 0) {
         continue;
       }
+      if (this.memberIds.has(uid)) {
+        continue;
+      }
+      this.memberIds.add(uid);
       const req: TdRequest = { '@type': 'getUser' };
       req['user_id'] = uid;
       this.send(req, 'getUser', (user: TdObject) => {

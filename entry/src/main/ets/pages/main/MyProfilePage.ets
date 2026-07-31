@@ -697,13 +697,11 @@ export struct MyProfilePage {
     });
   }
 
-  private handlePostSwipe(angle: number): void {
-    const normalized = ((angle % 360) + 360) % 360;
-    if (normalized > 135 && normalized < 225) {
-      this.selectPostTab(1);
-    } else if (normalized < 45 || normalized > 315) {
-      this.selectPostTab(0);
+  private handlePostPan(offsetX: number): void {
+    if (Math.abs(offsetX) < 42) {
+      return;
     }
+    this.selectPostTab(offsetX < 0 ? 1 : 0);
   }
 
   private postTabIcon(index: number): string {
@@ -1885,10 +1883,10 @@ export struct MyProfilePage {
       this.postsContent();
     }
     .width('100%')
-    .gesture(
-      SwipeGesture({ fingers: 1, direction: SwipeDirection.Horizontal, speed: 120 })
-        .onAction((event: GestureEvent): void => {
-          this.handlePostSwipe(event.angle);
+    .priorityGesture(
+      PanGesture({ fingers: 1, direction: PanDirection.Horizontal, distance: 12 })
+        .onActionEnd((event: GestureEvent): void => {
+          this.handlePostPan(event.offsetX);
         })
     );
   }

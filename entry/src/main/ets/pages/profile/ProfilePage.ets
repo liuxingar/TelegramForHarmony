@@ -1,12 +1,21 @@
 import { router, promptAction } from '@kit.ArkUI';
 import { getTdClient } from '../../tdkit/Globals';
 import { ProfileStore, CommonGroup, StoryItem, GiftItem, AvailGift } from '../../store/ProfileStore';
+import {
+  ChatProfileStore, ProfileContentItem,
+  PROFILE_TAB_MEMBERS, PROFILE_TAB_MEDIA, PROFILE_TAB_FILES, PROFILE_TAB_LINKS,
+  PROFILE_TAB_MUSIC, PROFILE_TAB_POLLS, PROFILE_TAB_VOICE,
+  PROFILE_TAB_VIDEO_NOTES, PROFILE_TAB_GIFS, PROFILE_TAB_GIFTS
+} from '../../store/ChatProfileStore';
 import { AvatarView } from '../chatlist/AvatarView';
 import { QrDialog } from '../common/QrDialog';
 import { TgsStickerView } from '../chat/TgsStickerView';
 import { WebmStickerView } from '../chat/WebmStickerView';
 import { TdObject, TdRequest, TdError } from '../../tdkit/TdTypes';
-import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import {
+  COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY,
+  COLOR_TAB_SELECTED, COLOR_TAB_UNSELECTED, COLOR_TAB_PILL_BG
+} from '../../util/theme';
 import { ExpandableText } from './ExpandableText';
 import { openUrl } from '../../util/openUrl';
 import { common } from '@kit.AbilityKit';
@@ -15,6 +24,30 @@ import { publicLink } from '../../util/telegramLink';
 const CARD_BG: ResourceColor = $r('app.color.surface');
 const CARD_RADIUS: number = 14;
 const PAGE_BG: ResourceColor = $r('app.color.page_bg');
+const PROFILE_TAB_STORIES: string = 'profileStories';
+const PROFILE_TAB_RECEIVED_GIFTS: string = 'profileGifts';
+const PROFILE_TAB_GROUPS: string = 'commonGroups';
+const PROFILE_TAB_BAR_HEIGHT: number = 44;
+const PROFILE_TAB_INDICATOR_HEIGHT: number = 32;
+
+interface UserProfileTab {
+  key: string;
+  label: string;
+}
+
+const USER_PROFILE_TABS: UserProfileTab[] = [
+  { key: PROFILE_TAB_STORIES, label: '动态' },
+  { key: PROFILE_TAB_MEDIA, label: '媒体' },
+  { key: PROFILE_TAB_FILES, label: '文件' },
+  { key: PROFILE_TAB_LINKS, label: '链接' },
+  { key: PROFILE_TAB_MUSIC, label: '音乐' },
+  { key: PROFILE_TAB_POLLS, label: '投票' },
+  { key: PROFILE_TAB_VOICE, label: '语音' },
+  { key: PROFILE_TAB_VIDEO_NOTES, label: '圆形视频' },
+  { key: PROFILE_TAB_GIFS, label: 'GIF' },
+  { key: PROFILE_TAB_RECEIVED_GIFTS, label: '礼物' },
+  { key: PROFILE_TAB_GROUPS, label: '群组' }
+];
 
 // User profile page (Telegram-style): avatar header, quick actions, personal
 // channel card, info card (phone/bio/usernames/business), add-contact, and
@@ -27,7 +60,7 @@ const PAGE_BG: ResourceColor = $r('app.color.page_bg');
 struct ProfilePage {
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('screenWidthVp') screenW: number = 360;
-  @State profTab: number = 0; // 0 动态 / 1 礼物 / 2 群组
+  @State profTab: number = 0;
   @State name: string = '';
   @State initials: string = '?';
   @State avatarPath: string = '';
@@ -54,14 +87,51 @@ struct ProfilePage {
   @State groups: CommonGroup[] = [];
   @State stories: StoryItem[] = [];
   @State gifts: GiftItem[] = [];
+  @State sharedTabKeys: string[] = [];
+  @State sharedTabsState: string = 'loading';
+  @State sharedItems: ProfileContentItem[] = [];
+  @State sharedState: string = 'idle';
+  @State sharedErrorText: string = '';
+  @State sharedHasMore: boolean = false;
+  @State sharedPaging: boolean = false;
+  @State sharedPagingError: boolean = false;
+  @State tabIndicatorX: number = 8;
+  @State tabIndicatorW: number = 0;
   @State availGifts: AvailGift[] = [];
   @State showGiftPicker: boolean = false;
   private userId: number = 0;
+  private privateChatId: number = 0;
   private pendingDraftText: string = '';
   private pendingStartParam: string = '';
   private pendingJumpTo: number = 0;
   private store: ProfileStore | null = null;
   private unsub: (() => void) | null = null;
+  private sharedStore: ChatProfileStore | null = null;
+  private sharedUnsub: (() => void) | null = null;
+  private tabScroller: Scroller = new Scroller();
+  private tabXs: number[] = [];
+  private tabWs: number[] = [];
+  private tabViewW: number = 0;
+
+  @Styles
+  tabNormalStyle() {
+    .opacity(1)
+  }
+
+  @Styles
+  tabPressedStyle() {
+    .opacity(0.62)
+  }
+
+  @Styles
+  sharedRowNormalStyle() {
+    .backgroundColor(CARD_BG)
+  }
+
+  @Styles
+  sharedRowPressedStyle() {
+    .backgroundColor($r('app.color.surface_alt'))
+  }
 
   aboutToAppear(): void {
     const params = router.getParams() as Record<string, Object> | undefined;
@@ -82,6 +152,8 @@ struct ProfilePage {
   aboutToDisappear(): void {
     if (this.unsub !== null) { this.unsub(); this.unsub = null; }
     if (this.store !== null) { this.store.close(); this.store = null; }
+    if (this.sharedUnsub !== null) { this.sharedUnsub(); this.sharedUnsub = null; }
+    if (this.sharedStore !== null) { this.sharedStore.close(); this.sharedStore = null; }
   }
 
   @State qrLink: string = '';
@@ -99,12 +171,92 @@ struct ProfilePage {
     this.qrCtrl.open();
   }
 
+  private visibleProfileTabs(): UserProfileTab[] {
+    return USER_PROFILE_TABS.filter((tab: UserProfileTab): boolean => {
+      if (tab.key === PROFILE_TAB_STORIES) {
+        return this.stories.length > 0;
+      }
+      if (tab.key === PROFILE_TAB_RECEIVED_GIFTS) {
+        return this.gifts.length > 0;
+      }
+      if (tab.key === PROFILE_TAB_GROUPS) {
+        return this.groups.length > 0;
+      }
+      return this.sharedTabsState === 'ready' &&
+        tab.key !== PROFILE_TAB_MEMBERS && tab.key !== PROFILE_TAB_GIFTS &&
+        this.sharedTabKeys.indexOf(tab.key) >= 0;
+    });
+  }
+
+  private currentProfileTabKey(): string {
+    const tabs = this.visibleProfileTabs();
+    return tabs.length > 0 && this.profTab < tabs.length ? tabs[this.profTab].key : '';
+  }
+
+  private isSharedProfileTab(key: string): boolean {
+    return key !== '' && key !== PROFILE_TAB_STORIES &&
+      key !== PROFILE_TAB_RECEIVED_GIFTS && key !== PROFILE_TAB_GROUPS;
+  }
+
+  private reconcileProfileTab(preferredKey: string): void {
+    const tabs = this.visibleProfileTabs();
+    if (tabs.length === 0) {
+      this.profTab = 0;
+      return;
+    }
+    const found = preferredKey !== ''
+      ? tabs.findIndex((tab: UserProfileTab): boolean => tab.key === preferredKey) : -1;
+    this.profTab = found >= 0 ? found : 0;
+    const selectedKey = tabs[this.profTab].key;
+    if (this.isSharedProfileTab(selectedKey) && this.sharedStore !== null &&
+      this.sharedStore.contentTab !== selectedKey) {
+      this.sharedStore.selectContentTab(selectedKey);
+    }
+    this.moveProfileTabIndicator(this.profTab);
+  }
+
+  private startSharedStore(chatId: number): void {
+    if (chatId <= 0 || (chatId === this.privateChatId && this.sharedStore !== null)) {
+      return;
+    }
+    if (this.sharedUnsub !== null) {
+      this.sharedUnsub();
+      this.sharedUnsub = null;
+    }
+    if (this.sharedStore !== null) {
+      this.sharedStore.close();
+    }
+    this.privateChatId = chatId;
+    const store = new ChatProfileStore(getTdClient(), chatId);
+    this.sharedStore = store;
+    this.sharedUnsub = store.subscribe((): void => { this.refreshSharedContent(); });
+    store.open();
+  }
+
+  private refreshSharedContent(): void {
+    const store = this.sharedStore;
+    if (store === null) {
+      return;
+    }
+    const beforeKey = this.currentProfileTabKey();
+    this.sharedTabKeys = store.availableTabs;
+    this.sharedTabsState = store.tabsState;
+    this.sharedItems = store.contentItems;
+    this.sharedState = store.contentState;
+    this.sharedErrorText = store.contentErrorText;
+    this.sharedHasMore = store.contentHasMore;
+    this.sharedPaging = store.contentPaging;
+    this.sharedPagingError = store.contentPagingError;
+    this.reconcileProfileTab(beforeKey);
+  }
+
   // Copy the store snapshot into @State so every card re-renders on updates.
   private refresh(): void {
     const s = this.store;
     if (s === null) {
       return;
     }
+    const beforeKey = this.currentProfileTabKey();
     this.name = s.name;
     this.initials = s.initials;
     this.avatarPath = s.avatarPath;
@@ -132,6 +284,10 @@ struct ProfilePage {
     this.stories = s.stories;
     this.gifts = s.gifts;
     this.availGifts = s.availableGifts;
+    if (s.privateChatId > 0) {
+      this.startSharedStore(s.privateChatId);
+    }
+    this.reconcileProfileTab(beforeKey);
   }
 
   private sendGift(g: AvailGift): void {
@@ -222,6 +378,77 @@ struct ProfilePage {
     const q = encodeURIComponent(this.bizAddress);
     const uri = hasCoords ? `geo:${this.bizLat},${this.bizLng}?q=${q}` : `geo:0,0?q=${q}`;
     openUrl(getContext(this) as common.UIAbilityContext, uri);
+  }
+
+  private moveProfileTabIndicator(index: number): void {
+    const tabs = this.visibleProfileTabs();
+    if (index < 0 || index >= tabs.length) {
+      return;
+    }
+    const width = this.tabWs[index] ?? 0;
+    if (width <= 0) {
+      return;
+    }
+    this.tabIndicatorX = this.tabXs[index] ?? 8;
+    this.tabIndicatorW = width;
+  }
+
+  private ensureProfileTabVisible(index: number): void {
+    const x = this.tabXs[index] ?? 0;
+    const width = this.tabWs[index] ?? 0;
+    if (width <= 0 || this.tabViewW <= 0) {
+      return;
+    }
+    const offset = this.tabScroller.currentOffset().xOffset;
+    let target = -1;
+    if (x < offset + 8) {
+      target = Math.max(0, x - 8);
+    } else if (x + width > offset + this.tabViewW - 8) {
+      target = x + width - this.tabViewW + 8;
+    }
+    if (target >= 0) {
+      this.tabScroller.scrollTo({
+        xOffset: target,
+        yOffset: 0,
+        animation: { duration: 200, curve: Curve.EaseOut }
+      });
+    }
+  }
+
+  private selectProfileTab(index: number): void {
+    const tabs = this.visibleProfileTabs();
+    if (index < 0 || index >= tabs.length || index === this.profTab) {
+      return;
+    }
+    const key = tabs[index].key;
+    animateTo({ duration: 220, curve: Curve.EaseOut }, (): void => {
+      this.profTab = index;
+      this.moveProfileTabIndicator(index);
+    });
+    this.ensureProfileTabVisible(index);
+    if (this.isSharedProfileTab(key) && this.sharedStore !== null) {
+      this.sharedStore.selectContentTab(key);
+    }
+  }
+
+  private handleProfileTabPan(offsetX: number): void {
+    if (Math.abs(offsetX) < 42) {
+      return;
+    }
+    if (offsetX < 0) {
+      this.selectProfileTab(this.profTab + 1);
+    } else {
+      this.selectProfileTab(this.profTab - 1);
+    }
+  }
+
+  private openSharedMessage(messageId: number): void {
+    if (this.privateChatId > 0 && messageId > 0) {
+      router.pushUrl({
+        url: 'pages/chat/ChatPage',
+        params: { 'chatId': this.privateChatId, 'jumpTo': messageId }
+      });
+    }
   }
 
   private storyCell(): number {
@@ -452,27 +679,55 @@ struct ProfilePage {
   }
 
   @Builder
-  tabPill(label: string, index: number) {
-    Text(label)
-      .fontSize(14)
-      .fontWeight(this.profTab === index ? FontWeight.Medium : FontWeight.Normal)
-      .fontColor(this.profTab === index ? COLOR_PRIMARY : COLOR_TEXT_SECONDARY)
-      .backgroundColor(this.profTab === index ? $r('app.color.selected_pill') : Color.Transparent)
-      .borderRadius(14)
-      .padding({ left: 14, right: 14, top: 5, bottom: 5 })
-      .onClick(() => { this.profTab = index; });
-  }
-
-  @Builder
   tabsBar() {
-    Row({ space: 4 }) {
-      this.tabPill('动态', 0);
-      this.tabPill('礼物', 1);
-      this.tabPill('群组', 2);
+    Column() {
+      Scroll(this.tabScroller) {
+        Stack({ alignContent: Alignment.TopStart }) {
+          Row()
+            .width(this.tabIndicatorW).height(PROFILE_TAB_INDICATOR_HEIGHT)
+            .borderRadius(PROFILE_TAB_INDICATOR_HEIGHT / 2)
+            .backgroundColor(COLOR_TAB_PILL_BG)
+            .position({
+              x: this.tabIndicatorX,
+              y: (PROFILE_TAB_BAR_HEIGHT - PROFILE_TAB_INDICATOR_HEIGHT) / 2
+            });
+          Row() {
+            ForEach(this.visibleProfileTabs(), (tab: UserProfileTab, index: number) => {
+              Row() {
+                Text(tab.label).fontSize(14)
+                  .fontWeight(this.profTab === index ? FontWeight.Medium : FontWeight.Normal)
+                  .fontColor(this.profTab === index ? COLOR_TAB_SELECTED : COLOR_TAB_UNSELECTED)
+                  .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
+              }
+              .height(PROFILE_TAB_BAR_HEIGHT)
+              .padding({ left: 12, right: 12 }).margin({ right: 2 })
+              .borderRadius(PROFILE_TAB_BAR_HEIGHT / 2)
+              .stateStyles({ normal: this.tabNormalStyle, pressed: this.tabPressedStyle })
+              .onAreaChange((_old: Area, area: Area): void => {
+                this.tabXs[index] = area.position.x as number;
+                this.tabWs[index] = area.width as number;
+                if (index === this.profTab) {
+                  this.moveProfileTabIndicator(index);
+                  this.ensureProfileTabVisible(index);
+                }
+              })
+              .onClick((): void => { this.selectProfileTab(index); });
+            }, (tab: UserProfileTab) => tab.key);
+          }
+          .height(PROFILE_TAB_BAR_HEIGHT).padding({ left: 8, right: 8 });
+        }
+      }
+      .scrollable(ScrollDirection.Horizontal)
+      .scrollBar(BarState.Off)
+      .align(Alignment.Start).width('100%')
+      .onAreaChange((_old: Area, area: Area): void => {
+        this.tabViewW = area.width as number;
+        this.ensureProfileTabVisible(this.profTab);
+      });
     }
-    .padding(3)
-    .backgroundColor(CARD_BG).borderRadius(18)
-    .margin({ top: 14, bottom: 8 });
+    .height(PROFILE_TAB_BAR_HEIGHT)
+    .backgroundColor(CARD_BG).borderRadius(PROFILE_TAB_BAR_HEIGHT / 2).clip(true)
+    .margin({ left: 8, right: 8, top: 14, bottom: 8 });
   }
 
   @Builder
@@ -562,6 +817,190 @@ struct ProfilePage {
     .margin({ left: 12, right: 12 });
   }
 
+  private sharedMediaCell(): number {
+    return Math.max(92, (this.screenW - 30) / 3);
+  }
+
+  private sharedContentIcon(item: ProfileContentItem): string {
+    if (item.contentType === 'messageDocument') {
+      return 'sys.symbol.doc_text';
+    }
+    if (item.contentType === 'messageAudio') {
+      return 'sys.symbol.play_fill';
+    }
+    if (item.contentType === 'messageVoiceNote') {
+      return 'sys.symbol.mic';
+    }
+    if (item.contentType === 'messagePoll') {
+      return 'sys.symbol.checkmark_circle';
+    }
+    if (item.contentType === 'messageAnimation' || item.contentType === 'messageVideoNote') {
+      return 'sys.symbol.video';
+    }
+    if (this.currentProfileTabKey() === PROFILE_TAB_LINKS) {
+      return 'sys.symbol.link';
+    }
+    return 'sys.symbol.message';
+  }
+
+  @Builder
+  sharedPlaceholder() {
+    Column({ space: 10 }) {
+      if (this.sharedState === 'loading' || this.sharedState === 'idle') {
+        LoadingProgress().width(28).height(28).color(COLOR_PRIMARY);
+        Text('正在加载共享内容…').fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
+      } else if (this.sharedState === 'error') {
+        SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+          .fontSize(28).fontColor([COLOR_TEXT_SECONDARY]);
+        Text(this.sharedErrorText !== '' ? this.sharedErrorText : '加载失败')
+          .fontSize(14).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center);
+        Text('重试').fontSize(14).fontColor(COLOR_PRIMARY)
+          .height(34).padding({ left: 16, right: 16 }).textAlign(TextAlign.Center)
+          .backgroundColor('#123390EC').borderRadius(17)
+          .onClick((): void => {
+            if (this.sharedStore !== null) {
+              this.sharedStore.retryContent();
+            }
+          });
+      } else {
+        SymbolGlyph($r('sys.symbol.message')).fontSize(27).fontColor([COLOR_TEXT_SECONDARY]);
+        Text('暂无共享内容').fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
+      }
+    }
+    .width('calc(100% - 24vp)').height(178)
+    .margin({ left: 12, right: 12, bottom: 18 })
+    .padding({ left: 24, right: 24 }).justifyContent(FlexAlign.Center)
+    .backgroundColor(CARD_BG).borderRadius(CARD_RADIUS);
+  }
+
+  @Builder
+  sharedMediaGrid() {
+    Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
+      ForEach(this.sharedItems, (item: ProfileContentItem) => {
+        Stack({ alignContent: Alignment.BottomEnd }) {
+          if (item.thumbPath !== '') {
+            Image(`file://${item.thumbPath}`).width('100%').height('100%')
+              .objectFit(ImageFit.Cover);
+          } else {
+            Column() {
+              SymbolGlyph($r(item.isVideo ? 'sys.symbol.video_fill' : 'sys.symbol.photo_fill'))
+                .fontSize(26).fontColor([COLOR_TEXT_SECONDARY]);
+            }
+            .width('100%').height('100%').justifyContent(FlexAlign.Center)
+            .backgroundColor($r('app.color.surface_alt'));
+          }
+          if (item.isVideo) {
+            Row({ space: 3 }) {
+              SymbolGlyph($r('sys.symbol.play_fill')).fontSize(10).fontColor([Color.White]);
+              if (item.duration !== '') {
+                Text(item.duration).fontSize(11).fontColor(Color.White);
+              }
+            }
+            .padding({ left: 5, right: 5, top: 2, bottom: 2 })
+            .margin({ right: 5, bottom: 5 })
+            .backgroundColor('#70000000').borderRadius(8);
+          }
+        }
+        .width(this.sharedMediaCell()).height(this.sharedMediaCell())
+        .margin({ right: 2, bottom: 2 })
+        .stateStyles({ normal: this.tabNormalStyle, pressed: this.tabPressedStyle })
+        .onClick((): void => { this.openSharedMessage(item.messageId); });
+      }, (item: ProfileContentItem) => `${item.messageId}_${item.thumbPath}`);
+    }
+    .width('calc(100% - 24vp)')
+    .margin({ left: 12, right: 12 })
+    .backgroundColor(CARD_BG).borderRadius(CARD_RADIUS).clip(true);
+    this.sharedPaginationFooter();
+  }
+
+  @Builder
+  sharedContentList() {
+    Column() {
+      ForEach(this.sharedItems, (item: ProfileContentItem, index: number) => {
+        Column() {
+          Row({ space: 11 }) {
+            Stack() {
+              if (item.thumbPath !== '') {
+                Image(`file://${item.thumbPath}`).width(46).height(46)
+                  .objectFit(ImageFit.Cover).borderRadius(10);
+              } else {
+                SymbolGlyph($r(this.sharedContentIcon(item)))
+                  .fontSize(22).fontColor([COLOR_PRIMARY]);
+              }
+            }
+            .width(46).height(46).borderRadius(10)
+            .backgroundColor($r('app.color.surface_alt'));
+            Column({ space: 3 }) {
+              Text(item.title).fontSize(15).fontWeight(FontWeight.Medium)
+                .fontColor(COLOR_TEXT_PRIMARY).maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis });
+              if (item.preview !== '') {
+                Text(item.preview).fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
+                  .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
+              }
+              if (item.meta !== '') {
+                Text(item.meta).fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
+                  .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
+              }
+            }.alignItems(HorizontalAlign.Start).layoutWeight(1);
+            SymbolGlyph($r('sys.symbol.chevron_right'))
+              .fontSize(13).fontColor([COLOR_TEXT_SECONDARY]);
+          }
+          .width('100%').constraintSize({ minHeight: 64 })
+          .padding({ left: 12, right: 10, top: 9, bottom: 9 })
+          .stateStyles({ normal: this.sharedRowNormalStyle, pressed: this.sharedRowPressedStyle })
+          .onClick((): void => { this.openSharedMessage(item.messageId); });
+          if (index < this.sharedItems.length - 1) {
+            Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 69 });
+          }
+        }.width('100%');
+      }, (item: ProfileContentItem) => `${item.messageId}_${item.thumbPath}`);
+    }
+    .width('calc(100% - 24vp)').margin({ left: 12, right: 12 })
+    .backgroundColor(CARD_BG).borderRadius(CARD_RADIUS).clip(true);
+    this.sharedPaginationFooter();
+  }
+
+  @Builder
+  sharedPaginationFooter() {
+    Row({ space: 8 }) {
+      if (this.sharedPaging) {
+        LoadingProgress().width(18).height(18).color(COLOR_PRIMARY);
+        Text('正在加载更多').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+      } else if (this.sharedPagingError) {
+        SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(16).fontColor([COLOR_PRIMARY]);
+        Text('加载失败，点击重试').fontSize(13).fontColor(COLOR_PRIMARY);
+      } else if (!this.sharedHasMore && this.sharedItems.length > 0) {
+        Text('已经到底了').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+      }
+    }
+    .width('100%').height(this.sharedItems.length > 0 ? 52 : 0)
+    .justifyContent(FlexAlign.Center)
+    .onClick((): void => {
+      if (this.sharedPagingError && this.sharedStore !== null) {
+        this.sharedStore.loadMoreContent();
+      }
+    });
+  }
+
+  @Builder
+  profileTabContent() {
+    if (this.currentProfileTabKey() === PROFILE_TAB_STORIES) {
+      this.storiesGrid();
+    } else if (this.currentProfileTabKey() === PROFILE_TAB_RECEIVED_GIFTS) {
+      this.giftsGrid();
+    } else if (this.currentProfileTabKey() === PROFILE_TAB_GROUPS) {
+      this.groupsList();
+    } else if (this.sharedState === 'loading' || this.sharedState === 'idle' ||
+      this.sharedState === 'error' || this.sharedItems.length === 0) {
+      this.sharedPlaceholder();
+    } else if (this.currentProfileTabKey() === PROFILE_TAB_MEDIA) {
+      this.sharedMediaGrid();
+    } else {
+      this.sharedContentList();
+    }
+  }
+
   // Bottom sheet with the sendable gift catalog (paid with Telegram Stars).
   @Builder
   giftPicker() {
@@ -631,13 +1070,21 @@ struct ProfilePage {
           if (!this.isContact) {
             this.addContactCard();
           }
-          this.tabsBar();
-          if (this.profTab === 0) {
-            this.storiesGrid();
-          } else if (this.profTab === 1) {
-            this.giftsGrid();
-          } else {
-            this.groupsList();
+          if (this.visibleProfileTabs().length > 0) {
+            Column() {
+              this.tabsBar();
+              Column() {
+                this.profileTabContent();
+              }
+              .width('100%')
+              .priorityGesture(
+                PanGesture({ fingers: 1, direction: PanDirection.Horizontal, distance: 12 })
+                  .onActionEnd((event: GestureEvent): void => {
+                    this.handleProfileTabPan(event.offsetX);
+                  })
+              );
+            }
+            .width('100%');
           }
         }
         .width('100%')
@@ -646,6 +1093,11 @@ struct ProfilePage {
       .width('100%').height('100%')
       .backgroundColor(PAGE_BG)
       .align(Alignment.Top)
+      .onReachEnd((): void => {
+        if (this.isSharedProfileTab(this.currentProfileTabKey()) && this.sharedStore !== null) {
+          this.sharedStore.loadMoreContent();
+        }
+      })
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM]);
 
       if (this.showGiftPicker) {

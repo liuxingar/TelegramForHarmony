@@ -275,6 +275,8 @@ struct ChatPage {
   @State floatDate: string = '';
   @State floatDateShown: boolean = false;
   private floatDateHideTimer: number = -1;
+  private floatDateIndex: number = -1;
+  private floatDateTimerArmedAt: number = 0;
   private listTouchActive: boolean = false;
   private listUserScrollActive: boolean = false;
   // RESIZE shortens the List while the IME animates in. Preserve the live-tail
@@ -385,6 +387,8 @@ struct ChatPage {
     }
     this.floatDate = '';
     this.floatDateShown = false;
+    this.floatDateIndex = -1;
+    this.floatDateTimerArmedAt = 0;
     this.listTouchActive = false;
     this.listUserScrollActive = false;
   }
@@ -1338,14 +1342,19 @@ struct ChatPage {
       // received its new height. Keep the pre-focus verdict until the layout
       // settles; a real list touch clears imeTailPinned first.
       if (this.imeTailPinned) {
-        this.atBottom = true;
+        if (!this.atBottom) {
+          this.atBottom = true;
+        }
         return;
       }
       // The end of a loadAround window is not the live end of the chat. Keep
       // the down button available until MessageStore has actually exhausted
       // newer history.
-      this.atBottom = this.scroller.isAtEnd() &&
+      const nextAtBottom = this.scroller.isAtEnd() &&
         (this.store === null || !this.store.getHasMoreNewer());
+      if (this.atBottom !== nextAtBottom) {
+        this.atBottom = nextAtBottom;
+      }
     }
   }
 
@@ -1640,6 +1649,17 @@ struct ChatPage {
     if (!this.didInitialScroll || start < 0 || start >= this.groups.length) {
       return;
     }
+    const now = Date.now();
+    // onDidScroll fires every rendered frame. If the top row hasn't changed,
+    // skip the group scan, date formatting and @State writes; only refresh the
+    // hide timer at a coarse cadence so a long drag keeps the chip visible.
+    if (start === this.floatDateIndex && this.floatDateShown) {
+      if (now - this.floatDateTimerArmedAt < 180) {
+        return;
+      }
+      this.armFloatDateHide(now);
+      return;
+    }
     let date: number = 0;
     for (let i = start; i < this.groups.length; i++) {
       if (this.groups[i].head.date > 0) {
@@ -1650,9 +1670,22 @@ struct ChatPage {
     if (date <= 0) {
       return;
     }
-    this.floatDate = formatDateSeparator(date);
-    this.floatDateShown = true;
-    this.listUserScrollActive = true;
+    const nextLabel = formatDateSeparator(date);
+    if (this.floatDate !== nextLabel) {
+      this.floatDate = nextLabel;
+    }
+    if (!this.floatDateShown) {
+      this.floatDateShown = true;
+    }
+    if (!this.listUserScrollActive) {
+      this.listUserScrollActive = true;
+    }
+    this.floatDateIndex = start;
+    this.armFloatDateHide(now);
+  }
+
+  private armFloatDateHide(now: number): void {
+    this.floatDateTimerArmedAt = now;
     if (this.floatDateHideTimer !== -1) {
       clearTimeout(this.floatDateHideTimer);
     }
@@ -1660,6 +1693,7 @@ struct ChatPage {
       this.floatDateHideTimer = -1;
       this.floatDateShown = false;
       this.listUserScrollActive = false;
+      this.floatDateIndex = -1;
     }, 820);
   }
 
@@ -2654,6 +2688,18 @@ struct ChatPage {
   private exitSearch(): void {
     this.searchMode = false;
     this.searchQuery = '';
+    this.searchResults = [];
+    this.searchTotal = 0;
+    this.searchIdx = 0;
+    this.searchSeq++;
+    this.cancelFlash();
+  }
+
+  private updateSearchQuery(value: string): void {
+    if (value === this.searchQuery) {
+      return;
+    }
+    this.searchQuery = value;
     this.searchResults = [];
     this.searchTotal = 0;
     this.searchIdx = 0;
@@ -5326,27 +5372,65 @@ struct ChatPage {
       }));
   }
 
-  // Search-mode header keeps the chat identity visible. Global-search message
-  // hits enter this mode directly, so omitting the avatar here made the same
-  // chat look different from one opened through the regular chat list.
+  // Search owns the complete top bar. Keeping the regular avatar/title beside
+  // the field squeezed group/channel queries into a narrow trailing slot and
+  // made the mode look like an accessory instead of navigation state.
   @Builder
   searchHeader() {
-    Row({ space: 8 }) {
-      this.circleButton('sys.symbol.chevron_left', () => { this.exitSearch(); });
-      AvatarView({ avatarPath: this.avatarPath, initials: this.initials, colorSeed: this.chatId, avatarSize: 36 })
+    Row({ space: 4 }) {
+      Row() {
+        SymbolGlyph($r('sys.symbol.chevron_left'))
+          .fontSize(22).fontColor([COLOR_TEXT_PRIMARY]);
+      }
+        .width(40).height(40)
+        .borderRadius(20)
+        .justifyContent(FlexAlign.Center)
         .stateStyles({
-          normal: this.headerIdentityNormalStyle,
-          pressed: this.headerIdentityPressedStyle
+          normal: this.headerMenuRowNormalStyle,
+          pressed: this.headerMenuRowPressedStyle
         })
-        .onClick(() => { this.openProfile(); });
-      TextInput({ text: this.searchQuery, placeholder: '搜索' })
-        .layoutWeight(1).height(40)
-        .backgroundColor($r('app.color.surface')).borderRadius(20)
+        .animation({
+          duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 110),
+          curve: Curve.EaseOut
+        })
+        .onClick((): void => { this.exitSearch(); })
+        .accessibilityText('返回聊天');
+      TextInput({ text: this.searchQuery, placeholder: '搜索消息' })
+        .layoutWeight(1).height(40).fontSize(16)
+        .backgroundColor(Color.Transparent).padding(0).borderRadius(0)
+        .placeholderColor(COLOR_TEXT_SECONDARY)
+        .caretColor(COLOR_PRIMARY)
+        .enterKeyType(EnterKeyType.Search)
         .defaultFocus(true)
-        .onChange((v: string) => { this.searchQuery = v; })
-        .onSubmit(() => { this.runSearch(0, 0); });
+        .onChange((v: string): void => { this.updateSearchQuery(v); })
+        .onSubmit((): void => { this.runSearch(0, 0); });
+      if (this.searchQuery !== '') {
+        Row() {
+          SymbolGlyph($r('sys.symbol.xmark_circle'))
+            .fontSize(19).fontColor([COLOR_TEXT_SECONDARY]);
+        }
+        .width(34).height(34)
+        .borderRadius(17)
+        .justifyContent(FlexAlign.Center)
+        .stateStyles({
+          normal: this.headerMenuRowNormalStyle,
+          pressed: this.headerMenuRowPressedStyle
+        })
+        .animation({
+          duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 110),
+          curve: Curve.EaseOut
+        })
+        .onClick((): void => { this.updateSearchQuery(''); })
+        .accessibilityText('清空搜索');
+      }
     }
-    .width('100%').padding({ left: 12, right: 12, top: this.topSafe + 10, bottom: 10 })
+    .width('calc(100% - 24vp)').height(46)
+    .padding({ left: 3, right: 6 })
+    .margin({ left: 12, right: 12, top: this.topSafe + 8, bottom: 8 })
+    .backgroundColor($r('app.color.surface'))
+    .border({ width: 0.5, color: $r('app.color.divider') })
+    .borderRadius(23)
+    .shadow({ radius: 5, color: '#16000000', offsetX: 0, offsetY: 1 })
     .alignItems(VerticalAlign.Center)
     .opacity(this.headerVisible ? 1 : 0)
     .translate({ y: this.headerVisible ? 0 : -6 })
@@ -6420,20 +6504,16 @@ struct ChatPage {
       .animation({ duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 240), curve: Curve.EaseOut }));
   }
 
+  private scrollFabBadgeWidth(): number {
+    if (this.unreadBadge > 99) {
+      return 34;
+    }
+    return this.unreadBadge > 9 ? 27 : 22;
+  }
+
   @Builder
   scrollFab() {
-    Column() {
-      if (this.unreadBadge > 0) {
-        Row() {
-          Text(this.unreadBadge > 99 ? '99+' : `${this.unreadBadge}`)
-            .fontSize(12).fontColor(Color.White).fontWeight(FontWeight.Medium);
-        }
-          .constraintSize({ minWidth: 22 }).height(22)
-          .padding({ left: 6, right: 6 })
-          .justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
-          .backgroundColor(COLOR_PRIMARY).borderRadius(11).margin({ bottom: 4 })
-          .shadow({ radius: 3, color: '#24000000', offsetX: 0, offsetY: 1 });
-      }
+    Stack() {
       Button() {
         if (this.scrollToBottomBusy) {
           LoadingProgress().width(20).height(20).color(COLOR_PRIMARY);
@@ -6450,9 +6530,36 @@ struct ChatPage {
       .shadow({ radius: 7, color: '#26000000', offsetX: 0, offsetY: 2 })
       .enabled(!this.scrollToBottomBusy)
       .accessibilityText(this.scrollToBottomBusy ? '正在返回最新消息' : '返回最新消息')
-      .onClick(() => { this.scrollToLatest(); });
+      .onClick(() => { this.scrollToLatest(); })
+      .position({ x: 6, y: 10 });
+      if (this.unreadBadge > 0) {
+        Row() {
+          Text(this.unreadBadge > 99 ? '99+' : `${this.unreadBadge}`)
+            .fontSize(12).fontColor(Color.White).fontWeight(FontWeight.Medium)
+            .maxLines(1).textAlign(TextAlign.Center);
+        }
+        .width(this.scrollFabBadgeWidth()).height(22)
+        .justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
+        .backgroundColor(COLOR_PRIMARY).borderRadius(11)
+        .border({ width: 1.5, color: $r('app.color.surface') })
+        .shadow({ radius: 3, color: '#24000000', offsetX: 0, offsetY: 1 })
+        .position({ x: 52 - this.scrollFabBadgeWidth(), y: 0 })
+        .animation({
+          duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 140),
+          curve: Curve.EaseOut
+        })
+        .transition(TransitionEffect.OPACITY
+          .combine(TransitionEffect.scale({ x: 0.72, y: 0.72 }))
+          .animation({
+            duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 160),
+            curve: Curve.EaseOut
+          }))
+        .enabled(!this.scrollToBottomBusy)
+        .onClick((): void => { this.scrollToLatest(); })
+        .accessibilityText(`${this.unreadBadge} 条未读消息，返回最新消息`);
+      }
     }
-    .alignItems(HorizontalAlign.End)
+    .width(52).height(56)
     .transition(TransitionEffect.OPACITY
       .combine(TransitionEffect.scale({ x: 0.72, y: 0.72 }))
       .combine(TransitionEffect.translate({ y: 10 }))
@@ -7039,8 +7146,12 @@ struct ChatPage {
           if (this.listTouchActive) {
             // A tap alone does not release the initial unread anchor. Only an
             // actual drag gives scroll ownership to the user.
-            this.stayAtUnread = false;
-            this.listUserScrollActive = true;
+            if (this.stayAtUnread) {
+              this.stayAtUnread = false;
+            }
+            if (!this.listUserScrollActive) {
+              this.listUserScrollActive = true;
+            }
           }
           if (this.listUserScrollActive) {
             this.updateFloatDate(this.curStartIdx);

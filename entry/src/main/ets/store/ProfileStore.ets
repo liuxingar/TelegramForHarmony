@@ -73,6 +73,7 @@ export class ProfileStore {
   bio: string = '';
   bioEntities: TdObject[] = []; // formattedText entities (links/mentions in the bio)
   birthday: string = ''; // "3月1日" from userFullInfo.birthdate, '' if not shared
+  privateChatId: number = 0;
   personalChatId: number = 0;
   bizOpen: boolean = false;
   bizHoursText: string = '';
@@ -458,7 +459,9 @@ export class ProfileStore {
     const create: TdRequest = { '@type': 'createPrivateChat' };
     create['user_id'] = this.userId;
     create['force'] = false;
-    this.send(create, 'createPrivateChat', (): void => {
+    this.send(create, 'createPrivateChat', (chat: TdObject): void => {
+      this.privateChatId = (chat['id'] as number | undefined) ?? this.userId;
+      this.notify();
       this.loadStoriesNow(version);
     }, (): void => {
       this.failStories(version);

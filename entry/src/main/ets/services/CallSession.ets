@@ -7,10 +7,18 @@ import { CallMediaBridge, CallMediaConfig, CALL_VIDEO_OFF } from './CallMediaBri
 const CALL_MIN_LAYER: number = 65;
 const CALL_MAX_LAYER: number = 92;
 
-// tgcalls 支持的协议版本。Task 4 接入原生后改为运行时从 callVersions() 读取，
-// 此静态列表作为回退（顺序即偏好，服务端协商取交集）。
+// tgcalls 支持的协议版本；应用启动时由 Globals 用原生 callVersions() 覆盖，
+// 此静态列表仅作原生不可用时的回退（顺序即偏好，服务端协商取交集）。
 export const CALL_LIBRARY_VERSIONS: string[] =
-  ['2.4.4', '2.7.7', '5.0.0', '6.0.0', '7.0.0', '8.0.0', '9.0.0'];
+  ['2.7.7', '5.0.0', '7.0.0', '8.0.0', '9.0.0', '10.0.0', '11.0.0'];
+
+let libraryVersions: string[] = CALL_LIBRARY_VERSIONS;
+
+export function setCallLibraryVersions(versions: string[]): void {
+  if (versions.length > 0) {
+    libraryVersions = versions;
+  }
+}
 
 export interface CallSnapshot {
   phase: string; // 'idle' | 'dialing' | 'ringing' | 'connecting' | 'active' | 'ended'
@@ -169,7 +177,7 @@ export class CallSession {
     p['udp_reflector'] = true;
     p['min_layer'] = CALL_MIN_LAYER;
     p['max_layer'] = CALL_MAX_LAYER;
-    p['library_versions'] = CALL_LIBRARY_VERSIONS;
+    p['library_versions'] = libraryVersions;
     return p;
   }
 
@@ -270,11 +278,15 @@ export class CallSession {
     this.emojis = (state['emojis'] as string[] | undefined) ?? [];
     const key: string = (state['encryption_key'] as string | undefined) ?? '';
     const servers: TdObject[] = (state['servers'] as TdObject[] | undefined) ?? [];
+    const readyProtocol = state['protocol'] as TdObject | undefined;
+    const remoteVersions: string[] = readyProtocol !== undefined
+      ? ((readyProtocol['library_versions'] as string[] | undefined) ?? []) : [];
     const config: CallMediaConfig = {
       encryptionKeyBase64: key,
       isOutgoing: this.isOutgoing,
       serversJson: JSON.stringify(servers),
-      isVideo: this.isVideo
+      isVideo: this.isVideo,
+      remoteVersionsJson: JSON.stringify(remoteVersions)
     };
     this.phase = 'connecting';
     this.mediaStarted = true;

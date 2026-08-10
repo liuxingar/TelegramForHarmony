@@ -5,6 +5,8 @@ export interface CallMediaConfig {
   isOutgoing: boolean;
   serversJson: string; // JSON.stringify(callStateReady.servers)，原生侧解析
   isVideo: boolean;
+  // callStateReady.protocol.library_versions（服务端偏好排序），原生据此选协议版本。
+  remoteVersionsJson: string;
 }
 
 // 视频模式：0=关闭 1=前置 2=后置。

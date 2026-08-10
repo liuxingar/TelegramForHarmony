@@ -19,6 +19,7 @@
 #include <atomic>
 #include <cerrno>
 #include <cmath>
+#include <condition_variable>
 #include <cstdlib>
 #include <functional>
 #include <map>
@@ -155,6 +156,19 @@ public:
 
     void Start() {
         EnsureStarted();
+    }
+
+    // 1:1 通话的听筒/扬声器切换。仅改变默认输出偏好；耳机等外设仍优先。
+    bool SetPreferredOutputDevice(bool speaker) {
+        std::lock_guard<std::mutex> lifecycleLock(lifecycleMutex_);
+        if (renderer_ == nullptr) {
+            return false;
+        }
+        const OH_AudioStream_Result result = OH_AudioRenderer_SetDefaultOutputDevice(
+            renderer_, speaker ? AUDIO_DEVICE_TYPE_SPEAKER : AUDIO_DEVICE_TYPE_EARPIECE);
+        TGLOG("preferred output device: speaker=%{public}d result=%{public}d",
+              speaker ? 1 : 0, static_cast<int>(result));
+        return result == AUDIOSTREAM_SUCCESS;
     }
 
     bool SetMicrophoneActive(bool active) {
@@ -1674,6 +1688,500 @@ __attribute__((visibility("default"))) void tgcalls_ohos_clear_video(void *opaqu
 
 __attribute__((visibility("default"))) void tgcalls_ohos_destroy(void *opaque) {
     delete static_cast<Session *>(opaque);
+}
+
+}  // extern "C"
+
+// ---------------------------------------------------------------------------
+// 1对1 通话（tgcalls Instance/InstanceV2）。与上面的群会话完全独立。
+// ---------------------------------------------------------------------------
+
+#include "tgcalls/Instance.h"
+#include "tgcalls/InstanceImpl.h"
+#include "tgcalls/StaticThreads.h"
+#include "tgcalls/VideoCaptureInterface.h"
+#include "tgcalls/v2/InstanceV2Impl.h"
+#include "tgcalls/v2/InstanceV2ReferenceImpl.h"
+#include "tgcalls/third-party/json11.hpp"
+
+namespace {
+
+#define TGCLOG(fmt, ...) OH_LOG_Print(LOG_APP, LOG_INFO, 0x0000, "tgcalls-call", fmt, ##__VA_ARGS__)
+
+using CallStateCallback = void (*)(void *, int); // 0 connecting 1 ready 2 failed 3 reconnecting
+using CallSignalingCallback = void (*)(void *, const uint8_t *, size_t);
+using CallRemoteMediaCallback = void (*)(void *, int, int);
+
+int Base64Value(char c) {
+    if (c >= 'A' && c <= 'Z') { return c - 'A'; }
+    if (c >= 'a' && c <= 'z') { return c - 'a' + 26; }
+    if (c >= '0' && c <= '9') { return c - '0' + 52; }
+    if (c == '+') { return 62; }
+    if (c == '/') { return 63; }
+    return -1;
+}
+
+std::vector<uint8_t> Base64Decode(const std::string &input) {
+    std::vector<uint8_t> out;
+    int acc = 0;
+    int bits = 0;
+    for (const char c : input) {
+        if (c == '=' || c == '\n' || c == '\r') {
+            continue;
+        }
+        const int value = Base64Value(c);
+        if (value < 0) {
+            continue;
+        }
+        acc = (acc << 6) | value;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back(static_cast<uint8_t>((acc >> bits) & 0xFF));
+        }
+    }
+    return out;
+}
+
+std::string ToHex(const std::vector<uint8_t> &data) {
+    static const char *kDigits = "0123456789abcdef";
+    std::string out;
+    out.reserve(data.size() * 2);
+    for (const uint8_t b : data) {
+        out.push_back(kDigits[b >> 4]);
+        out.push_back(kDigits[b & 0x0F]);
+    }
+    return out;
+}
+
+void EnsureCallImplementationsRegistered() {
+    static const bool registered = [] {
+        tgcalls::Register<tgcalls::InstanceImpl>();
+        tgcalls::Register<tgcalls::InstanceV2Impl>();
+        tgcalls::Register<tgcalls::InstanceV2ReferenceImpl>();
+        return true;
+    }();
+    (void)registered;
+}
+
+// TDLib callStateReady.protocol.library_versions 按服务端偏好排序；取其中
+// 第一个本库也支持的版本。远端列表为空时退回本库首选。
+std::string PickCallVersion(const std::string &remoteVersionsJson) {
+    EnsureCallImplementationsRegistered();
+    const std::vector<std::string> supported = tgcalls::Meta::Versions();
+    std::string parseError;
+    const json11::Json parsed = json11::Json::parse(remoteVersionsJson, parseError);
+    if (parseError.empty() && parsed.is_array()) {
+        for (const auto &entry : parsed.array_items()) {
+            if (!entry.is_string()) {
+                continue;
+            }
+            const std::string &candidate = entry.string_value();
+            if (std::find(supported.begin(), supported.end(), candidate) != supported.end()) {
+                return candidate;
+            }
+        }
+    }
+    // 本库首选：InstanceV2Impl 的最高版本（与官方移动端默认一致）。
+    if (std::find(supported.begin(), supported.end(), "9.0.0") != supported.end()) {
+        return "9.0.0";
+    }
+    return supported.empty() ? std::string("2.7.7") : supported.back();
+}
+
+struct ParsedCallServers {
+    std::vector<tgcalls::RtcServer> rtcServers;
+    std::vector<tgcalls::Endpoint> endpoints; // 传统 InstanceImpl 需要 reflector 端点
+};
+
+// 解析 TDLib callStateReady.servers（JSON 数组）。
+// callServerTypeWebrtc → STUN/TURN；callServerTypeTelegramReflector →
+// login="reflector" + password=hex(peer_tag) 的 TURN 表项（ReflectorPort 约定）。
+ParsedCallServers ParseCallServers(const std::string &serversJson) {
+    ParsedCallServers out;
+    std::string parseError;
+    const json11::Json parsed = json11::Json::parse(serversJson, parseError);
+    if (!parseError.empty() || !parsed.is_array()) {
+        TGCLOG("servers json parse failed: %{public}s", parseError.c_str());
+        return out;
+    }
+    for (const auto &entry : parsed.array_items()) {
+        const std::string ip = entry["ip_address"].string_value();
+        const std::string ipv6 = entry["ipv6_address"].string_value();
+        const uint16_t port = static_cast<uint16_t>(entry["port"].int_value());
+        const int64_t id = static_cast<int64_t>(entry["id"].number_value());
+        const json11::Json &type = entry["type"];
+        const std::string typeName = type["@type"].string_value();
+        if (ip.empty() || port == 0) {
+            continue;
+        }
+        if (typeName == "callServerTypeWebrtc") {
+            tgcalls::RtcServer server;
+            server.id = static_cast<uint8_t>(id);
+            server.host = ip;
+            server.port = port;
+            server.login = type["username"].string_value();
+            server.password = type["password"].string_value();
+            server.isTurn = type["supports_turn"].bool_value();
+            server.isTcp = false;
+            out.rtcServers.push_back(server);
+            if (type["supports_stun"].bool_value() && server.isTurn) {
+                // STUN 与 TURN 共存时补一份 STUN 表项（isTurn=false）。
+                tgcalls::RtcServer stun = server;
+                stun.isTurn = false;
+                stun.login.clear();
+                stun.password.clear();
+                out.rtcServers.push_back(stun);
+            }
+        } else if (typeName == "callServerTypeTelegramReflector") {
+            const std::vector<uint8_t> peerTag =
+                Base64Decode(type["peer_tag"].string_value());
+            tgcalls::RtcServer server;
+            server.id = static_cast<uint8_t>(id);
+            server.host = ip;
+            server.port = port;
+            server.login = "reflector";
+            server.password = ToHex(peerTag);
+            server.isTurn = true;
+            server.isTcp = type["is_tcp"].bool_value();
+            out.rtcServers.push_back(server);
+            // 传统实现（2.7.7/5.0.0）走 Endpoint 列表。
+            tgcalls::Endpoint endpoint;
+            endpoint.endpointId = id;
+            endpoint.host = tgcalls::EndpointHost{ip, ipv6};
+            endpoint.port = port;
+            endpoint.type = tgcalls::EndpointType::UdpRelay;
+            const size_t tagLen = std::min(peerTag.size(), sizeof(endpoint.peerTag));
+            std::memcpy(endpoint.peerTag, peerTag.data(), tagLen);
+            out.endpoints.push_back(endpoint);
+        }
+    }
+    return out;
+}
+
+class PrivateCallSession {
+public:
+    PrivateCallSession(
+            const std::string &encryptionKeyBase64, bool isOutgoing,
+            const std::string &serversJson, bool isVideo,
+            const std::string &remoteVersionsJson,
+            CallStateCallback onState, CallSignalingCallback onSignaling,
+            CallRemoteMediaCallback onRemoteMedia, void *ctx)
+        : stateCallback(onState), signalingCallback(onSignaling),
+          remoteMediaCallback(onRemoteMedia), callbackContext(ctx) {
+        EnsureCallImplementationsRegistered();
+        const std::vector<uint8_t> keyBytes = Base64Decode(encryptionKeyBase64);
+        auto key = std::make_shared<std::array<uint8_t, tgcalls::EncryptionKey::kSize>>();
+        if (keyBytes.size() != key->size()) {
+            TGCLOG("encryption key size mismatch: %{public}zu", keyBytes.size());
+            failed = true;
+            return;
+        }
+        std::copy(keyBytes.begin(), keyBytes.end(), key->begin());
+        ParsedCallServers servers = ParseCallServers(serversJson);
+        const std::string version = PickCallVersion(remoteVersionsJson);
+        TGCLOG("creating call instance version=%{public}s servers=%{public}zu "
+               "endpoints=%{public}zu outgoing=%{public}d video=%{public}d",
+               version.c_str(), servers.rtcServers.size(), servers.endpoints.size(),
+               isOutgoing ? 1 : 0, isVideo ? 1 : 0);
+
+        audioRenderer = std::make_shared<OhosAudioRenderer>();
+        audioRecorder = std::make_shared<OhosAudioRecorder>();
+        tgcalls::FakeAudioDeviceModule::Options audioOptions;
+        audioOptions.samples_per_sec = 48000;
+        audioOptions.num_channels = 2;
+
+        if (isVideo) {
+            videoCapture = tgcalls::VideoCaptureInterface::Create(
+                tgcalls::StaticThreads::getThreads(), "front");
+        }
+
+        tgcalls::Descriptor descriptor = {
+            .version = version,
+            .config = tgcalls::Config{
+                .initializationTimeout = 30.0,
+                .receiveTimeout = 20.0,
+                .dataSaving = tgcalls::DataSaving::Never,
+                .enableP2P = true,
+                .allowTCP = false,
+                .enableStunMarking = false,
+                .enableAEC = true,
+                .enableNS = true,
+                .enableAGC = true,
+                .enableVolumeControl = false,
+                .maxApiLayer = 92,
+                .enableHighBitrateVideo = false,
+                .preferredVideoCodecs = {},
+                .protocolVersion = tgcalls::ProtocolVersion::V0
+            },
+            .endpoints = std::move(servers.endpoints),
+            .rtcServers = std::move(servers.rtcServers),
+            .initialNetworkType = tgcalls::NetworkType::WiFi,
+            .encryptionKey = tgcalls::EncryptionKey(std::move(key), isOutgoing),
+            .videoCapture = videoCapture,
+            .stateUpdated = [this](tgcalls::State state) {
+                int mapped = 0;
+                switch (state) {
+                    case tgcalls::State::Established:
+                        mapped = 1;
+                        if (audioRenderer) {
+                            audioRenderer->Start();
+                            audioRenderer->SetMicrophoneActive(true);
+                        }
+                        break;
+                    case tgcalls::State::Failed:
+                        mapped = 2;
+                        break;
+                    case tgcalls::State::Reconnecting:
+                        mapped = 3;
+                        break;
+                    default:
+                        mapped = 0;
+                        break;
+                }
+                TGCLOG("call state=%{public}d", mapped);
+                if (stateCallback) {
+                    stateCallback(callbackContext, mapped);
+                }
+            },
+            .remoteMediaStateUpdated = [this](
+                    tgcalls::AudioState audioState, tgcalls::VideoState videoState) {
+                if (remoteMediaCallback) {
+                    remoteMediaCallback(
+                        callbackContext,
+                        audioState == tgcalls::AudioState::Muted ? 1 : 0,
+                        videoState == tgcalls::VideoState::Active ? 1 : 0);
+                }
+            },
+            .signalingDataEmitted = [this](const std::vector<uint8_t> &data) {
+                if (signalingCallback) {
+                    signalingCallback(callbackContext, data.data(), data.size());
+                }
+            },
+            .createAudioDeviceModule =
+                tgcalls::FakeAudioDeviceModule::Creator(audioRenderer, audioRecorder, audioOptions)
+        };
+
+        remoteSink = std::make_shared<OhosVideoSink>("__call_remote__");
+        instance = tgcalls::Meta::Create(version, std::move(descriptor));
+        if (instance == nullptr) {
+            TGCLOG("Meta::Create returned null for version=%{public}s", version.c_str());
+            failed = true;
+            return;
+        }
+        instance->setIncomingVideoOutput(
+            std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>(remoteSink));
+        if (videoCapture != nullptr) {
+            videoCapture->setState(tgcalls::VideoState::Active);
+        }
+    }
+
+    ~PrivateCallSession() {
+        if (instance != nullptr) {
+            // stop() 的完成回调在内部线程触发；同步等待避免拆除竞态。
+            std::mutex doneMutex;
+            std::condition_variable doneCondition;
+            bool done = false;
+            instance->stop([&](tgcalls::FinalState) {
+                std::lock_guard<std::mutex> lock(doneMutex);
+                done = true;
+                doneCondition.notify_all();
+            });
+            std::unique_lock<std::mutex> lock(doneMutex);
+            doneCondition.wait_for(lock, std::chrono::seconds(2), [&] { return done; });
+            instance.reset();
+        }
+        if (localSink != nullptr) {
+            localSink->SetWindow(nullptr);
+        }
+        if (remoteSink != nullptr) {
+            remoteSink->SetWindow(nullptr);
+        }
+        videoCapture.reset();
+    }
+
+    void ReceiveSignaling(const uint8_t *data, size_t len) {
+        if (instance != nullptr && data != nullptr && len > 0) {
+            instance->receiveSignalingData(std::vector<uint8_t>(data, data + len));
+        }
+    }
+
+    void SetMuted(bool muted) {
+        if (instance != nullptr) {
+            instance->setMuteMicrophone(muted);
+        }
+    }
+
+    void SetVideo(int mode) {
+        if (instance == nullptr) {
+            return;
+        }
+        if (mode == 0) {
+            if (videoCapture != nullptr) {
+                videoCapture->setState(tgcalls::VideoState::Inactive);
+            }
+            return;
+        }
+        const std::string device = mode == 2 ? "back" : "front";
+        if (videoCapture == nullptr) {
+            videoCapture = tgcalls::VideoCaptureInterface::Create(
+                tgcalls::StaticThreads::getThreads(), device);
+            if (videoCapture == nullptr) {
+                TGCLOG("video capture create failed device=%{public}s", device.c_str());
+                return;
+            }
+            AttachLocalSink();
+            instance->setVideoCapture(videoCapture);
+        } else {
+            videoCapture->switchToDevice(device, false);
+            instance->sendVideoDeviceUpdated();
+        }
+        videoCapture->setState(tgcalls::VideoState::Active);
+    }
+
+    void SetAudioOutput(bool speaker) {
+        if (audioRenderer != nullptr) {
+            audioRenderer->SetPreferredOutputDevice(speaker);
+        }
+    }
+
+    void SetLocalSurface(uint64_t surfaceId) {
+        if (localSink == nullptr) {
+            localSink = std::make_shared<OhosVideoSink>("__call_local__");
+            AttachLocalSink();
+        }
+        BindWindow(localSink, surfaceId);
+    }
+
+    void SetRemoteSurface(uint64_t surfaceId) {
+        if (remoteSink != nullptr) {
+            BindWindow(remoteSink, surfaceId);
+        }
+    }
+
+private:
+    void AttachLocalSink() {
+        if (videoCapture != nullptr && localSink != nullptr) {
+            videoCapture->setOutput(localSink);
+        }
+    }
+
+    static void BindWindow(const std::shared_ptr<OhosVideoSink> &sink, uint64_t surfaceId) {
+        if (surfaceId == 0) {
+            sink->SetWindow(nullptr, 0, 0);
+            return;
+        }
+        OHNativeWindow *window = nullptr;
+        if (OH_NativeWindow_CreateNativeWindowFromSurfaceId(surfaceId, &window) != 0 ||
+            window == nullptr) {
+            TGCLOG("call surface bind failed surface=%{public}llu",
+                   static_cast<unsigned long long>(surfaceId));
+            return;
+        }
+        sink->SetWindow(window);
+    }
+
+public:
+    bool failed = false;
+
+private:
+    std::unique_ptr<tgcalls::Instance> instance;
+    std::shared_ptr<tgcalls::VideoCaptureInterface> videoCapture;
+    std::shared_ptr<OhosAudioRenderer> audioRenderer;
+    std::shared_ptr<OhosAudioRecorder> audioRecorder;
+    std::shared_ptr<OhosVideoSink> remoteSink;
+    std::shared_ptr<OhosVideoSink> localSink;
+    CallStateCallback stateCallback = nullptr;
+    CallSignalingCallback signalingCallback = nullptr;
+    CallRemoteMediaCallback remoteMediaCallback = nullptr;
+    void *callbackContext = nullptr;
+};
+
+std::string g_callVersionsJson;
+
+}  // namespace
+
+extern "C" {
+
+__attribute__((visibility("default"))) void *tgcalls_call_create(
+        const char *encryptionKeyBase64, int isOutgoing, const char *serversJson,
+        int isVideo, const char *remoteVersionsJson,
+        void (*onState)(void *, int),
+        void (*onSignaling)(void *, const uint8_t *, size_t),
+        void (*onRemoteMedia)(void *, int, int), void *ctx) {
+    if (encryptionKeyBase64 == nullptr || serversJson == nullptr) {
+        return nullptr;
+    }
+    auto *session = new PrivateCallSession(
+        encryptionKeyBase64, isOutgoing != 0, serversJson, isVideo != 0,
+        remoteVersionsJson != nullptr ? remoteVersionsJson : "",
+        onState, onSignaling, onRemoteMedia, ctx);
+    if (session->failed) {
+        delete session;
+        return nullptr;
+    }
+    return session;
+}
+
+__attribute__((visibility("default"))) void tgcalls_call_receive_signaling(
+        void *call, const uint8_t *data, size_t len) {
+    if (call != nullptr) {
+        static_cast<PrivateCallSession *>(call)->ReceiveSignaling(data, len);
+    }
+}
+
+__attribute__((visibility("default"))) void tgcalls_call_set_muted(void *call, int muted) {
+    if (call != nullptr) {
+        static_cast<PrivateCallSession *>(call)->SetMuted(muted != 0);
+    }
+}
+
+__attribute__((visibility("default"))) void tgcalls_call_set_video(void *call, int mode) {
+    if (call != nullptr) {
+        static_cast<PrivateCallSession *>(call)->SetVideo(mode);
+    }
+}
+
+__attribute__((visibility("default"))) void tgcalls_call_set_audio_output(
+        void *call, int speaker) {
+    if (call != nullptr) {
+        static_cast<PrivateCallSession *>(call)->SetAudioOutput(speaker != 0);
+    }
+}
+
+__attribute__((visibility("default"))) void tgcalls_call_set_local_surface(
+        void *call, uint64_t surfaceId) {
+    if (call != nullptr) {
+        static_cast<PrivateCallSession *>(call)->SetLocalSurface(surfaceId);
+    }
+}
+
+__attribute__((visibility("default"))) void tgcalls_call_set_remote_surface(
+        void *call, uint64_t surfaceId) {
+    if (call != nullptr) {
+        static_cast<PrivateCallSession *>(call)->SetRemoteSurface(surfaceId);
+    }
+}
+
+__attribute__((visibility("default"))) const char *tgcalls_call_versions_json(void) {
+    EnsureCallImplementationsRegistered();
+    if (g_callVersionsJson.empty()) {
+        std::string json = "[";
+        const std::vector<std::string> versions = tgcalls::Meta::Versions();
+        for (size_t i = 0; i < versions.size(); ++i) {
+            if (i > 0) {
+                json += ",";
+            }
+            json += "\"" + versions[i] + "\"";
+        }
+        json += "]";
+        g_callVersionsJson = json;
+    }
+    return g_callVersionsJson.c_str();
+}
+
+__attribute__((visibility("default"))) void tgcalls_call_destroy(void *call) {
+    delete static_cast<PrivateCallSession *>(call);
 }
 
 }  // extern "C"

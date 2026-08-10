@@ -9,10 +9,12 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <utility>
 
 namespace webrtc {
 class VideoCapturer;
 class VideoFrameBuffer;
+class VideoFrameReceiver;
 }  // namespace webrtc
 
 namespace rtc {
@@ -77,6 +79,14 @@ private:
     std::atomic<bool> started_{false};
     std::atomic<uint64_t> capturedFrames_{0};
 };
+
+// 1:1 通话平台采集器的构件：按前后摄选择相机并创建采集器（供
+// tgcalls_ohos_platform.cpp 的 makeVideoCapturer 复用同一套相机机制）。
+// outResolution 返回实际选中的预览分辨率（宽、高）。
+std::unique_ptr<webrtc::VideoCapturer> CreateOhosCameraCapturer(
+    bool front, uint32_t width, uint32_t height,
+    std::pair<int, int> *outResolution);
+std::unique_ptr<webrtc::VideoFrameReceiver> CreateOhosCameraFrameReceiver();
 
 }  // namespace tgcalls_ohos
 

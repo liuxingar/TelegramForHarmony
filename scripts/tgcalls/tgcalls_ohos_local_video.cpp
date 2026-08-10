@@ -758,4 +758,25 @@ absl::optional<bool> LocalVideoSource::needs_denoising() const {
     return mode_ == LocalVideoMode::Screen ? false : absl::optional<bool>(true);
 }
 
+std::unique_ptr<webrtc::VideoCapturer> CreateOhosCameraCapturer(
+        bool front, uint32_t width, uint32_t height,
+        std::pair<int, int> *outResolution) {
+    const uint32_t safeWidth = width == 0 ? kDefaultCameraWidth : width;
+    const uint32_t safeHeight = height == 0 ? kDefaultCameraHeight : height;
+    const CameraSelection selection = SelectCamera(front, safeWidth, safeHeight);
+    if (!selection.valid) {
+        return nullptr;
+    }
+    if (outResolution != nullptr) {
+        *outResolution = std::make_pair(
+            static_cast<int>(selection.profile.resolution.width),
+            static_cast<int>(selection.profile.resolution.height));
+    }
+    return std::make_unique<CameraCapturer>(selection.deviceId, selection.profile);
+}
+
+std::unique_ptr<webrtc::VideoFrameReceiver> CreateOhosCameraFrameReceiver() {
+    return NativeFrameReceiver::Create();
+}
+
 }  // namespace tgcalls_ohos

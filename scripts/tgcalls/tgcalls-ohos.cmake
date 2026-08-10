@@ -15,6 +15,28 @@ add_library(tgcalls_group STATIC
     ${TGCALLS_SOURCE_DIR}/tgcalls/TurnCustomizerImpl.cpp
     ${TGCALLS_SOURCE_DIR}/tgcalls/VideoCaptureInterface.cpp
     ${TGCALLS_SOURCE_DIR}/tgcalls/VideoCaptureInterfaceImpl.cpp
+    # 1:1 通话（Instance / InstanceV2）。
+    ${TGCALLS_SOURCE_DIR}/tgcalls/CryptoHelper.cpp
+    ${TGCALLS_SOURCE_DIR}/tgcalls/EncryptedConnection.cpp
+    ${TGCALLS_SOURCE_DIR}/tgcalls/Instance.cpp
+    ${TGCALLS_SOURCE_DIR}/tgcalls/InstanceImpl.cpp
+    ${TGCALLS_SOURCE_DIR}/tgcalls/Manager.cpp
+    ${TGCALLS_SOURCE_DIR}/tgcalls/MediaManager.cpp
+    ${TGCALLS_SOURCE_DIR}/tgcalls/Message.cpp
+    ${TGCALLS_SOURCE_DIR}/tgcalls/NetworkManager.cpp
+    ${TGCALLS_SOURCE_DIR}/tgcalls/v2/ContentNegotiation.cpp
+    ${TGCALLS_SOURCE_DIR}/tgcalls/v2/DirectNetworkingImpl.cpp
+    ${TGCALLS_SOURCE_DIR}/tgcalls/v2/ExternalSignalingConnection.cpp
+    ${TGCALLS_SOURCE_DIR}/tgcalls/v2/InstanceV2Impl.cpp
+    ${TGCALLS_SOURCE_DIR}/tgcalls/v2/InstanceV2ReferenceImpl.cpp
+    ${TGCALLS_SOURCE_DIR}/tgcalls/v2/NativeNetworkingImpl.cpp
+    ${TGCALLS_SOURCE_DIR}/tgcalls/v2/ReflectorPort.cpp
+    ${TGCALLS_SOURCE_DIR}/tgcalls/v2/ReflectorRelayPortFactory.cpp
+    ${TGCALLS_SOURCE_DIR}/tgcalls/v2/Signaling.cpp
+    ${TGCALLS_SOURCE_DIR}/tgcalls/v2/SignalingConnection.cpp
+    ${TGCALLS_SOURCE_DIR}/tgcalls/v2/SignalingEncryption.cpp
+    ${TGCALLS_SOURCE_DIR}/tgcalls/v2/SignalingSctpConnection.cpp
+    ${TGCALLS_SOURCE_DIR}/tgcalls/utils/gzip.cpp
     ${TGCALLS_SOURCE_DIR}/tgcalls/group/AVIOContextImpl.cpp
     ${TGCALLS_SOURCE_DIR}/tgcalls/group/AudioStreamingPart.cpp
     ${TGCALLS_SOURCE_DIR}/tgcalls/group/AudioStreamingPartInternal.cpp
@@ -87,4 +109,6 @@ target_link_libraries(tgcalls_ohos PRIVATE
     libnative_window.so
     libnative_avscreen_capture.so
     libnative_media_core.so
+    # tgcalls/utils/gzip.cpp（1:1 v2 信令压缩）依赖系统 zlib。
+    libz.so
 )

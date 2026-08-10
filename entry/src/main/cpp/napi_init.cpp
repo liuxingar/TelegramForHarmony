@@ -42,6 +42,22 @@ void tgcalls_ohos_set_video_channel(
 void tgcalls_ohos_remove_video_channel(void *session, const char *endpointId);
 void tgcalls_ohos_clear_video(void *session);
 void tgcalls_ohos_destroy(void *session);
+
+// 1对1 通话（见 tgcalls_ohos_bridge.cpp 尾部）。
+void *tgcalls_call_create(
+    const char *encryptionKeyBase64, int isOutgoing, const char *serversJson,
+    int isVideo, const char *remoteVersionsJson,
+    void (*onState)(void *, int),
+    void (*onSignaling)(void *, const uint8_t *, size_t),
+    void (*onRemoteMedia)(void *, int, int), void *ctx);
+void tgcalls_call_receive_signaling(void *call, const uint8_t *data, size_t len);
+void tgcalls_call_set_muted(void *call, int muted);
+void tgcalls_call_set_video(void *call, int mode);
+void tgcalls_call_set_audio_output(void *call, int speaker);
+void tgcalls_call_set_local_surface(void *call, uint64_t surfaceId);
+void tgcalls_call_set_remote_surface(void *call, uint64_t surfaceId);
+const char *tgcalls_call_versions_json(void);
+void tgcalls_call_destroy(void *call);
 }
 
 namespace {
@@ -68,6 +84,10 @@ napi_threadsafe_function g_onTgcallsVideoGeometry = nullptr;
 napi_threadsafe_function g_onTgcallsScreenLocalVideoState = nullptr;
 std::atomic<napi_threadsafe_function> g_onTgcallsJoin{nullptr};
 std::atomic<napi_threadsafe_function> g_onTgcallsScreenJoin{nullptr};
+void *g_callSession = nullptr;
+napi_threadsafe_function g_onCallState = nullptr;
+napi_threadsafe_function g_onCallSignaling = nullptr;
+napi_threadsafe_function g_onCallRemoteMedia = nullptr;
 
 struct JoinPayloadEvent {
     uint32_t audioSourceId;
@@ -914,6 +934,299 @@ napi_value TgcallsDestroy(napi_env env, napi_callback_info info) {
     }
     return Undefined(env);
 }
+
+// --- 1对1 通话 ---
+
+const char kBase64Digits[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+std::string CallBase64Encode(const uint8_t *data, size_t len) {
+    std::string out;
+    out.reserve(((len + 2) / 3) * 4);
+    for (size_t i = 0; i < len; i += 3) {
+        const uint32_t b0 = data[i];
+        const uint32_t b1 = i + 1 < len ? data[i + 1] : 0;
+        const uint32_t b2 = i + 2 < len ? data[i + 2] : 0;
+        const uint32_t triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push_back(kBase64Digits[(triple >> 18) & 0x3F]);
+        out.push_back(kBase64Digits[(triple >> 12) & 0x3F]);
+        out.push_back(i + 1 < len ? kBase64Digits[(triple >> 6) & 0x3F] : '=');
+        out.push_back(i + 2 < len ? kBase64Digits[triple & 0x3F] : '=');
+    }
+    return out;
+}
+
+int CallBase64Value(char c) {
+    if (c >= 'A' && c <= 'Z') { return c - 'A'; }
+    if (c >= 'a' && c <= 'z') { return c - 'a' + 26; }
+    if (c >= '0' && c <= '9') { return c - '0' + 52; }
+    if (c == '+') { return 62; }
+    if (c == '/') { return 63; }
+    return -1;
+}
+
+std::vector<uint8_t> CallBase64Decode(const std::string &input) {
+    std::vector<uint8_t> out;
+    int acc = 0;
+    int bits = 0;
+    for (const char c : input) {
+        const int value = CallBase64Value(c);
+        if (value < 0) {
+            continue;
+        }
+        acc = (acc << 6) | value;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back(static_cast<uint8_t>((acc >> bits) & 0xFF));
+        }
+    }
+    return out;
+}
+
+struct CallSignalingEvent {
+    std::string dataBase64;
+};
+
+struct CallRemoteMediaEvent {
+    bool audioMuted;
+    bool videoActive;
+};
+
+void CallJsCallState(napi_env env, napi_value jsCallback, void *, void *data) {
+    auto *state = static_cast<int *>(data);
+    if (env != nullptr && jsCallback != nullptr) {
+        napi_value arg;
+        napi_create_int32(env, *state, &arg);
+        napi_call_function(env, Undefined(env), jsCallback, 1, &arg, nullptr);
+    }
+    delete state;
+}
+
+// 三个回调共享同一个 ctx，无法各自携带 TSFN，因此直接读全局句柄。
+// tgcalls_call_destroy 同步等待 instance 停止后 TSFN 才被释放。
+void OnCallStateChanged(void *, int state) {
+    if (g_onCallState == nullptr) {
+        return;
+    }
+    auto *copy = new int(state);
+    if (napi_call_threadsafe_function(g_onCallState, copy, napi_tsfn_nonblocking) != napi_ok) {
+        delete copy;
+    }
+}
+
+void CallJsCallSignaling(napi_env env, napi_value jsCallback, void *, void *data) {
+    auto *event = static_cast<CallSignalingEvent *>(data);
+    if (env != nullptr && jsCallback != nullptr) {
+        napi_value arg;
+        napi_create_string_utf8(env, event->dataBase64.c_str(), NAPI_AUTO_LENGTH, &arg);
+        napi_call_function(env, Undefined(env), jsCallback, 1, &arg, nullptr);
+    }
+    delete event;
+}
+
+void OnCallSignalingData(void *, const uint8_t *data, size_t len) {
+    if (g_onCallSignaling == nullptr) {
+        return;
+    }
+    auto *event = new CallSignalingEvent{CallBase64Encode(data, len)};
+    if (napi_call_threadsafe_function(g_onCallSignaling, event, napi_tsfn_nonblocking) != napi_ok) {
+        delete event;
+    }
+}
+
+void CallJsCallRemoteMedia(napi_env env, napi_value jsCallback, void *, void *data) {
+    auto *event = static_cast<CallRemoteMediaEvent *>(data);
+    if (env != nullptr && jsCallback != nullptr) {
+        napi_value args[2];
+        napi_get_boolean(env, event->audioMuted, &args[0]);
+        napi_get_boolean(env, event->videoActive, &args[1]);
+        napi_call_function(env, Undefined(env), jsCallback, 2, args, nullptr);
+    }
+    delete event;
+}
+
+void OnCallRemoteMedia(void *, int audioMuted, int videoActive) {
+    if (g_onCallRemoteMedia == nullptr) {
+        return;
+    }
+    auto *event = new CallRemoteMediaEvent{audioMuted != 0, videoActive != 0};
+    if (napi_call_threadsafe_function(g_onCallRemoteMedia, event, napi_tsfn_nonblocking) != napi_ok) {
+        delete event;
+    }
+}
+
+void DestroyCallSessionLocked() {
+    if (g_callSession != nullptr) {
+        tgcalls_call_destroy(g_callSession);
+        g_callSession = nullptr;
+    }
+    if (g_onCallState != nullptr) {
+        napi_release_threadsafe_function(g_onCallState, napi_tsfn_release);
+        g_onCallState = nullptr;
+    }
+    if (g_onCallSignaling != nullptr) {
+        napi_release_threadsafe_function(g_onCallSignaling, napi_tsfn_release);
+        g_onCallSignaling = nullptr;
+    }
+    if (g_onCallRemoteMedia != nullptr) {
+        napi_release_threadsafe_function(g_onCallRemoteMedia, napi_tsfn_release);
+        g_onCallRemoteMedia = nullptr;
+    }
+}
+
+napi_value CallCreate(napi_env env, napi_callback_info info) {
+    size_t argc = 8;
+    napi_value args[8] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (g_callSession != nullptr) {
+        napi_throw_error(env, nullptr, "call session already exists");
+        return nullptr;
+    }
+    std::string encryptionKey;
+    bool isOutgoing = false;
+    std::string serversJson;
+    bool isVideo = false;
+    std::string remoteVersionsJson;
+    napi_valuetype cb5 = napi_undefined;
+    napi_valuetype cb6 = napi_undefined;
+    napi_valuetype cb7 = napi_undefined;
+    if (argc != 8 || !ReadString(env, args[0], encryptionKey) ||
+        napi_get_value_bool(env, args[1], &isOutgoing) != napi_ok ||
+        !ReadString(env, args[2], serversJson) ||
+        napi_get_value_bool(env, args[3], &isVideo) != napi_ok ||
+        !ReadString(env, args[4], remoteVersionsJson) ||
+        napi_typeof(env, args[5], &cb5) != napi_ok || cb5 != napi_function ||
+        napi_typeof(env, args[6], &cb6) != napi_ok || cb6 != napi_function ||
+        napi_typeof(env, args[7], &cb7) != napi_ok || cb7 != napi_function) {
+        napi_throw_type_error(env, nullptr,
+            "callCreate expects (key, isOutgoing, serversJson, isVideo, versionsJson, "
+            "onState, onSignaling, onRemoteMedia)");
+        return nullptr;
+    }
+    napi_value resourceName;
+    napi_create_string_utf8(env, "callState", NAPI_AUTO_LENGTH, &resourceName);
+    if (napi_create_threadsafe_function(env, args[5], nullptr, resourceName, 0, 1, nullptr,
+            nullptr, nullptr, CallJsCallState, &g_onCallState) != napi_ok) {
+        napi_throw_error(env, nullptr, "failed to create call state callback");
+        return nullptr;
+    }
+    napi_create_string_utf8(env, "callSignaling", NAPI_AUTO_LENGTH, &resourceName);
+    if (napi_create_threadsafe_function(env, args[6], nullptr, resourceName, 0, 1, nullptr,
+            nullptr, nullptr, CallJsCallSignaling, &g_onCallSignaling) != napi_ok) {
+        DestroyCallSessionLocked();
+        napi_throw_error(env, nullptr, "failed to create call signaling callback");
+        return nullptr;
+    }
+    napi_create_string_utf8(env, "callRemoteMedia", NAPI_AUTO_LENGTH, &resourceName);
+    if (napi_create_threadsafe_function(env, args[7], nullptr, resourceName, 0, 1, nullptr,
+            nullptr, nullptr, CallJsCallRemoteMedia, &g_onCallRemoteMedia) != napi_ok) {
+        DestroyCallSessionLocked();
+        napi_throw_error(env, nullptr, "failed to create call remote-media callback");
+        return nullptr;
+    }
+    g_callSession = tgcalls_call_create(
+        encryptionKey.c_str(), isOutgoing ? 1 : 0, serversJson.c_str(), isVideo ? 1 : 0,
+        remoteVersionsJson.c_str(),
+        OnCallStateChanged, OnCallSignalingData, OnCallRemoteMedia, nullptr);
+    // 回调上下文分别绑到各自的 TSFN。
+    if (g_callSession == nullptr) {
+        DestroyCallSessionLocked();
+        napi_value result;
+        napi_get_boolean(env, false, &result);
+        return result;
+    }
+    napi_value result;
+    napi_get_boolean(env, true, &result);
+    return result;
+}
+
+napi_value CallDestroy(napi_env env, napi_callback_info info) {
+    DestroyCallSessionLocked();
+    return Undefined(env);
+}
+
+napi_value CallReceiveSignaling(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    std::string dataBase64;
+    if (g_callSession == nullptr || argc != 1 || !ReadString(env, args[0], dataBase64)) {
+        return Undefined(env); // 会话已拆除时静默丢弃残留信令
+    }
+    const std::vector<uint8_t> data = CallBase64Decode(dataBase64);
+    if (!data.empty()) {
+        tgcalls_call_receive_signaling(g_callSession, data.data(), data.size());
+    }
+    return Undefined(env);
+}
+
+napi_value CallSetMuted(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    bool muted = false;
+    if (g_callSession != nullptr && argc == 1 &&
+        napi_get_value_bool(env, args[0], &muted) == napi_ok) {
+        tgcalls_call_set_muted(g_callSession, muted ? 1 : 0);
+    }
+    return Undefined(env);
+}
+
+napi_value CallSetVideo(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    int32_t mode = 0;
+    if (g_callSession != nullptr && argc == 1 &&
+        napi_get_value_int32(env, args[0], &mode) == napi_ok && mode >= 0 && mode <= 2) {
+        tgcalls_call_set_video(g_callSession, mode);
+    }
+    return Undefined(env);
+}
+
+napi_value CallSetAudioOutput(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    bool speaker = false;
+    if (g_callSession != nullptr && argc == 1 &&
+        napi_get_value_bool(env, args[0], &speaker) == napi_ok) {
+        tgcalls_call_set_audio_output(g_callSession, speaker ? 1 : 0);
+    }
+    return Undefined(env);
+}
+
+napi_value CallSetLocalVideoSurface(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    std::string surfaceIdStr;
+    if (g_callSession != nullptr && argc == 1 && ReadString(env, args[0], surfaceIdStr)) {
+        tgcalls_call_set_local_surface(
+            g_callSession, strtoull(surfaceIdStr.c_str(), nullptr, 10));
+    }
+    return Undefined(env);
+}
+
+napi_value CallSetRemoteVideoSurface(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    std::string surfaceIdStr;
+    if (g_callSession != nullptr && argc == 1 && ReadString(env, args[0], surfaceIdStr)) {
+        tgcalls_call_set_remote_surface(
+            g_callSession, strtoull(surfaceIdStr.c_str(), nullptr, 10));
+    }
+    return Undefined(env);
+}
+
+napi_value CallVersions(napi_env env, napi_callback_info info) {
+    const char *json = tgcalls_call_versions_json();
+    napi_value result;
+    napi_create_string_utf8(env, json != nullptr ? json : "[]", NAPI_AUTO_LENGTH, &result);
+    return result;
+}
 } // namespace
 
 EXTERN_C_START
@@ -943,6 +1256,15 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"tgcallsRemoveVideoChannel", nullptr, TgcallsRemoveVideoChannel, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"tgcallsClearVideo", nullptr, TgcallsClearVideo, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"tgcallsDestroy", nullptr, TgcallsDestroy, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"callCreate", nullptr, CallCreate, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"callDestroy", nullptr, CallDestroy, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"callReceiveSignaling", nullptr, CallReceiveSignaling, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"callSetMuted", nullptr, CallSetMuted, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"callSetVideo", nullptr, CallSetVideo, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"callSetAudioOutput", nullptr, CallSetAudioOutput, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"callSetLocalVideoSurface", nullptr, CallSetLocalVideoSurface, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"callSetRemoteVideoSurface", nullptr, CallSetRemoteVideoSurface, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"callVersions", nullptr, CallVersions, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     return exports;

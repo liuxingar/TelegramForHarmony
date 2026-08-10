@@ -46,3 +46,22 @@ export const tgcallsSetVideoChannel: (endpointId: string, audioSsrc: number, ssr
 export const tgcallsRemoveVideoChannel: (endpointId: string) => void;
 export const tgcallsClearVideo: () => void;
 export const tgcallsDestroy: () => void;
+
+// --- 1对1 通话（tgcalls Instance/InstanceV2） ---
+// state: 0=connecting 1=ready 2=failed 3=reconnecting
+export const callCreate: (
+  encryptionKeyBase64: string, isOutgoing: boolean, serversJson: string, isVideo: boolean,
+  remoteVersionsJson: string,
+  onState: (state: number) => void,
+  onSignalingData: (dataBase64: string) => void,
+  onRemoteMedia: (audioMuted: boolean, videoActive: boolean) => void
+) => boolean;
+export const callDestroy: () => void;
+export const callReceiveSignaling: (dataBase64: string) => void;
+export const callSetMuted: (muted: boolean) => void;
+// mode: 0=off, 1=front camera, 2=back camera.
+export const callSetVideo: (mode: number) => void;
+export const callSetAudioOutput: (speaker: boolean) => void;
+export const callSetLocalVideoSurface: (surfaceId: string) => void;
+export const callSetRemoteVideoSurface: (surfaceId: string) => void;
+export const callVersions: () => string;

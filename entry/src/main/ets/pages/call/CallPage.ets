@@ -1,4 +1,5 @@
 import { router } from '@kit.ArkUI';
+import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { getCallSession } from '../../tdkit/Globals';
 import { CallSession, CallSnapshot } from '../../services/CallSession';
 import { AvatarView } from '../chatlist/AvatarView';
@@ -39,6 +40,26 @@ struct CallPage {
     this.tickTimer = setInterval((): void => {
       this.nowMs = Date.now();
     }, 1000);
+    this.requestCallPermissions();
+  }
+
+  // 首次通话前申请麦克风（视频通话再加摄像头）。拒绝不阻断页面 ——
+  // 无权限时对端听不到本端，由用户自行退出；后续可加显式提示。
+  private requestCallPermissions(): void {
+    const permissions: Permissions[] = ['ohos.permission.MICROPHONE'];
+    if (this.snap !== null && this.snap.isVideo) {
+      permissions.push('ohos.permission.CAMERA');
+    }
+    try {
+      const context = getContext(this) as common.UIAbilityContext;
+      abilityAccessCtrl.createAtManager()
+        .requestPermissionsFromUser(context, permissions)
+        .catch((error: Error): void => {
+          console.error(`CallPage permission request failed: ${error.message}`);
+        });
+    } catch (e) {
+      console.error(`CallPage permission request threw: ${(e as Error).message}`);
+    }
   }
 
   aboutToDisappear(): void {

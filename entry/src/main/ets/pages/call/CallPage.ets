@@ -77,6 +77,21 @@ struct CallPage {
     }
   }
 
+  // 尚无悬浮窗/最小化形态：返回即结束通话，避免离开页面后通话变成
+  // 无法找回的"孤儿"。响铃中返回视为拒接。
+  onBackPress(): boolean {
+    const s = this.snap;
+    if (s === null || s.phase === 'ended' || s.phase === 'idle') {
+      return false;
+    }
+    if (s.phase === 'ringing') {
+      getCallSession().decline();
+    } else {
+      getCallSession().hangup();
+    }
+    return false; // 挂断后仍允许返回
+  }
+
   private statusLine(): string {
     const s = this.snap;
     if (s === null) {

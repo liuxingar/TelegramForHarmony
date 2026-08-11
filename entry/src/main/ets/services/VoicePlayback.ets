@@ -1,6 +1,9 @@
 import { media } from '@kit.MediaKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { BusinessError } from '@kit.BasicServicesKit';
+import { mediaPlaybackKeepAlive } from './MediaPlaybackKeepAlive';
+import { getUiAbilityContext } from '../tdkit/Globals';
+import { KEY_BG_PLAY_MUSIC, KEY_BG_PLAY_VOICE } from '../store/AppSettings';
 
 export interface VoiceState {
   playingId: number;  // current/preparing/completed message; 0 = idle/error
@@ -159,9 +162,16 @@ class VoicePlayback {
   }
 
   pauseForBackground(): void {
-    if (this.state.status === 'playing') {
-      this.pauseCurrent();
+    if (this.state.status !== 'playing') {
+      return;
     }
+    // 对应类别开了"后台播放"就不暂停——保活任务已在 syncKeepAlive 挂上。
+    const settingKey: string = this.state.mode === 'music'
+      ? KEY_BG_PLAY_MUSIC : KEY_BG_PLAY_VOICE;
+    if (AppStorage.get<boolean>(settingKey) ?? false) {
+      return;
+    }
+    this.pauseCurrent();
   }
 
   private pauseCurrent(): void {
@@ -354,8 +364,38 @@ class VoicePlayback {
 
   private setState(state: VoiceState): void {
     this.state = state;
+    this.syncKeepAlive(state);
     for (const listener of this.listeners) {
       listener(state);
+    }
+  }
+
+  // 播放期后台保活：状态机唯一出口处同步，保证 acquire/release 成对。
+  // 对应类别的"后台播放"开关关闭时不挂任务（切后台由系统正常暂停）。
+  private heldKind: string | null = null;
+
+  private syncKeepAlive(state: VoiceState): void {
+    let desired: string | null = null;
+    if (state.status === 'playing') {
+      const kind: string = state.mode === 'music' ? 'music' : 'voice';
+      const settingKey: string = kind === 'music' ? KEY_BG_PLAY_MUSIC : KEY_BG_PLAY_VOICE;
+      if (AppStorage.get<boolean>(settingKey) ?? false) {
+        desired = kind;
+      }
+    }
+    if (desired === this.heldKind) {
+      return;
+    }
+    if (this.heldKind !== null) {
+      mediaPlaybackKeepAlive.release(this.heldKind);
+      this.heldKind = null;
+    }
+    if (desired !== null) {
+      const context = getUiAbilityContext();
+      if (context !== null) {
+        mediaPlaybackKeepAlive.acquire(context, desired);
+        this.heldKind = desired;
+      }
     }
   }
 }

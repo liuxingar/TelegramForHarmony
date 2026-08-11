@@ -2084,6 +2084,7 @@ private:
 
     static void BindWindow(const std::shared_ptr<OhosVideoSink> &sink, uint64_t surfaceId) {
         if (surfaceId == 0) {
+            TGCLOG("call surface cleared");
             sink->SetWindow(nullptr, 0, 0);
             return;
         }
@@ -2094,6 +2095,8 @@ private:
                    static_cast<unsigned long long>(surfaceId));
             return;
         }
+        TGCLOG("call surface bound surface=%{public}llu",
+               static_cast<unsigned long long>(surfaceId));
         sink->SetWindow(window);
     }
 

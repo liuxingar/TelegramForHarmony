@@ -26,6 +26,10 @@ struct CallPage {
   private closeTimer: number = -1;
   private remoteController: XComponentController = new XComponentController();
   private localController: XComponentController = new XComponentController();
+  // 记录当前绑定的 surfaceId：重挂时旧组件的 onDestroy 可能晚于新组件的
+  // onLoad 触发，无条件清零会抹掉新绑定（帧照刷、屏幕不显示）。
+  private boundRemoteSurface: string = '0';
+  private boundLocalSurface: string = '0';
 
   aboutToAppear(): void {
     const session: CallSession = getCallSession();
@@ -262,10 +266,19 @@ struct CallPage {
           controller: this.remoteController
         })
           .onLoad((): void => {
-            getCallSession().setRemoteSurface(this.remoteController.getXComponentSurfaceId());
+            const surfaceId: string = this.remoteController.getXComponentSurfaceId();
+            this.boundRemoteSurface = surfaceId;
+            console.info(`CallPage remote surface bind ${surfaceId}`);
+            getCallSession().setRemoteSurface(surfaceId);
           })
           .onDestroy((): void => {
-            getCallSession().setRemoteSurface('0');
+            // 仅当仍绑定着本组件的 surface 时才清除，避免抹掉重挂后的新绑定。
+            const surfaceId: string = this.remoteController.getXComponentSurfaceId();
+            if (this.boundRemoteSurface === surfaceId) {
+              this.boundRemoteSurface = '0';
+              console.info(`CallPage remote surface clear ${surfaceId}`);
+              getCallSession().setRemoteSurface('0');
+            }
           })
           .width('100%').height('100%');
       }
@@ -293,10 +306,18 @@ struct CallPage {
           controller: this.localController
         })
           .onLoad((): void => {
-            getCallSession().setLocalSurface(this.localController.getXComponentSurfaceId());
+            const surfaceId: string = this.localController.getXComponentSurfaceId();
+            this.boundLocalSurface = surfaceId;
+            console.info(`CallPage local surface bind ${surfaceId}`);
+            getCallSession().setLocalSurface(surfaceId);
           })
           .onDestroy((): void => {
-            getCallSession().setLocalSurface('0');
+            const surfaceId: string = this.localController.getXComponentSurfaceId();
+            if (this.boundLocalSurface === surfaceId) {
+              this.boundLocalSurface = '0';
+              console.info(`CallPage local surface clear ${surfaceId}`);
+              getCallSession().setLocalSurface('0');
+            }
           })
           .width(104).height(150)
           .borderRadius(10)

@@ -77,6 +77,11 @@ export class CallSession {
       this.onRemoteMedia(audioMuted, videoActive);
   }
 
+  // 当前状态快照（供回前台等时机做补偿检查，不必临时订阅）。
+  current(): CallSnapshot {
+    return this.snapshot();
+  }
+
   subscribe(l: CallListener): () => void {
     this.subs = [...this.subs, l];
     l(this.snapshot());

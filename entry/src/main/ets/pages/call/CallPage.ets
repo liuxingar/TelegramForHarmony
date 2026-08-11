@@ -154,27 +154,72 @@ struct CallPage {
     .alignItems(HorizontalAlign.Center);
   }
 
+  // 有状态的按钮必须是无参 builder 直接读 this.snap：@Builder 的值参数
+  // 不随 @State 变化重新求值（见 ChatProfilePage.muteButton 的同款注释）。
+  @Builder
+  muteControl() {
+    Column({ space: 6 }) {
+      Column() {
+        SymbolGlyph($r('sys.symbol.mic')).fontSize(24)
+          .fontColor([this.snap !== null && this.snap.muted ? Color.Black : Color.White]);
+      }
+      .width(52).height(52).borderRadius(26)
+      .backgroundColor(this.snap !== null && this.snap.muted ? '#E6FFFFFF' : CONTROL_BG)
+      .justifyContent(FlexAlign.Center)
+      .onClick((): void => { getCallSession().toggleMute(); });
+      Text(this.snap !== null && this.snap.muted ? '取消静音' : '静音')
+        .fontSize(11).fontColor('#B8C4CF');
+    }
+    .alignItems(HorizontalAlign.Center);
+  }
+
+  @Builder
+  speakerControl() {
+    Column({ space: 6 }) {
+      Column() {
+        SymbolGlyph($r('sys.symbol.speaker')).fontSize(24)
+          .fontColor([this.snap !== null && this.snap.speakerOn ? Color.Black : Color.White]);
+      }
+      .width(52).height(52).borderRadius(26)
+      .backgroundColor(this.snap !== null && this.snap.speakerOn ? '#E6FFFFFF' : CONTROL_BG)
+      .justifyContent(FlexAlign.Center)
+      .onClick((): void => { getCallSession().toggleSpeaker(); });
+      Text('扬声器').fontSize(11).fontColor('#B8C4CF');
+    }
+    .alignItems(HorizontalAlign.Center);
+  }
+
+  @Builder
+  videoToggleControl() {
+    Column({ space: 6 }) {
+      Column() {
+        SymbolGlyph($r('sys.symbol.video')).fontSize(24)
+          .fontColor([this.snap !== null && this.snap.localVideoMode !== CALL_VIDEO_OFF
+            ? Color.Black : Color.White]);
+      }
+      .width(52).height(52).borderRadius(26)
+      .backgroundColor(this.snap !== null && this.snap.localVideoMode !== CALL_VIDEO_OFF
+        ? '#E6FFFFFF' : CONTROL_BG)
+      .justifyContent(FlexAlign.Center)
+      .onClick((): void => {
+        const s = this.snap;
+        if (s !== null) {
+          getCallSession().setVideoMode(
+            s.localVideoMode === CALL_VIDEO_OFF ? CALL_VIDEO_FRONT : CALL_VIDEO_OFF);
+        }
+      });
+      Text(this.snap !== null && this.snap.localVideoMode !== CALL_VIDEO_OFF ? '关视频' : '视频')
+        .fontSize(11).fontColor('#B8C4CF');
+    }
+    .alignItems(HorizontalAlign.Center);
+  }
+
   @Builder
   activeControls() {
     Row({ space: 14 }) {
-      this.roundControl('sys.symbol.mic',
-        this.snap !== null && this.snap.muted ? '静音中' : '静音',
-        this.snap !== null && this.snap.muted ? '#66FFFFFF' : CONTROL_BG, 0,
-        (): void => { getCallSession().toggleMute(); });
-      this.roundControl('sys.symbol.speaker', '扬声器',
-        this.snap !== null && this.snap.speakerOn ? '#66FFFFFF' : CONTROL_BG, 0,
-        (): void => { getCallSession().toggleSpeaker(); });
-      this.roundControl('sys.symbol.video',
-        this.snap !== null && this.snap.localVideoMode !== CALL_VIDEO_OFF ? '关视频' : '视频',
-        this.snap !== null && this.snap.localVideoMode !== CALL_VIDEO_OFF
-          ? '#66FFFFFF' : CONTROL_BG, 0,
-        (): void => {
-          const s = this.snap;
-          if (s !== null) {
-            getCallSession().setVideoMode(
-              s.localVideoMode === CALL_VIDEO_OFF ? CALL_VIDEO_FRONT : CALL_VIDEO_OFF);
-          }
-        });
+      this.muteControl();
+      this.speakerControl();
+      this.videoToggleControl();
       if (this.snap !== null && this.snap.localVideoMode !== CALL_VIDEO_OFF) {
         this.roundControl('sys.symbol.arrow_clockwise', '切换', CONTROL_BG, 0,
           (): void => { getCallSession().switchCamera(); });

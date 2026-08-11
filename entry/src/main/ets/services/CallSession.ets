@@ -227,7 +227,11 @@ export class CallSession {
       }
     }
     if (id !== this.callId) {
-      if (stateType === 'callStatePending' && !isOutgoing) {
+      // 只有真的在通话流程中才按忙线拒接；空闲/已结束时的不匹配事件
+      // 是旧通话的迟到更新，直接忽略（防御：callId 已在 endWith 清零）。
+      const inCall: boolean = this.phase === 'dialing' || this.phase === 'ringing' ||
+        this.phase === 'connecting' || this.phase === 'active';
+      if (inCall && stateType === 'callStatePending' && !isOutgoing) {
         this.sendDiscard(id, 0); // 忙线：拒接第二路来电
       }
       return;
@@ -377,6 +381,9 @@ export class CallSession {
     this.phase = 'ended';
     this.endReason = reason;
     this.errorText = errorText;
+    // 立即释放会话绑定：callId 残留会让下一通来电误入忙线分支被自动拒接
+    // （已结束通话的迟到事件在 onUpdateCall 里按"非 pending 即忽略"处理）。
+    this.callId = 0;
     this.publish();
   }
 

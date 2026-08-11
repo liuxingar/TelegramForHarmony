@@ -250,6 +250,26 @@ export default function callSessionTest() {
       expect(snap.callId).assertEqual(11);
       expect(snap.phase).assertEqual('active');
     });
+    it('incoming_after_previous_call_ended_rings_again', 0, () => {
+      const arr = setup(); const b = arr[0] as FakeBridge;
+      const s = arr[1] as CallSession; const m = arr[2] as FakeCallMedia;
+      // 第一通：拨出 → 接通 → 对端挂断。
+      s.startCall(7, false);
+      feedCall(b, 11, 7, true, false, callState('callStatePending'));
+      feedCall(b, 11, 7, true, false, readyState());
+      m.onState('ready');
+      feedCall(b, 11, 7, true, false, callState('callStateDiscarded', {
+        'reason': { '@type': 'callDiscardReasonHungUp' } as TdObject
+      } as TdObject));
+      expect(snapshotOf(s).phase).assertEqual('ended');
+      const discardsBefore: number = requestCount(b, 'discardCall');
+      // 第二通：新来电必须正常响铃，不能被当成忙线拒接。
+      feedCall(b, 44, 9, false, false, callState('callStatePending'));
+      const snap = snapshotOf(s);
+      expect(snap.phase).assertEqual('ringing');
+      expect(snap.peerUserId).assertEqual(9);
+      expect(requestCount(b, 'discardCall')).assertEqual(discardsBefore);
+    });
     it('toggle_mute_forwards_to_media_and_snapshot', 0, () => {
       const arr = setup(); const b = arr[0] as FakeBridge;
       const s = arr[1] as CallSession; const m = arr[2] as FakeCallMedia;

@@ -68,7 +68,7 @@ struct ForumTopicsPage {
     req['query'] = '';
     req['offset_date'] = 0;
     req['offset_message_id'] = 0;
-    req['offset_message_thread_id'] = 0;
+    req['offset_forum_topic_id'] = 0;
     req['limit'] = 100;
     getTdClient().send(req).then((res: TdObject): void => {
       if (!this.active) {
@@ -90,7 +90,7 @@ struct ForumTopicsPage {
   private parseTopic(topic: TdObject): TopicRow {
     const info = topic['info'] as TdObject | undefined;
     const threadId: number = info !== undefined
-      ? ((info['message_thread_id'] as number | undefined) ?? 0) : 0;
+      ? ((info['forum_topic_id'] as number | undefined) ?? 0) : 0;
     const name: string = info !== undefined
       ? ((info['name'] as string | undefined) ?? '') : '';
     const icon = info !== undefined ? info['icon'] as TdObject | undefined : undefined;
@@ -113,7 +113,7 @@ struct ForumTopicsPage {
   private openTopic(row: TopicRow): void {
     const params: Record<string, Object> = {
       'chatId': this.chatId,
-      'threadRootId': row.threadId,
+      'forumTopicId': row.threadId,
       'topicName': row.name
     };
     router.pushUrl({ url: 'pages/chat/ChatPage', params }).catch((error: Error): void => {
@@ -131,7 +131,7 @@ struct ForumTopicsPage {
     req['name'] = name.trim();
     getTdClient().send(req).then((info: TdObject): void => {
       this.creating = false;
-      const threadId: number = (info['message_thread_id'] as number | undefined) ?? 0;
+      const threadId: number = (info['forum_topic_id'] as number | undefined) ?? 0;
       if (threadId > 0) {
         this.load();
         this.openTopic({

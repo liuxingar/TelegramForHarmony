@@ -1928,6 +1928,11 @@ public:
                             audioRenderer->Start();
                             audioRenderer->SetMicrophoneActive(true);
                         }
+                        // 录音器必须显式 Start 才会采集：active_ 为 false 时
+                        // Record() 恒返回空帧，对端就是纯静音。
+                        if (audioRecorder) {
+                            audioRecorder->Start();
+                        }
                         break;
                     case tgcalls::State::Failed:
                         mapped = 2;
@@ -2007,9 +2012,20 @@ public:
     }
 
     void SetMuted(bool muted) {
-        if (instance != nullptr) {
-            instance->setMuteMicrophone(muted);
+        if (instance == nullptr) {
+            return;
         }
+        if (!muted) {
+            // 与群会话相同的开麦顺序：先建立全双工路由再开采集，
+            // 蓝牙耳机才能正确切到 SCO。
+            if (audioRenderer) {
+                audioRenderer->SetMicrophoneActive(true);
+            }
+            if (audioRecorder) {
+                audioRecorder->Start();
+            }
+        }
+        instance->setMuteMicrophone(muted);
     }
 
     void SetVideo(int mode) {

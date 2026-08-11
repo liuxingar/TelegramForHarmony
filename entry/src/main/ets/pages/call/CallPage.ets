@@ -112,15 +112,23 @@ struct CallPage {
       (s.remoteVideoActive || s.localVideoMode !== CALL_VIDEO_OFF);
   }
 
+  // 图标一律用仓库其它页面验证过的符号名（无效符号名会静默画成空白）。
   @Builder
-  roundControl(symbol: string, bg: string, onTap: () => void) {
-    Column() {
-      SymbolGlyph($r(symbol)).fontSize(26).fontColor([Color.White]);
+  roundControl(symbol: string, label: string, bg: string, rotateDeg: number, onTap: () => void) {
+    Column({ space: 6 }) {
+      Column() {
+        SymbolGlyph($r(symbol)).fontSize(24).fontColor([Color.White])
+          .rotate({ angle: rotateDeg });
+      }
+      .width(52).height(52).borderRadius(26)
+      .backgroundColor(bg)
+      .justifyContent(FlexAlign.Center)
+      .onClick((): void => { onTap(); });
+      if (label !== '') {
+        Text(label).fontSize(11).fontColor('#B8C4CF');
+      }
     }
-    .width(58).height(58).borderRadius(29)
-    .backgroundColor(bg)
-    .justifyContent(FlexAlign.Center)
-    .onClick((): void => { onTap(); });
+    .alignItems(HorizontalAlign.Center);
   }
 
   @Builder
@@ -148,19 +156,18 @@ struct CallPage {
 
   @Builder
   activeControls() {
-    Row({ space: 22 }) {
-      this.roundControl(
-        this.snap !== null && this.snap.muted ? 'sys.symbol.microphone_slash' : 'sys.symbol.microphone',
-        this.snap !== null && this.snap.muted ? '#66FFFFFF' : CONTROL_BG,
+    Row({ space: 14 }) {
+      this.roundControl('sys.symbol.mic',
+        this.snap !== null && this.snap.muted ? '静音中' : '静音',
+        this.snap !== null && this.snap.muted ? '#66FFFFFF' : CONTROL_BG, 0,
         (): void => { getCallSession().toggleMute(); });
-      this.roundControl(
-        'sys.symbol.speaker_wave_2',
-        this.snap !== null && this.snap.speakerOn ? '#66FFFFFF' : CONTROL_BG,
+      this.roundControl('sys.symbol.speaker', '扬声器',
+        this.snap !== null && this.snap.speakerOn ? '#66FFFFFF' : CONTROL_BG, 0,
         (): void => { getCallSession().toggleSpeaker(); });
-      this.roundControl(
+      this.roundControl('sys.symbol.video',
+        this.snap !== null && this.snap.localVideoMode !== CALL_VIDEO_OFF ? '关视频' : '视频',
         this.snap !== null && this.snap.localVideoMode !== CALL_VIDEO_OFF
-          ? 'sys.symbol.video' : 'sys.symbol.video_slash',
-        CONTROL_BG,
+          ? '#66FFFFFF' : CONTROL_BG, 0,
         (): void => {
           const s = this.snap;
           if (s !== null) {
@@ -169,10 +176,11 @@ struct CallPage {
           }
         });
       if (this.snap !== null && this.snap.localVideoMode !== CALL_VIDEO_OFF) {
-        this.roundControl('sys.symbol.camera_rotate', CONTROL_BG,
+        this.roundControl('sys.symbol.arrow_clockwise', '切换', CONTROL_BG, 0,
           (): void => { getCallSession().switchCamera(); });
       }
-      this.roundControl('sys.symbol.phone_down_fill', DANGER,
+      // phone_fill 旋转 135° 作挂断（repo 无验证过的 phone_down 符号）。
+      this.roundControl('sys.symbol.phone_fill', '挂断', DANGER, 135,
         (): void => { getCallSession().hangup(); });
     }
     .justifyContent(FlexAlign.Center);
@@ -181,34 +189,21 @@ struct CallPage {
   @Builder
   ringingControls() {
     Row() {
-      Column({ space: 8 }) {
-        this.roundControl('sys.symbol.phone_down_fill', DANGER,
-          (): void => { getCallSession().decline(); });
-        Text('拒绝').fontSize(13).fontColor('#B8C4CF');
-      }
+      this.roundControl('sys.symbol.phone_fill', '拒绝', DANGER, 135,
+        (): void => { getCallSession().decline(); });
       Blank().layoutWeight(1);
-      Column({ space: 8 }) {
-        this.roundControl(
-          this.snap !== null && this.snap.isVideo ? 'sys.symbol.video' : 'sys.symbol.phone_fill',
-          ACCEPT,
-          (): void => { getCallSession().accept(); });
-        Text('接听').fontSize(13).fontColor('#B8C4CF');
-      }
+      this.roundControl(
+        this.snap !== null && this.snap.isVideo ? 'sys.symbol.video' : 'sys.symbol.phone_fill',
+        '接听', ACCEPT, 0,
+        (): void => { getCallSession().accept(); });
     }
     .width('62%');
   }
 
   @Builder
   dialingControls() {
-    this.roundControl('sys.symbol.phone_down_fill', DANGER,
-      (): void => {
-        const s = this.snap;
-        if (s !== null && s.phase === 'ringing') {
-          getCallSession().decline();
-        } else {
-          getCallSession().hangup();
-        }
-      });
+    this.roundControl('sys.symbol.phone_fill', '挂断', DANGER, 135,
+      (): void => { getCallSession().hangup(); });
   }
 
   build() {

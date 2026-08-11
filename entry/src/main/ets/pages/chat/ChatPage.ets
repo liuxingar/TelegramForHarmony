@@ -3227,6 +3227,13 @@ struct ChatPage {
   }
 
   private onAppForegroundChanged(): void {
+    // 停留在会话页切后台时必须 closeChat，否则 TDLib 认为用户正在看这个
+    // 会话，不会为它生成任何通知。
+    if (this.appIsForeground) {
+      this.store?.resumeOpenChat();
+    } else {
+      this.store?.suspendOpenChat();
+    }
     if (!this.appIsForeground) {
       getVoicePlayback().pauseForBackground();
     }

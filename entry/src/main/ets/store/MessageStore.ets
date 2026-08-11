@@ -247,6 +247,29 @@ export class MessageStore {
     return req;
   }
 
+  // 应用切后台：TDLib 对"打开中"的会话不生成通知（认为用户正在看）。
+  // 暂时 closeChat，回前台再 openChat，否则停留在会话页时永远收不到通知。
+  suspendOpenChat(): void {
+    if (!this.chatOpened) {
+      return;
+    }
+    this.sendSimple('closeChat');
+    this.chatOpened = false;
+    this.chatSuspended = true;
+  }
+
+  resumeOpenChat(): void {
+    if (!this.chatSuspended || this.chatOpened) {
+      return;
+    }
+    this.chatSuspended = false;
+    this.sendSimple('openChat');
+    this.chatOpened = true;
+    this.readAllBadges();
+  }
+
+  private chatSuspended: boolean = false;
+
   open(aroundMessageId?: number, passive: boolean = false): void {
     // Embedded consumers such as the livestream interaction panel need chat
     // history and updates without changing TDLib's open-chat lifecycle for the

@@ -41,6 +41,16 @@ export class NotificationService {
     this.isForeground = isForeground;
     this.unsubs.push(client.onUpdate('updateNotificationGroup',
       (u: TdObject) => this.onNotificationGroup(u)));
+    // 临时诊断：区分"消息没到"与"到了但 TDLib 未生成通知组"。
+    this.unsubs.push(client.onUpdate('updateNewMessage', (u: TdObject): void => {
+      const message = u['message'] as TdObject | undefined;
+      const chatId: number = message !== undefined
+        ? ((message['chat_id'] as number | undefined) ?? 0) : 0;
+      const outgoing: boolean = message !== undefined
+        ? ((message['is_outgoing'] as boolean | undefined) ?? false) : false;
+      console.info(`[NotifDiag] updateNewMessage chat=${chatId} outgoing=${outgoing} ` +
+        `foreground=${this.isForeground()}`);
+    }));
   }
 
   // 启用 TDLib 通知管理器。必须在 td_init 完成（Auth Ready）后调用 ——

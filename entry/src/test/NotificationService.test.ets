@@ -90,6 +90,9 @@ export default function notificationServiceTest() {
   describe('NotificationService', () => {
     it('enables_td_notification_options', 0, () => {
       const env = setup();
+      // 构造时 TDLib 可能尚未 init，故启用改由 enable() 在登录就绪后触发。
+      expect(sentOptions(env.bridge).length).assertEqual(0);
+      env.service.enable();
       const names = sentOptions(env.bridge);
       expect(names.indexOf('notification_group_count_max') >= 0).assertTrue();
       expect(names.indexOf('notification_group_size_max') >= 0).assertTrue();

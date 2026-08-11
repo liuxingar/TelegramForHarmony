@@ -128,7 +128,12 @@ export class VideoRangeServer {
     let offset = range.start;
     while (!this.closed && offset <= range.end) {
       const length = Math.min(SERVE_CHUNK_SIZE, range.end - offset + 1);
-      const data = await this.session.readRange(offset, length, RANGE_WAIT_MS);
+      // readRange 内部已按截止时间重试；这里再补一次整块重试，覆盖
+      // 会话刚启动时 TDLib 尚未开始下载该区间的情况。
+      let data = await this.session.readRange(offset, length, RANGE_WAIT_MS);
+      if ((data === null || data.byteLength === 0) && !this.closed) {
+        data = await this.session.readRange(offset, length, RANGE_WAIT_MS);
+      }
       if (data === null || data.byteLength === 0) {
         throw new Error(`range ${offset}+${length} unavailable`);
       }

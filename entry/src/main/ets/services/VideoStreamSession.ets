@@ -114,23 +114,44 @@ export class VideoStreamSession {
     }
     this.readHead = offset + wanted;
     this.ensureRange(offset, wanted, true);
-    if (!await this.waitForBuffered(offset, wanted, timeoutMs) || this.localPath === '') {
-      return null;
-    }
-    try {
-      const buffer = new ArrayBuffer(wanted);
-      const fd = fileIo.openSync(this.localPath, fileIo.OpenMode.READ_ONLY).fd;
-      const readBytes = fileIo.readSync(fd, buffer, { offset, length: wanted });
-      fileIo.closeSync(fd);
-      if (readBytes !== wanted) {
+    // 首次打开时存在多个瞬时竞态：TDLib 可能先报告已缓冲字节、稍后才给出
+    // 本地文件路径；写盘也可能略滞后于范围上报，导致短读。这些都不是真正的
+    // 失败——在截止时间内重试，否则一次瞬时 null 会让 serve 直接断流，
+    // 表现为"视频第一次点开概率性加载失败"。
+    const deadline: number = Date.now() + timeoutMs;
+    let attempt: number = 0;
+    while (!this.closed) {
+      const remaining: number = deadline - Date.now();
+      if (remaining <= 0) {
         return null;
       }
-      this.keepAhead(offset + readBytes);
-      return buffer;
-    } catch (e) {
-      console.error(`VideoStreamSession.readRange failed: ${e}`);
-      return null;
+      if (!await this.waitForBuffered(offset, wanted, remaining)) {
+        return null;
+      }
+      if (this.localPath !== '') {
+        try {
+          const buffer = new ArrayBuffer(wanted);
+          const fd = fileIo.openSync(this.localPath, fileIo.OpenMode.READ_ONLY).fd;
+          const readBytes = fileIo.readSync(fd, buffer, { offset, length: wanted });
+          fileIo.closeSync(fd);
+          if (readBytes === wanted) {
+            this.keepAhead(offset + readBytes);
+            return buffer;
+          }
+        } catch (e) {
+          // 文件刚被 TDLib 创建/截断时可能瞬时打开失败，同样重试。
+          console.warn(`VideoStreamSession.readRange retry(${attempt}): ${e}`);
+        }
+      }
+      attempt++;
+      if (attempt > 40) {
+        return null;
+      }
+      await new Promise<void>((resolve: (v: void) => void): void => {
+        setTimeout((): void => resolve(), 50);
+      });
     }
+    return null;
   }
 
   read(buffer: ArrayBuffer, length: number, pos?: number): number {

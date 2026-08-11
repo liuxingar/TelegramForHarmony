@@ -3,9 +3,12 @@ import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { LiveStreamStore } from '../../store/LiveStreamStore';
 import { GroupCallParticipantsStore } from '../../store/GroupCallParticipantsStore';
 import {
+  GroupCallMessageEntry, GroupCallMessageStore
+} from '../../store/GroupCallMessageStore';
+import {
   GroupCallParticipantInfo, GroupCallStreamInfo, GroupCallVideoSource, LiveStreamState, emptyLiveStreamState
 } from '../../tdkit/GroupCallTypes';
-import { getTdClient } from '../../tdkit/Globals';
+import { getTdClient, getUserStore } from '../../tdkit/Globals';
 import {
   endGroupCall, getGroupCall, leaveGroupCall, setGroupCallParticipantIsSpeaking,
   toggleGroupCallParticipantIsMuted
@@ -15,14 +18,26 @@ import { liveStreamBackgroundTask } from '../../services/LiveStreamBackgroundTas
 import { TdObject } from '../../tdkit/TdTypes';
 import { TdClient } from '../../tdkit/TdClient';
 import {
-  confirmAdminLeaveLiveStream, confirmLeaveLiveStream, setLiveStreamFullscreen
+  confirmAdminLeaveLiveStream, confirmLeaveLiveStream, setLiveStreamFullscreen,
+  setLiveStreamKeepScreenOn
 } from './LiveViewerUi';
 import {
-  FloatingLiveDescriptor, floatingLiveWindow
+  FloatingLiveDescriptor, FloatingLiveSessionHandoff, floatingLiveWindow
 } from './LiveFloatingWindow';
 import {
   KEY_POWER_CALL_ANIMATIONS, powerAnimationDuration, powerFeatureEnabled
 } from '../../store/AppSettings';
+import {
+  LiveViewerHeaderPresentation, liveViewerHeaderPresentation
+} from '../../util/liveViewerHeaderPresentation';
+import {
+  LiveViewerMediaPresentation, liveViewerMediaPresentation
+} from '../../util/liveViewerMediaPresentation';
+import {
+  LiveInteractionEntry, LiveInteractionPresentation, liveInteractionLooksLikeEmojiOnly,
+  liveInteractionPresentation, mergeLiveInteractions
+} from '../../util/liveInteractionPresentation';
+import { LiveInteractionBubble } from './LiveInteractionBubble';
 
 const CALL_BACKGROUND: string = '#0D141B';
 const CALL_PANEL: string = '#141E27';
@@ -37,6 +52,24 @@ const CAMERA_PERMISSION: Permissions = 'ohos.permission.CAMERA';
 const MEDIA_RECONNECT_GRACE_MS: number = 8000;
 const MEDIA_HEALTH_INTERVAL_MS: number = 5000;
 const LOCAL_VIDEO_START_TIMEOUT_MS: number = 20000;
+const CALL_INTERACTION_LIMIT: number = 60;
+const CALL_QUICK_REACTIONS: string[] = ['❤️', '🔥', '👏', '👍'];
+
+function groupMessageInteraction(
+  message: GroupCallMessageEntry, arrivalOrder: number
+): LiveInteractionEntry {
+  return {
+    key: `call:${message.id}`,
+    revision: `${message.revision}:${message.senderName}:${message.senderAvatarPath}`,
+    source: 'call', id: message.id, senderKey: message.senderKey,
+    senderName: message.senderName, senderInitials: message.senderInitials,
+    senderAvatarPath: message.senderAvatarPath, colorSeed: message.colorSeed,
+    date: message.date, text: message.text, photoPath: '',
+    emojiOnly: CALL_QUICK_REACTIONS.indexOf(message.text.trim()) >= 0 ||
+      liveInteractionLooksLikeEmojiOnly(message.text),
+    isFromOwner: message.isFromOwner, sendState: 'none', arrivalOrder
+  };
+}
 
 interface LiveVideoSurfaceBinding {
   surfaceId: string;
@@ -122,10 +155,15 @@ struct LiveVideoTile {
       }
 
       if (this.source.isPaused) {
-        Column() {
-          SymbolGlyph($r('sys.symbol.camera')).fontSize(28).fontColor([CALL_SUBTEXT]);
-          Text('视频已暂停').fontSize(12).fontColor(CALL_SUBTEXT).margin({ top: 6 });
+        Column({ space: 7 }) {
+          SymbolGlyph($r('sys.symbol.camera')).fontSize(28).fontColor([Color.White]);
+          Text('视频已暂停').fontSize(12).fontColor(Color.White);
         }
+        .width('100%').height('100%').justifyContent(FlexAlign.Center)
+        .backgroundColor('#8A0A1117')
+        .transition(TransitionEffect.OPACITY.animation({
+          duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 160), curve: Curve.EaseOut
+        }));
       }
 
       Column() {
@@ -140,9 +178,13 @@ struct LiveVideoTile {
             SymbolGlyph($r('sys.symbol.mic'))
               .fontSize(this.source.isSpeaking && this.pulseExpanded ? 14 : 13)
               .fontColor([this.source.isMuted ? '#A9B4BC' : Color.White]);
+            if (this.source.isMuted) {
+              Text('╱').fontSize(15).fontWeight(FontWeight.Bold).fontColor('#D6DEE3');
+            }
           }
           .width(20).height(20);
-          Text(this.source.name)
+          Text(this.source.name !== '' ? this.source.name :
+            (this.source.isScreenSharing ? '屏幕共享' : '直播画面'))
             .fontSize(12).fontColor(Color.White).fontWeight(FontWeight.Medium)
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
         }
@@ -168,6 +210,7 @@ struct LiveVideoTile {
             }
             .width(40).height(40).padding(0).backgroundColor('#A617222B')
             .border({ width: 1, color: '#42FFFFFF' })
+            .accessibilityText(this.fullscreen ? '退出全屏' : '进入全屏')
             .onClick((): void => this.onFullscreenToggle());
           }.width('100%');
         }
@@ -182,11 +225,9 @@ struct LiveVideoTile {
       // Surface with its new dimensions so the old canvas is not stretched.
       setTimeout((): void => this.refreshSurfaceSize(), 30);
     })
-    .transition(TransitionEffect.OPACITY
-      .combine(TransitionEffect.scale({ x: 0.96, y: 0.96 }))
-      .animation({
-        duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 220), curve: Curve.EaseOut
-      }));
+    .transition(TransitionEffect.OPACITY.animation({
+      duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 190), curve: Curve.EaseOut
+    }));
   }
 }
 
@@ -289,6 +330,7 @@ struct LocalVideoPreviewTile {
             }
             .width(40).height(40).padding(0).backgroundColor('#A617222B')
             .border({ width: 1, color: '#42FFFFFF' })
+            .accessibilityText(this.fullscreen ? '退出全屏' : '进入全屏')
             .onClick((): void => this.onFullscreenToggle());
           }.width('100%');
         }
@@ -302,11 +344,9 @@ struct LocalVideoPreviewTile {
     .onAreaChange((_old: Area, _area: Area): void => {
       setTimeout((): void => this.refreshSurfaceSize(), 30);
     })
-    .transition(TransitionEffect.OPACITY
-      .combine(TransitionEffect.scale({ x: 0.96, y: 0.96 }))
-      .animation({
-        duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 200), curve: Curve.EaseOut
-      }));
+    .transition(TransitionEffect.OPACITY.animation({
+      duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 180), curve: Curve.EaseOut
+    }));
   }
 }
 
@@ -315,6 +355,9 @@ struct LocalVideoPreviewTile {
 struct LiveStreamViewerPage {
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
+  @StorageProp('cutoutTopSafeHeight') cutoutTopSafe: number = 0;
+  @StorageProp('cutoutLeftSafeWidth') cutoutLeftSafe: number = 0;
+  @StorageProp('cutoutRightSafeWidth') cutoutRightSafe: number = 0;
   @StorageProp('appForegroundEpoch') @Watch('onAppForegroundEpoch') appForegroundEpoch: number = 0;
   @State state: LiveStreamState = emptyLiveStreamState();
   @State mediaStatus: string = '正在加入直播…';
@@ -324,8 +367,10 @@ struct LiveStreamViewerPage {
   @State pulseExpanded: boolean = false;
   @State microphoneScale: number = 1;
   @State videoAreaOpacity: number = 1;
-  @State videoAreaScale: number = 1;
+  @State preferredPrimaryEndpointId: string = '';
   @State isFullscreen: boolean = false;
+  @State fullscreenTransitioning: boolean = false;
+  @State fullscreenTransitionLabel: string = '';
   @State fullscreenPanelOpen: boolean = false;
   @State minimizeInProgress: boolean = false;
   @State localVideoMode: number = 0;
@@ -338,12 +383,30 @@ struct LiveStreamViewerPage {
   @State primaryVideoAspectRatio: number = 0;
   @State canManageLive: boolean = false;
   @State endingLive: boolean = false;
+  @State headerStateResolved: boolean = false;
+  @State headerQueryFailed: boolean = false;
+  @State recoveryUiVisible: boolean = false;
+  @State retrySeconds: number = 0;
+  @State connectionError: string = '';
+  @State leaveDialogOpen: boolean = false;
+  @State interactionMessages: LiveInteractionEntry[] = [];
+  @State interactionDrawerOpen: boolean = false;
+  @State interactionUnreadCount: number = 0;
+  @State interactionAtBottom: boolean = true;
+  @State interactionDraft: string = '';
+  @State interactionSending: boolean = false;
+  @State interactionSendError: string = '';
   private groupCallId: number = 0;
   private chatId: number = 0;
+  private initialTitle: string = '';
+  private initialParticipantCount: number = 0;
   private store: LiveStreamStore | null = null;
   private participantStore: GroupCallParticipantsStore | null = null;
+  private interactionStore: GroupCallMessageStore | null = null;
   private off: (() => void) | null = null;
   private offParticipants: (() => void) | null = null;
+  private offInteractionMessages: (() => void) | null = null;
+  private offInteractionError: (() => void) | null = null;
   private tgcallsSession: TgcallsGroupSession | null = null;
   private requestedEndpoints: Set<string> = new Set();
   private unifiedSource: GroupCallVideoSource | null = null;
@@ -358,6 +421,8 @@ struct LiveStreamViewerPage {
   private reconnectAttempt: number = 0;
   private reconnectTimer: number = -1;
   private reconnectDueAt: number = 0;
+  private recoveryUiTimer: number = -1;
+  private recoveryCountdownTimer: number = -1;
   private healthTimer: number = -1;
   private groupCallRefreshInFlight: boolean = false;
   private surfaceBindings: Map<string, LiveVideoSurfaceBinding> = new Map();
@@ -366,12 +431,42 @@ struct LiveStreamViewerPage {
   private screenShareOperationSequence: number = 0;
   private localPreviewSurfaceId: string = '0';
   private videoAspectRatios: Map<string, number> = new Map();
+  private primaryVideoPinned: boolean = false;
+  private interactionArrivalCounter: number = 0;
+  private interactionArrivalOrders: Map<string, number> = new Map();
+  private interactionSnapshotReady: boolean = false;
+  private interactionScroller: Scroller = new Scroller();
+  private interactionTouchActive: boolean = false;
+  private lastFailedInteractionText: string = '';
+  private fullscreenTransitionTimer: number = -1;
+
+  @Styles
+  topActionNormalStyle() {
+    .opacity(1)
+    .scale({ x: 1, y: 1 })
+  }
+
+  @Styles
+  topActionPressedStyle() {
+    .opacity(0.72)
+    .scale({ x: 0.92, y: 0.92 })
+  }
 
   aboutToAppear(): void {
     this.pageActive = true;
+    setLiveStreamKeepScreenOn(getContext(this) as common.UIAbilityContext, true);
+    this.interactionDrawerOpen = false;
+    this.interactionUnreadCount = 0;
+    this.interactionAtBottom = true;
+    this.interactionTouchActive = false;
+    this.interactionSnapshotReady = false;
     const params = router.getParams() as Record<string, Object> | undefined;
     this.groupCallId = params !== undefined ? ((params['groupCallId'] as number | undefined) ?? 0) : 0;
     this.chatId = params !== undefined ? ((params['chatId'] as number | undefined) ?? 0) : 0;
+    this.initialTitle = params !== undefined
+      ? ((params['initialTitle'] as string | undefined) ?? '') : '';
+    this.initialParticipantCount = params !== undefined
+      ? ((params['initialParticipantCount'] as number | undefined) ?? 0) : 0;
     if (this.groupCallId <= 0) {
       this.mediaStatus = '无效的直播间';
       return;
@@ -385,16 +480,98 @@ struct LiveStreamViewerPage {
     this.offParticipants = this.participantStore.subscribe(
       (value: GroupCallParticipantInfo[]): void => this.onParticipants(value)
     );
+    this.interactionStore = new GroupCallMessageStore(client, getUserStore(), this.groupCallId);
+    this.offInteractionMessages = this.interactionStore.subscribe(
+      (messages: GroupCallMessageEntry[]): void => this.onInteractionMessages(messages)
+    );
+    this.offInteractionError = this.interactionStore.subscribeError((message: string): void => {
+      this.interactionSendError = message;
+    });
+    this.interactionStore.open();
 
     const context = getContext(this) as common.UIAbilityContext;
+    const handoff = floatingLiveWindow.takeSeamlessSession(this.groupCallId, false);
+    if (handoff !== null) {
+      this.adoptSeamlessSession(handoff, client);
+    }
     liveStreamBackgroundTask.start(context, !this.isMuted);
     this.startHealthMonitor();
-    this.replaceSession('首次加入');
+    if (handoff === null) { this.replaceSession('首次加入'); }
     this.refreshGroupCall('首次查询');
   }
 
+  private adoptSeamlessSession(
+    handoff: FloatingLiveSessionHandoff, client: TdClient
+  ): void {
+    const session = handoff.session;
+    this.tgcallsSession = session;
+    this.sessionSequence += 1;
+    this.store?.setStreams(handoff.liveState.streams);
+    this.state = handoff.liveState;
+    this.isMuted = handoff.isMuted;
+    this.mediaConnected = handoff.mediaConnected;
+    this.hasJoinedOnce = handoff.hasJoinedOnce;
+    this.recoveryInFlight = false;
+    this.recoveryUiVisible = !handoff.mediaConnected;
+    this.connectionError = '';
+    this.reconnectAttempt = 0;
+    this.headerStateResolved = true;
+    this.headerQueryFailed = false;
+    this.localVideoMode = handoff.localVideoMode;
+    this.localVideoActive = handoff.localVideoActive;
+    this.localVideoBusy = false;
+    this.desiredLocalVideoMode = handoff.desiredLocalVideoMode;
+    this.screenShareActive = handoff.screenShareActive;
+    this.screenShareDesired = handoff.screenShareDesired;
+    this.screenShareBusy = false;
+    this.primaryVideoAspectRatio = handoff.videoAspectRatio;
+    const primarySource = handoff.descriptor.primarySource;
+    if (primarySource !== null) {
+      this.preferredPrimaryEndpointId = primarySource.endpointId;
+      this.videoSources = [primarySource];
+      this.requestedEndpoints.add(primarySource.endpointId);
+      if (primarySource.endpointId === 'unified') { this.unifiedSource = primarySource; }
+      if (handoff.videoAspectRatio > 0) {
+        this.videoAspectRatios.set(primarySource.endpointId, handoff.videoAspectRatio);
+      }
+    }
+    session.setListeners(
+      (connected: boolean): void => this.onMediaNetworkState(session, connected),
+      (audioSourceId: number, speaking: boolean): void => {
+        this.onRemoteAudioActivity(session, client, audioSourceId, speaking);
+      },
+      (): void => {},
+      (): void => {},
+      (mode: number, active: boolean, error: number): void => {
+        this.onLocalVideoState(session, mode, active, error);
+      },
+      (endpointId: string, width: number, height: number): void => {
+        this.onVideoGeometry(session, endpointId, width, height);
+      }
+    );
+    if (primarySource !== null) {
+      session.setVideoChannel(
+        primarySource.endpointId, primarySource.audioSourceId, primarySource.sourceGroups
+      );
+    }
+    session.resumeMedia();
+    this.mediaStatus = handoff.mediaConnected
+      ? (this.videoSources.length > 0 ? '直播音视频已连接' : '直播音频已连接')
+      : '网络波动，正在恢复媒体连接…';
+    this.participantStore?.load(100).catch((caught: Error): void => {
+      console.error(`LiveStreamViewer.adopt load participants failed: ${caught.message}`);
+    });
+  }
+
   onPageShow(): void {
-    if (this.pageActive && this.groupCallId > 0) { this.resumeAfterForeground(); }
+    if (this.pageActive && this.groupCallId > 0) {
+      if (this.isFullscreen) {
+        setLiveStreamFullscreen(
+          getContext(this) as common.UIAbilityContext, true, this.primaryVideoAspectRatio
+        );
+      }
+      this.resumeAfterForeground();
+    }
   }
 
   private onAppForegroundEpoch(): void {
@@ -403,10 +580,138 @@ struct LiveStreamViewerPage {
 
   private onLiveState(value: LiveStreamState): void {
     this.state = value;
+    if (value.title !== '' || value.isActive || value.error !== '') {
+      this.headerStateResolved = true;
+      this.headerQueryFailed = false;
+    }
+    if (this.hasJoinedOnce && this.headerStateResolved && !value.isActive) {
+      this.clearRecoveryTimer();
+      this.clearRecoveryUi();
+      this.mediaStatus = '直播已结束';
+      setLiveStreamKeepScreenOn(getContext(this) as common.UIAbilityContext, false);
+      return;
+    }
     if (value.needRejoin) {
+      this.showRecoveryUi(0);
       this.scheduleRecovery(0, 'TDLib 要求重新加入');
     } else if (this.hasJoinedOnce && value.isActive && !value.isJoined) {
+      this.showRecoveryUi(0);
       this.scheduleRecovery(500, '直播成员状态已断开');
+    }
+  }
+
+  private interactionArrival(key: string): number {
+    const known = this.interactionArrivalOrders.get(key);
+    if (known !== undefined) { return known; }
+    this.interactionArrivalCounter += 1;
+    this.interactionArrivalOrders.set(key, this.interactionArrivalCounter);
+    return this.interactionArrivalCounter;
+  }
+
+  private onInteractionMessages(messages: GroupCallMessageEntry[]): void {
+    const previous = this.interactionMessages;
+    const entries: LiveInteractionEntry[] = [];
+    for (const message of messages) {
+      const key = `call:${message.id}`;
+      entries.push(groupMessageInteraction(message, this.interactionArrival(key)));
+    }
+    const next = mergeLiveInteractions(entries, CALL_INTERACTION_LIMIT);
+    const newCount = this.interactionSnapshotReady
+      ? next.filter((candidate: LiveInteractionEntry): boolean =>
+        !previous.some((entry: LiveInteractionEntry): boolean => entry.key === candidate.key)).length
+      : 0;
+    this.interactionMessages = next;
+    this.interactionSnapshotReady = true;
+    if (newCount <= 0) { return; }
+    if (this.interactionDrawerOpen && this.interactionAtBottom && !this.interactionTouchActive) {
+      setTimeout((): void => this.interactionScroller.scrollEdge(Edge.Bottom), 40);
+    } else {
+      this.interactionUnreadCount += newCount;
+    }
+  }
+
+  private openInteractionDrawer(): void {
+    this.interactionAtBottom = true;
+    this.interactionUnreadCount = 0;
+    animateTo({
+      duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 220), curve: Curve.EaseOut
+    }, (): void => { this.interactionDrawerOpen = true; });
+    setTimeout((): void => this.interactionScroller.scrollEdge(Edge.Bottom), 60);
+  }
+
+  private closeInteractionDrawer(): void {
+    animateTo({
+      duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 180), curve: Curve.EaseOut
+    }, (): void => { this.interactionDrawerOpen = false; });
+  }
+
+  private closeInteractionDrawerOnSwipe(offsetY: number): void {
+    if (offsetY > 54) { this.closeInteractionDrawer(); }
+  }
+
+  private refreshInteractionAtBottom(): void {
+    const next = this.interactionMessages.length === 0 || this.interactionScroller.isAtEnd();
+    if (this.interactionAtBottom !== next) { this.interactionAtBottom = next; }
+    if (next && this.interactionUnreadCount !== 0) { this.interactionUnreadCount = 0; }
+  }
+
+  private scrollToInteractionTail(): void {
+    this.interactionAtBottom = true;
+    this.interactionUnreadCount = 0;
+    this.interactionScroller.scrollEdge(Edge.Bottom);
+  }
+
+  private callInteractionPresentation(): LiveInteractionPresentation {
+    return liveInteractionPresentation({
+      valid: this.groupCallId > 0, resolved: this.headerStateResolved,
+      active: this.state.isActive, joined: this.state.isJoined, joinedOnce: this.hasJoinedOnce,
+      recovering: this.recoveryInFlight && this.hasJoinedOnce,
+      messagesAllowed: this.state.areMessagesAllowed,
+      canSendMessages: this.state.canSendMessages,
+      messageCount: this.interactionMessages.length,
+      channelAttached: false, channelHistoryState: 'ready', channelHistoryError: ''
+    });
+  }
+
+  private shouldShowInteractionSection(): boolean {
+    return this.state.areMessagesAllowed || this.state.canSendMessages || this.interactionMessages.length > 0;
+  }
+
+  private callInteractionStatusColor(): string {
+    const tone = this.callInteractionPresentation().statusTone;
+    if (tone === 'live') { return CALL_GREEN; }
+    if (tone === 'accent') { return '#64A8FF'; }
+    return CALL_SUBTEXT;
+  }
+
+  private callInteractionStatusBackground(): string {
+    const tone = this.callInteractionPresentation().statusTone;
+    if (tone === 'live') { return '#2539D98A'; }
+    if (tone === 'accent') { return '#263390EC'; }
+    return '#244A5964';
+  }
+
+  private sendInteraction(text?: string): void {
+    const store = this.interactionStore;
+    if (store === null || this.interactionSending ||
+      !this.callInteractionPresentation().composerEnabled) { return; }
+    const value = (text ?? this.interactionDraft).trim();
+    if (value === '') { return; }
+    this.lastFailedInteractionText = value;
+    this.interactionSendError = '';
+    this.interactionSending = true;
+    store.send(value).then((): void => {
+      if (text === undefined) { this.interactionDraft = ''; }
+    }).catch((caught: Error): void => {
+      this.interactionSendError = `发送失败：${caught.message}`;
+    }).finally((): void => {
+      this.interactionSending = false;
+    });
+  }
+
+  private retryInteractionSend(): void {
+    if (this.lastFailedInteractionText !== '' && !this.interactionSending) {
+      this.sendInteraction(this.lastFailedInteractionText);
     }
   }
 
@@ -419,6 +724,8 @@ struct LiveStreamViewerPage {
     this.recoveryInFlight = true;
     this.clearRecoveryTimer();
     this.mediaConnected = false;
+    this.connectionError = '';
+    if (this.hasJoinedOnce) { this.showRecoveryUi(0); }
     const sequence = ++this.sessionSequence;
     const previous = this.tgcallsSession;
     // Ignore synchronous capturer-stop callbacks from the session being
@@ -511,6 +818,9 @@ struct LiveStreamViewerPage {
       session.stop();
       this.tgcallsSession = null;
       this.mediaStatus = '直播连接中断，正在重试…';
+      this.connectionError = error.message;
+      if (!this.hasJoinedOnce) { this.headerQueryFailed = true; }
+      this.showRecoveryUi(0);
       this.state = {
         title: this.state.title,
         isActive: this.state.isActive,
@@ -537,12 +847,15 @@ struct LiveStreamViewerPage {
     if (connected) {
       this.reconnectAttempt = 0;
       this.clearRecoveryTimer();
+      this.clearRecoveryUi();
+      this.connectionError = '';
       this.mediaStatus = '直播音视频已连接';
       session.resumeMedia();
       this.restoreSurfaceBindings();
       return;
     }
     this.mediaStatus = '网络波动，正在恢复媒体连接…';
+    this.showRecoveryUi(700);
     this.scheduleRecovery(MEDIA_RECONNECT_GRACE_MS, '媒体连接超时');
   }
 
@@ -703,14 +1016,19 @@ struct LiveStreamViewerPage {
   }
 
   private scheduleRecovery(delayMs: number, reason: string): void {
-    if (!this.pageActive) { return; }
+    if (!this.pageActive || this.groupCallId <= 0 ||
+      (this.hasJoinedOnce && this.headerStateResolved && !this.state.isActive)) { return; }
     const dueAt = Date.now() + Math.max(0, delayMs);
     if (this.reconnectTimer !== -1 && this.reconnectDueAt <= dueAt) { return; }
     this.clearRecoveryTimer();
     this.reconnectDueAt = dueAt;
+    this.startRecoveryCountdown();
     this.reconnectTimer = setTimeout((): void => {
       this.reconnectTimer = -1;
       this.reconnectDueAt = 0;
+      this.stopRecoveryCountdown();
+      if (!this.pageActive || (this.hasJoinedOnce && this.headerStateResolved &&
+        !this.state.isActive)) { return; }
       this.replaceSession(reason);
     }, Math.max(0, delayMs));
   }
@@ -721,6 +1039,52 @@ struct LiveStreamViewerPage {
       this.reconnectTimer = -1;
       this.reconnectDueAt = 0;
     }
+    this.stopRecoveryCountdown();
+  }
+
+  private startRecoveryCountdown(): void {
+    this.stopRecoveryCountdown();
+    const refresh = (): void => {
+      this.retrySeconds = this.reconnectDueAt > 0
+        ? Math.max(0, Math.ceil((this.reconnectDueAt - Date.now()) / 1000)) : 0;
+    };
+    refresh();
+    if (this.retrySeconds > 0) {
+      this.recoveryCountdownTimer = setInterval((): void => refresh(), 250);
+    }
+  }
+
+  private stopRecoveryCountdown(): void {
+    if (this.recoveryCountdownTimer !== -1) {
+      clearInterval(this.recoveryCountdownTimer);
+      this.recoveryCountdownTimer = -1;
+    }
+    this.retrySeconds = 0;
+  }
+
+  private showRecoveryUi(delayMs: number): void {
+    if (this.recoveryUiVisible) { return; }
+    if (this.recoveryUiTimer !== -1) { clearTimeout(this.recoveryUiTimer); }
+    if (delayMs <= 0) {
+      this.recoveryUiTimer = -1;
+      this.recoveryUiVisible = true;
+      return;
+    }
+    this.recoveryUiTimer = setTimeout((): void => {
+      this.recoveryUiTimer = -1;
+      if (this.pageActive && this.hasJoinedOnce && !this.mediaConnected &&
+        (!this.headerStateResolved || this.state.isActive)) {
+        this.recoveryUiVisible = true;
+      }
+    }, delayMs);
+  }
+
+  private clearRecoveryUi(): void {
+    if (this.recoveryUiTimer !== -1) {
+      clearTimeout(this.recoveryUiTimer);
+      this.recoveryUiTimer = -1;
+    }
+    this.recoveryUiVisible = false;
   }
 
   private startHealthMonitor(): void {
@@ -736,6 +1100,8 @@ struct LiveStreamViewerPage {
     try {
       const groupCall = await getGroupCall(getTdClient(), this.groupCallId);
       if (!this.pageActive) { return; }
+      this.headerStateResolved = true;
+      this.headerQueryFailed = false;
       const canBeManaged = (groupCall['can_be_managed'] as boolean | undefined) ?? false;
       const isOwned = (groupCall['is_owned'] as boolean | undefined) ?? false;
       this.canManageLive = canBeManaged || isOwned;
@@ -769,6 +1135,7 @@ struct LiveStreamViewerPage {
       );
     } catch (caught) {
       const error = caught as Error;
+      if (!this.hasJoinedOnce) { this.headerQueryFailed = true; }
       console.error(`[LiveStreamViewer] health check failed reason=${reason}: ${error.message}`);
     } finally {
       this.groupCallRefreshInFlight = false;
@@ -820,12 +1187,36 @@ struct LiveStreamViewerPage {
     }
     sources.sort((a: GroupCallVideoSource, b: GroupCallVideoSource): number => {
       if (a.isScreenSharing !== b.isScreenSharing) { return a.isScreenSharing ? -1 : 1; }
-      if (a.isSpeaking !== b.isSpeaking) { return a.isSpeaking ? -1 : 1; }
       return a.endpointId.localeCompare(b.endpointId);
     });
-    this.videoSources = sources;
+    let preferred = sources.find(
+      (source: GroupCallVideoSource): boolean =>
+        source.endpointId === this.preferredPrimaryEndpointId
+    );
+    if (preferred === undefined) {
+      this.primaryVideoPinned = false;
+      preferred = sources.length > 0 ? sources[0] : undefined;
+    } else if (!this.primaryVideoPinned) {
+      const screen = sources.find(
+        (source: GroupCallVideoSource): boolean => source.isScreenSharing
+      );
+      if (screen !== undefined) { preferred = screen; }
+    }
+    const ordered: GroupCallVideoSource[] = [];
+    if (preferred !== undefined) {
+      this.preferredPrimaryEndpointId = preferred.endpointId;
+      ordered.push(preferred);
+    } else {
+      this.preferredPrimaryEndpointId = '';
+    }
+    for (const source of sources) {
+      if (preferred === undefined || source.endpointId !== preferred.endpointId) {
+        ordered.push(source);
+      }
+    }
+    this.videoSources = ordered;
     this.refreshPrimaryVideoAspect();
-    this.applyVideoSources(sources);
+    this.applyVideoSources(ordered);
   }
 
   private applyVideoSources(sources: GroupCallVideoSource[]): void {
@@ -1145,14 +1536,24 @@ struct LiveStreamViewerPage {
   }
 
   private leave(): void {
+    if (this.groupCallId <= 0) {
+      router.back();
+      return;
+    }
+    if (this.leaveDialogOpen || this.minimizeInProgress || this.endingLive) { return; }
+    this.leaveDialogOpen = true;
     if (this.canManageLive) {
       confirmAdminLeaveLiveStream(
         (): void => this.leaveNow(),
-        (): void => this.endLiveForEveryone()
+        (): void => this.endLiveForEveryone(),
+        (): void => { this.leaveDialogOpen = false; }
       );
       return;
     }
-    confirmLeaveLiveStream((): void => this.leaveNow());
+    confirmLeaveLiveStream(
+      (): void => this.leaveNow(),
+      (): void => { this.leaveDialogOpen = false; }
+    );
   }
 
   private endLiveForEveryone(): void {
@@ -1170,57 +1571,219 @@ struct LiveStreamViewerPage {
 
   private leaveNow(): void {
     if (this.isFullscreen) {
+      this.isFullscreen = false;
+      this.fullscreenPanelOpen = false;
       setLiveStreamFullscreen(getContext(this) as common.UIAbilityContext, false);
     }
     router.back();
   }
 
   private minimizeToFloating(): void {
-    if (this.minimizeInProgress || this.groupCallId <= 0) { return; }
+    const session = this.tgcallsSession;
+    if (session === null) {
+      this.mediaStatus = '直播连接尚未就绪，请稍后再试';
+      return;
+    }
+    if (this.minimizeInProgress || this.leaveDialogOpen || this.endingLive ||
+      this.groupCallId <= 0 || !this.headerPresentation().actionsEnabled) { return; }
     this.minimizeInProgress = true;
     const descriptor: FloatingLiveDescriptor = {
       groupCallId: this.groupCallId,
       chatId: this.chatId,
       isRtmp: false,
-      title: this.state.title,
-      participantCount: this.state.participantCount,
+      title: this.displayTitle(),
+      participantCount: this.displayParticipantCount(),
       primarySource: this.videoSources.length > 0 ? this.videoSources[0] : null
     };
+    const handoff: FloatingLiveSessionHandoff = {
+      descriptor,
+      session,
+      liveState: this.state,
+      isMuted: this.isMuted,
+      mediaConnected: this.mediaConnected,
+      hasJoinedOnce: this.hasJoinedOnce,
+      visualReady: this.videoSources.length === 0 || this.mediaConnected,
+      videoAspectRatio: this.primaryVideoAspectRatio,
+      localVideoMode: this.localVideoMode,
+      localVideoActive: this.localVideoActive,
+      desiredLocalVideoMode: this.desiredLocalVideoMode,
+      screenShareActive: this.screenShareActive,
+      screenShareDesired: this.screenShareDesired
+    };
     const abilityContext = getContext(this) as common.UIAbilityContext;
-    const uiContext = this.getUIContext();
+    const shown = floatingLiveWindow.showSeamless(
+      this.getUIContext(), abilityContext, handoff
+    );
+    if (!shown) {
+      this.minimizeInProgress = false;
+      this.mediaStatus = '无法创建悬浮窗，直播仍在当前页面';
+      return;
+    }
+    if (this.localVideoActive) { session.setLocalVideoSurface('0'); }
+    this.tgcallsSession = null;
     this.pageActive = false;
     this.sessionSequence += 1;
     this.clearRecoveryTimer();
-    if (this.tgcallsSession !== null) {
-      this.tgcallsSession.clearVideo();
-      this.tgcallsSession.stop();
-      this.tgcallsSession = null;
-    }
     if (this.isFullscreen) {
       this.isFullscreen = false;
       this.fullscreenPanelOpen = false;
       setLiveStreamFullscreen(abilityContext, false);
     }
-    leaveGroupCall(getTdClient(), this.groupCallId).catch((caught: Error): void => {
-      console.error(`LiveStreamViewerPage.minimize leave failed: ${caught.message}`);
-    }).finally((): void => {
-      this.leavingForFloating = true;
-      floatingLiveWindow.show(uiContext, abilityContext, descriptor);
-      router.back();
-    });
+    if (this.fullscreenTransitionTimer !== -1) {
+      clearTimeout(this.fullscreenTransitionTimer);
+      this.fullscreenTransitionTimer = -1;
+    }
+    this.fullscreenTransitioning = false;
+    this.interactionDrawerOpen = false;
+    this.leavingForFloating = true;
+    router.back();
   }
 
   private toggleFullscreen(): void {
+    if (this.fullscreenTransitioning) { return; }
     const next = !this.isFullscreen;
     this.fullscreenPanelOpen = false;
+    this.interactionDrawerOpen = false;
+    this.fullscreenTransitioning = true;
+    this.fullscreenTransitionLabel = next ? '正在进入全屏…' : '正在退出全屏…';
     this.isFullscreen = next;
     setLiveStreamFullscreen(
       getContext(this) as common.UIAbilityContext, next,
       next ? this.primaryVideoAspectRatio : 0
     );
+    if (this.fullscreenTransitionTimer !== -1) {
+      clearTimeout(this.fullscreenTransitionTimer);
+    }
+    this.fullscreenTransitionTimer = setTimeout((): void => {
+      this.fullscreenTransitionTimer = -1;
+      if (!this.pageActive) { return; }
+      this.fullscreenTransitioning = false;
+      this.fullscreenTransitionLabel = '';
+    }, powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 320));
+  }
+
+  private displayTitle(): string {
+    if (this.state.title !== '') { return this.state.title; }
+    if (this.initialTitle !== '') { return this.initialTitle; }
+    return this.groupCallId > 0 ? '直播' : '无法打开直播';
+  }
+
+  private displayParticipantCount(): number {
+    return this.headerStateResolved
+      ? this.state.participantCount
+      : Math.max(this.state.participantCount, this.initialParticipantCount);
+  }
+
+  private headerPresentation(): LiveViewerHeaderPresentation {
+    return liveViewerHeaderPresentation({
+      valid: this.groupCallId > 0,
+      resolved: this.headerStateResolved,
+      queryFailed: this.headerQueryFailed,
+      active: this.state.isActive,
+      joined: this.state.isJoined,
+      joinedOnce: this.hasJoinedOnce,
+      recovering: this.hasJoinedOnce && (this.recoveryUiVisible || this.recoveryInFlight),
+      ending: this.endingLive,
+      terminalError: false,
+      reconnectAttempt: this.reconnectAttempt,
+      retrySeconds: this.retrySeconds,
+      canMinimize: this.tgcallsSession !== null,
+      participantCount: this.displayParticipantCount(),
+      mediaStatus: this.mediaStatus
+    });
+  }
+
+  private mediaPresentation(): LiveViewerMediaPresentation {
+    return liveViewerMediaPresentation({
+      mode: 'group',
+      valid: this.groupCallId > 0,
+      resolved: this.headerStateResolved,
+      active: this.state.isActive,
+      joined: this.state.isJoined,
+      joinedOnce: this.hasJoinedOnce,
+      recovering: this.hasJoinedOnce && (this.recoveryUiVisible || this.recoveryInFlight),
+      ending: this.endingLive,
+      terminalError: false,
+      reconnectAttempt: this.reconnectAttempt,
+      retrySeconds: this.retrySeconds,
+      retryable: !this.recoveryInFlight,
+      hasVideo: this.videoSources.length > 0 || this.isLocalCameraActive(),
+      visualReady: true,
+      participantCount: Math.max(this.participants.length, this.displayParticipantCount()),
+      mediaStatus: this.mediaStatus,
+      error: this.connectionError !== '' ? this.connectionError : this.state.error
+    });
+  }
+
+  private activeAudioSpeaker(): GroupCallParticipantInfo | null {
+    const speaking = this.participants.find(
+      (participant: GroupCallParticipantInfo): boolean => participant.isSpeaking
+    );
+    return speaking ?? null;
+  }
+
+  private audioStageName(): string {
+    const speaker = this.activeAudioSpeaker();
+    return speaker !== null && speaker.name !== '' ? speaker.name : this.displayTitle();
+  }
+
+  private audioStageInitials(): string {
+    const speaker = this.activeAudioSpeaker();
+    if (speaker !== null && speaker.initials !== '') { return speaker.initials; }
+    const title = this.displayTitle().trim();
+    return title !== '' ? title.substring(0, 1).toUpperCase() : 'L';
+  }
+
+  private audioStageColor(): string {
+    const speaker = this.activeAudioSpeaker();
+    const seed = speaker !== null ? speaker.colorSeed : this.groupCallId;
+    return AVATAR_COLORS[Math.abs(seed) % AVATAR_COLORS.length];
+  }
+
+  private hiddenVideoSourceCount(): number {
+    const visibleRemoteCount = this.isLocalCameraActive() ? 6 : 7;
+    return Math.max(0, this.videoSources.length - visibleRemoteCount);
+  }
+
+  private headerDotColor(): string {
+    const kind = this.headerPresentation().kind;
+    if (kind === 'error' || kind === 'ending') { return CALL_RED; }
+    if (kind === 'ended' || kind === 'invalid') { return CALL_SUBTEXT; }
+    if (kind === 'connecting' || kind === 'joining' || kind === 'recovering') { return '#4C9AFF'; }
+    if (kind === 'waiting') { return '#E3A23A'; }
+    return CALL_GREEN;
+  }
+
+  private retryLiveConnection(): void {
+    if (!this.headerPresentation().retryable && !this.mediaPresentation().retryable) { return; }
+    const queryOnly = this.headerQueryFailed && this.tgcallsSession !== null &&
+      this.connectionError === '' && !this.recoveryUiVisible;
+    this.headerQueryFailed = false;
+    this.connectionError = '';
+    this.refreshGroupCall('顶部状态手动重试');
+    if (queryOnly || this.recoveryInFlight) { return; }
+    this.clearRecoveryTimer();
+    this.showRecoveryUi(this.hasJoinedOnce ? 0 : 700);
+    this.replaceSession('用户手动重试');
+  }
+
+  @Builder
+  headerMoreMenu() {
+    Menu() {
+      MenuItem({ content: '最小化到悬浮窗' })
+        .enabled(this.headerPresentation().actionsEnabled && !this.minimizeInProgress)
+        .onClick((): void => this.minimizeToFloating());
+      MenuItem({ content: this.canManageLive ? '管理或退出直播' : '退出直播' })
+        .enabled(!this.leaveDialogOpen && !this.endingLive)
+        .onClick((): void => this.leave());
+    }
   }
 
   onBackPress(): boolean {
+    if (this.interactionDrawerOpen) {
+      this.closeInteractionDrawer();
+      return true;
+    }
     if (this.fullscreenPanelOpen) {
       this.fullscreenPanelOpen = false;
       return true;
@@ -1233,26 +1796,29 @@ struct LiveStreamViewerPage {
     return true;
   }
 
-  private cyclePrimaryVideo(): void {
-    if (this.videoSources.length < 2) {
-      this.mediaStatus = '当前只有一路画面';
-      return;
-    }
+  private selectPrimaryVideo(endpointId: string): void {
+    const selected = this.videoSources.find(
+      (source: GroupCallVideoSource): boolean => source.endpointId === endpointId
+    );
+    if (selected === undefined || this.videoSources[0]?.endpointId === endpointId) { return; }
     const sequence = ++this.videoSwitchSequence;
     animateTo({
       duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 110), curve: Curve.EaseOut
     }, (): void => {
-      this.videoAreaOpacity = 0.54;
-      this.videoAreaScale = 0.985;
+      this.videoAreaOpacity = 0.64;
     });
     setTimeout((): void => {
       if (sequence !== this.videoSwitchSequence) { return; }
-      this.videoSources = [...this.videoSources.slice(1), this.videoSources[0]];
+      this.primaryVideoPinned = true;
+      this.preferredPrimaryEndpointId = endpointId;
+      this.videoSources = [selected, ...this.videoSources.filter(
+        (source: GroupCallVideoSource): boolean => source.endpointId !== endpointId
+      )];
+      this.refreshPrimaryVideoAspect();
       animateTo({
         duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 210), curve: Curve.FastOutSlowIn
       }, (): void => {
         this.videoAreaOpacity = 1;
-        this.videoAreaScale = 1;
       });
     }, 115);
   }
@@ -1302,9 +1868,21 @@ struct LiveStreamViewerPage {
   }
 
   aboutToDisappear(): void {
+    this.interactionDrawerOpen = false;
+    this.interactionSnapshotReady = false;
+    if (!this.leavingForFloating) {
+      setLiveStreamKeepScreenOn(getContext(this) as common.UIAbilityContext, false);
+    }
     if (this.isFullscreen) {
+      this.isFullscreen = false;
+      this.fullscreenPanelOpen = false;
       setLiveStreamFullscreen(getContext(this) as common.UIAbilityContext, false);
     }
+    if (this.fullscreenTransitionTimer !== -1) {
+      clearTimeout(this.fullscreenTransitionTimer);
+      this.fullscreenTransitionTimer = -1;
+    }
+    this.fullscreenTransitioning = false;
     this.pageActive = false;
     this.sessionSequence += 1;
     this.recoveryInFlight = false;
@@ -1313,6 +1891,17 @@ struct LiveStreamViewerPage {
     if (!this.leavingForFloating) { liveStreamBackgroundTask.stop(); }
     if (this.pulseTimer !== -1) { clearInterval(this.pulseTimer); this.pulseTimer = -1; }
     this.videoSwitchSequence += 1;
+    if (this.offInteractionMessages !== null) {
+      this.offInteractionMessages();
+      this.offInteractionMessages = null;
+    }
+    if (this.offInteractionError !== null) {
+      this.offInteractionError();
+      this.offInteractionError = null;
+    }
+    this.interactionStore?.close();
+    this.interactionStore = null;
+    this.interactionMessages = [];
     if (this.offParticipants !== null) { this.offParticipants(); this.offParticipants = null; }
     if (this.participantStore !== null) { this.participantStore.dispose(); this.participantStore = null; }
     if (this.tgcallsSession !== null) {
@@ -1336,19 +1925,33 @@ struct LiveStreamViewerPage {
 
   @Builder
   header() {
-    Row({ space: 14 }) {
-      SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(26).fontColor([CALL_TEXT])
-        .onClick((): void => this.leave());
-      Column() {
-        Text(this.state.title !== '' ? this.state.title : '直播')
+    Row({ space: 6 }) {
+      Row() {
+        SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(23).fontColor([CALL_TEXT]);
+      }
+      .width(44).height(44).borderRadius(22).justifyContent(FlexAlign.Center)
+      .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
+      .animation({
+        duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 110), curve: Curve.EaseOut
+      })
+      .accessibilityText('退出直播')
+      .onClick((): void => this.leave());
+      Column({ space: 2 }) {
+        Text(this.displayTitle())
           .fontSize(17).fontWeight(FontWeight.Bold).fontColor(CALL_TEXT)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
         Row({ space: 6 }) {
-          Circle({ width: 6, height: 6 }).fill(CALL_GREEN)
-            .opacity(this.pulseExpanded ? 1 : 0.48)
-            .scale({ x: this.pulseExpanded ? 1.16 : 0.86, y: this.pulseExpanded ? 1.16 : 0.86 });
-          Text(`${this.state.participantCount} 位参与者`)
-            .fontSize(12).fontColor(CALL_SUBTEXT);
+          Circle({ width: 7, height: 7 }).fill(this.headerDotColor())
+            .opacity(this.headerPresentation().pulse && this.pulseExpanded ? 1 : 0.62)
+            .scale({
+              x: this.headerPresentation().pulse && this.pulseExpanded ? 1.13 : 0.9,
+              y: this.headerPresentation().pulse && this.pulseExpanded ? 1.13 : 0.9
+            });
+          Text(this.headerPresentation().statusText)
+            .fontSize(12).fontColor(
+              this.headerPresentation().kind === 'error' ? CALL_RED : CALL_SUBTEXT
+            )
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
           if (this.canManageLive) {
             Text('管理员')
               .fontSize(10).fontWeight(FontWeight.Medium).fontColor(CALL_GREEN)
@@ -1356,19 +1959,167 @@ struct LiveStreamViewerPage {
               .backgroundColor('#2639D98A').borderRadius(8);
           }
         }
-        .margin({ top: 2 });
+        .onClick((): void => this.retryLiveConnection());
       }
       .layoutWeight(1).alignItems(HorizontalAlign.Start);
-      Button({ type: ButtonType.Circle }) {
+      Row() {
         SymbolGlyph($r('sys.symbol.plus_square_on_square')).fontSize(19).fontColor([CALL_TEXT]);
       }
-      .width(38).height(38).backgroundColor('#26323C')
-      .enabled(!this.minimizeInProgress)
+      .width(44).height(44).borderRadius(22).justifyContent(FlexAlign.Center)
+      .backgroundColor('#26323C')
+      .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
+      .animation({
+        duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 110), curve: Curve.EaseOut
+      })
+      .enabled(this.headerPresentation().actionsEnabled && !this.minimizeInProgress &&
+        !this.leaveDialogOpen)
+      .accessibilityText(this.minimizeInProgress ? '正在最小化直播' : '最小化到悬浮窗')
       .onClick((): void => this.minimizeToFloating());
-      SymbolGlyph($r('sys.symbol.more')).fontSize(23).fontColor([CALL_TEXT]);
+      Row() {
+        SymbolGlyph($r('sys.symbol.more')).fontSize(22).fontColor([CALL_TEXT]);
+      }
+      .width(44).height(44).borderRadius(22).justifyContent(FlexAlign.Center)
+      .backgroundColor('#26323C')
+      .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
+      .animation({
+        duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 110), curve: Curve.EaseOut
+      })
+      .enabled(this.groupCallId > 0 && !this.minimizeInProgress)
+      .accessibilityText('直播更多操作')
+      .bindMenu(this.headerMoreMenu());
     }
-    .width('100%').height(56).padding({ left: 16, right: 16 })
+    .width('100%').height(64).padding({ left: 8, right: 10 })
     .alignItems(VerticalAlign.Center).backgroundColor(CALL_BACKGROUND);
+  }
+
+  @Builder
+  emptyMediaStage() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%').height('100%')
+        .linearGradient({
+          angle: 145,
+          colors: [['#172832', 0], ['#0B1218', 1]]
+        });
+      if (this.mediaPresentation().kind === 'audio') {
+        Column({ space: 7 }) {
+          Stack({ alignContent: Alignment.Center }) {
+            if (this.mediaPresentation().pulse) {
+              Circle({ width: 82, height: 82 }).fill('#3339D98A')
+                .opacity(this.pulseExpanded ? 0.22 : 0.5)
+                .scale({
+                  x: this.pulseExpanded ? 1.1 : 0.92,
+                  y: this.pulseExpanded ? 1.1 : 0.92
+                });
+            }
+            Circle({ width: 64, height: 64 }).fill(this.audioStageColor());
+            Text(this.audioStageInitials())
+              .fontSize(23).fontWeight(FontWeight.Bold).fontColor(Color.White);
+          }
+          .width(86).height(86);
+          Text(this.audioStageName())
+            .fontSize(16).fontWeight(FontWeight.Bold).fontColor(CALL_TEXT)
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
+          Text(this.activeAudioSpeaker() !== null ? '正在发言' : this.mediaPresentation().detail)
+            .fontSize(12).fontColor(CALL_SUBTEXT);
+        }
+      } else {
+        Column({ space: 9 }) {
+          Stack({ alignContent: Alignment.Center }) {
+            Circle({ width: 52, height: 52 }).fill('#263641');
+            if (this.mediaPresentation().showProgress) {
+              LoadingProgress().width(26).height(26).color('#65A9FF');
+            } else if (this.mediaPresentation().kind === 'error' ||
+              this.mediaPresentation().kind === 'invalid') {
+              SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+                .fontSize(25).fontColor([CALL_RED]);
+            } else {
+              SymbolGlyph($r('sys.symbol.play_fill')).fontSize(20).fontColor([Color.White]);
+            }
+          }
+          .width(56).height(56);
+          Text(this.mediaPresentation().title)
+            .fontSize(16).fontWeight(FontWeight.Bold).fontColor(CALL_TEXT);
+          Text(this.mediaPresentation().detail)
+            .fontSize(12).fontColor(CALL_SUBTEXT).textAlign(TextAlign.Center)
+            .maxLines(2);
+          if (this.mediaPresentation().retryable && this.mediaPresentation().actionText !== '') {
+            Row({ space: 6 }) {
+              SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(13).fontColor([Color.White]);
+              Text(this.mediaPresentation().actionText)
+                .fontSize(12).fontWeight(FontWeight.Medium).fontColor(Color.White);
+            }
+            .height(32).padding({ left: 11, right: 12 })
+            .backgroundColor('#C83390EC').borderRadius(16)
+            .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
+            .accessibilityText(this.mediaPresentation().actionText)
+            .onClick((): void => this.retryLiveConnection());
+          }
+        }
+      }
+      if (this.mediaPresentation().badgeText !== '') {
+        Column() {
+          Row({ space: 6 }) {
+            Circle({ width: 7, height: 7 }).fill(
+              this.mediaPresentation().badgeTone === 'danger' ? CALL_RED :
+                (this.mediaPresentation().badgeTone === 'muted' ? CALL_SUBTEXT : CALL_GREEN)
+            ).opacity(this.mediaPresentation().pulse && this.pulseExpanded ? 1 : 0.65);
+            Text(this.mediaPresentation().badgeText)
+              .fontSize(10).fontWeight(FontWeight.Bold).fontColor(Color.White);
+          }
+          .padding({ left: 9, right: 10, top: 5, bottom: 5 })
+          .backgroundColor('#A617222B').borderRadius(12)
+          .alignSelf(ItemAlign.Start).margin({ left: 12, top: 12 });
+          Blank();
+        }
+        .width('100%').height('100%');
+      }
+    }
+    .width('100%').height(210)
+    .borderRadius(14).clip(true)
+    .transition(TransitionEffect.OPACITY.animation({
+      duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 190), curve: Curve.EaseOut
+    }));
+  }
+
+  @Builder
+  mediaStage() {
+    if (this.videoSources.length === 0 && !this.isLocalCameraActive()) {
+      this.emptyMediaStage();
+    } else {
+      Stack({ alignContent: Alignment.Top }) {
+        this.videoArea();
+        if (this.mediaPresentation().kind === 'recovering' ||
+          this.mediaPresentation().kind === 'ended') {
+          Column({ space: 8 }) {
+            if (this.mediaPresentation().showProgress) {
+              LoadingProgress().width(25).height(25).color(Color.White);
+            }
+            Text(this.mediaPresentation().title)
+              .fontSize(14).fontWeight(FontWeight.Bold).fontColor(Color.White);
+            Text(this.mediaPresentation().detail)
+              .fontSize(11).fontColor('#D7E0E6').textAlign(TextAlign.Center);
+            if (this.mediaPresentation().retryable && this.mediaPresentation().actionText !== '') {
+              Row({ space: 6 }) {
+                SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(13).fontColor([Color.White]);
+                Text(this.mediaPresentation().actionText)
+                  .fontSize(12).fontWeight(FontWeight.Medium).fontColor(Color.White);
+              }
+              .height(32).padding({ left: 11, right: 12 })
+              .backgroundColor('#D93390EC').borderRadius(16)
+              .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
+              .onClick((): void => this.retryLiveConnection());
+            }
+          }
+          .width('100%').height(210).justifyContent(FlexAlign.Center)
+          .backgroundColor(this.mediaPresentation().keepVisual ? '#66101920' : '#B0101920')
+          .transition(TransitionEffect.OPACITY.animation({
+            duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 170), curve: Curve.EaseOut
+          }));
+        }
+      }
+      .width('100%');
+    }
   }
 
   @Builder
@@ -1384,7 +2135,7 @@ struct LiveStreamViewerPage {
       LocalVideoPreviewTile({
         mode: this.localVideoMode,
         tileWidth: '100%',
-        tileHeight: '190vp',
+        tileHeight: '210vp',
         showFullscreenButton: true,
         fullscreen: false,
         onSurfaceReady: (
@@ -1401,7 +2152,7 @@ struct LiveStreamViewerPage {
         Column() {
           LiveVideoTile({
             source: this.videoSources[0],
-            tileHeight: 190,
+            tileHeight: 210,
             showFullscreenButton: true,
             fullscreen: false,
             pulseExpanded: this.pulseExpanded,
@@ -1413,12 +2164,12 @@ struct LiveStreamViewerPage {
             onFullscreenToggle: (): void => this.toggleFullscreen()
           });
         }
-        .layoutWeight(1).height(190);
+        .layoutWeight(1).height(210);
         Column() {
           LocalVideoPreviewTile({
             mode: this.localVideoMode,
             tileWidth: '100%',
-            tileHeight: '190vp',
+            tileHeight: '210vp',
             onSurfaceReady: (
               surfaceId: string, surfaceWidth: number, surfaceHeight: number
             ): void => this.setLocalPreviewSurface(surfaceId, surfaceWidth, surfaceHeight),
@@ -1426,13 +2177,13 @@ struct LiveStreamViewerPage {
               this.clearLocalPreviewSurface(surfaceId)
           });
         }
-        .layoutWeight(1).height(190);
+        .layoutWeight(1).height(210);
       }
-      .width('100%').height(190);
+      .width('100%').height(210);
     } else {
       LiveVideoTile({
         source: this.videoSources[0],
-        tileHeight: 190,
+        tileHeight: 210,
         showFullscreenButton: true,
         fullscreen: false,
         pulseExpanded: this.pulseExpanded,
@@ -1449,19 +2200,24 @@ struct LiveStreamViewerPage {
             this.videoSources.slice(1, this.isLocalCameraActive() ? 6 : 7),
             (source: GroupCallVideoSource) => {
               GridItem() {
-                LiveVideoTile({
-                  source,
-                  tileHeight: 132,
-                  pulseExpanded: this.pulseExpanded,
-                  onSurfaceReady: (
-                    endpointId: string, surfaceId: string,
-                    surfaceWidth: number, surfaceHeight: number
-                  ): void => this.setSurface(
-                    endpointId, surfaceId, surfaceWidth, surfaceHeight
-                  ),
-                  onSurfaceGone: (endpointId: string, surfaceId: string): void =>
-                    this.clearSurface(endpointId, surfaceId)
-                });
+                Stack() {
+                  LiveVideoTile({
+                    source,
+                    tileHeight: 132,
+                    pulseExpanded: this.pulseExpanded,
+                    onSurfaceReady: (
+                      endpointId: string, surfaceId: string,
+                      surfaceWidth: number, surfaceHeight: number
+                    ): void => this.setSurface(
+                      endpointId, surfaceId, surfaceWidth, surfaceHeight
+                    ),
+                    onSurfaceGone: (endpointId: string, surfaceId: string): void =>
+                      this.clearSurface(endpointId, surfaceId)
+                  });
+                }
+                .width('100%').height(132)
+                .accessibilityText(`切换到${source.name !== '' ? source.name : '该直播画面'}`)
+                .onClick((): void => this.selectPrimaryVideo(source.endpointId));
               }
             },
             (source: GroupCallVideoSource): string => source.endpointId
@@ -1482,11 +2238,24 @@ struct LiveStreamViewerPage {
               });
             }
           }
+          if (this.hiddenVideoSourceCount() > 0) {
+            GridItem() {
+              Column({ space: 5 }) {
+                Text(`+${this.hiddenVideoSourceCount()}`)
+                  .fontSize(24).fontWeight(FontWeight.Bold).fontColor(Color.White);
+                Text('更多画面').fontSize(11).fontColor(CALL_SUBTEXT);
+              }
+              .width('100%').height(132).justifyContent(FlexAlign.Center)
+              .backgroundColor('#16232D').borderRadius(8);
+            }
+            .accessibilityText(`还有${this.hiddenVideoSourceCount()}路画面`);
+          }
         }
         .columnsTemplate('1fr 1fr').columnsGap(3).rowsGap(3)
         .height(Math.ceil((
           Math.min(this.videoSources.length, this.isLocalCameraActive() ? 6 : 7) - 1 +
-          (this.isLocalCameraActive() ? 1 : 0)
+          (this.isLocalCameraActive() ? 1 : 0) +
+          (this.hiddenVideoSourceCount() > 0 ? 1 : 0)
         ) / 2) * 135)
         .width('100%').margin({ top: 3 });
       }
@@ -1546,6 +2315,218 @@ struct LiveStreamViewerPage {
     .animation({
       duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 220), curve: Curve.EaseOut
     });
+  }
+
+  private interactionPreviewText(): string {
+    if (this.interactionUnreadCount > 0) { return `${this.interactionUnreadCount} 条新互动`; }
+    if (this.interactionMessages.length === 0) { return this.callInteractionPresentation().subtitle; }
+    const latest = this.interactionMessages[this.interactionMessages.length - 1];
+    return `${latest.senderName}：${latest.text !== '' ? latest.text : '分享了媒体'}`;
+  }
+
+  @Builder
+  interactionDock() {
+    Row({ space: 10 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        Circle({ width: 36, height: 36 }).fill('#263390EC');
+        SymbolGlyph($r('sys.symbol.message')).fontSize(18).fontColor(['#8FC2FF']);
+        if (this.interactionUnreadCount > 0) {
+          Text(this.interactionUnreadCount > 99 ? '99+' : `${this.interactionUnreadCount}`)
+            .fontSize(8).fontWeight(FontWeight.Bold).fontColor(Color.White)
+            .height(16).constraintSize({ minWidth: 16 }).padding({ left: 4, right: 4 })
+            .backgroundColor('#FF405C').borderRadius(8)
+            .position({ x: 25, y: -3 });
+        }
+      }.width(38).height(38);
+      Column({ space: 3 }) {
+        Text('直播互动').fontSize(14).fontWeight(FontWeight.Bold).fontColor(CALL_TEXT);
+        Text(this.interactionPreviewText())
+          .fontSize(10).fontColor(this.interactionUnreadCount > 0 ? '#8FC2FF' : CALL_SUBTEXT)
+          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+      Row({ space: 5 }) {
+        Circle({ width: 6, height: 6 }).fill(this.callInteractionStatusColor());
+        Text(this.callInteractionPresentation().statusText)
+          .fontSize(10).fontColor(this.callInteractionStatusColor());
+      }
+      .height(26).padding({ left: 8, right: 9 })
+      .backgroundColor(this.callInteractionStatusBackground()).borderRadius(13);
+      SymbolGlyph($r('sys.symbol.chevron_up')).fontSize(13).fontColor([CALL_SUBTEXT]);
+    }
+    .width('100%').height(58).padding({ left: 12, right: 12 })
+    .margin({ left: 8, right: 8, top: 6, bottom: 5 })
+    .backgroundColor(CALL_PANEL).borderRadius(16)
+    .border({ width: 1, color: '#182F4350' })
+    .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
+    .animation({
+      duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 140), curve: Curve.EaseOut
+    })
+    .accessibilityText(this.interactionUnreadCount > 0
+      ? `打开直播互动，有 ${this.interactionUnreadCount} 条新消息` : '打开直播互动')
+    .onClick((): void => this.openInteractionDrawer());
+  }
+
+  @Builder
+  interactionMessageList() {
+    Stack({ alignContent: Alignment.Bottom }) {
+      if (this.interactionMessages.length === 0) {
+        Column({ space: 7 }) {
+          if (this.callInteractionPresentation().showProgress) {
+            Progress({ value: 30, total: 100, type: ProgressType.Ring })
+              .width(28).height(28).color('#64A8FF').style({ strokeWidth: 3 });
+          } else {
+            SymbolGlyph($r('sys.symbol.message')).fontSize(30).fontColor([CALL_SUBTEXT]);
+          }
+          Text(this.callInteractionPresentation().emptyTitle)
+            .fontSize(14).fontWeight(FontWeight.Medium).fontColor(CALL_TEXT);
+          Text(this.callInteractionPresentation().emptyDetail)
+            .fontSize(11).fontColor(CALL_SUBTEXT);
+        }
+        .width('100%').height('100%').justifyContent(FlexAlign.Center);
+      } else {
+        List({ scroller: this.interactionScroller, space: 8 }) {
+          ForEach(this.interactionMessages, (message: LiveInteractionEntry) => {
+            ListItem() { LiveInteractionBubble({ message }); }
+          }, (message: LiveInteractionEntry): string => message.key)
+        }
+        .width('100%').height('100%')
+        .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+        .maintainVisibleContentPosition(true)
+        .edgeEffect(EdgeEffect.Spring).scrollBar(BarState.Off)
+        .onTouch((event: TouchEvent): void => {
+          if (event.type === TouchType.Down) {
+            this.interactionTouchActive = true;
+          } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+            this.interactionTouchActive = false;
+            this.refreshInteractionAtBottom();
+          }
+        })
+        .onScrollIndex((): void => this.refreshInteractionAtBottom())
+        .onDidScroll((): void => this.refreshInteractionAtBottom());
+      }
+      if (this.interactionUnreadCount > 0) {
+        Row({ space: 6 }) {
+          SymbolGlyph($r('sys.symbol.arrow_down')).fontSize(13).fontColor([Color.White]);
+          Text(`${this.interactionUnreadCount} 条新互动`)
+            .fontSize(11).fontWeight(FontWeight.Medium).fontColor(Color.White);
+        }
+        .height(32).padding({ left: 11, right: 12 }).margin({ bottom: 10 })
+        .backgroundColor('#E63390EC').borderRadius(16)
+        .shadow({ radius: 10, color: '#52000000', offsetX: 0, offsetY: 3 })
+        .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
+        .onClick((): void => this.scrollToInteractionTail());
+      }
+    }
+    .width('100%').layoutWeight(1).backgroundColor(CALL_PANEL);
+  }
+
+  @Builder
+  interactionComposer() {
+    if (this.callInteractionPresentation().composerEnabled) {
+      Column({ space: 7 }) {
+        Row({ space: 8 }) {
+          ForEach(CALL_QUICK_REACTIONS, (emoji: string) => {
+            Text(emoji).fontSize(20).textAlign(TextAlign.Center)
+              .width(36).height(32).borderRadius(16).backgroundColor('#1B2A35')
+              .enabled(!this.interactionSending)
+              .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
+              .onClick((): void => this.sendInteraction(emoji));
+          }, (emoji: string): string => emoji)
+        }.width('100%');
+        Row({ space: 9 }) {
+          TextInput({ text: this.interactionDraft, placeholder: '说点什么…' })
+            .layoutWeight(1).height(42).fontSize(14).fontColor(CALL_TEXT)
+            .placeholderColor(CALL_SUBTEXT).backgroundColor('#1B2A35').borderRadius(21)
+            .padding({ left: 15, right: 15 }).enterKeyType(EnterKeyType.Send)
+            .onChange((value: string): void => { this.interactionDraft = value; })
+            .onSubmit((): void => this.sendInteraction());
+          Button({ type: ButtonType.Circle }) {
+            if (this.interactionSending) {
+              Progress({ value: 30, total: 100, type: ProgressType.Ring })
+                .width(17).height(17).color(Color.White).style({ strokeWidth: 2 });
+            } else {
+              SymbolGlyph($r('sys.symbol.paperplane')).fontSize(18).fontColor([Color.White]);
+            }
+          }
+          .width(42).height(42).padding(0)
+          .backgroundColor(this.interactionDraft.trim() === '' || this.interactionSending
+            ? '#40505C' : '#3390EC')
+          .enabled(this.interactionDraft.trim() !== '' && !this.interactionSending)
+          .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
+          .onClick((): void => this.sendInteraction());
+        }.width('100%');
+        if (this.interactionSendError !== '') {
+          Row({ space: 6 }) {
+            Text(this.interactionSendError).fontSize(10).fontColor('#FF9AA6')
+              .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1);
+            Text('重试').fontSize(10).fontColor('#64A8FF')
+              .height(26).padding({ left: 6, right: 6 })
+              .onClick((): void => this.retryInteractionSend());
+          }.width('100%');
+        }
+      }
+      .width('100%')
+      .padding({ left: 14, right: 14, top: 9, bottom: Math.max(12, this.bottomSafe + 6) })
+      .backgroundColor(CALL_BACKGROUND);
+    } else {
+      Row({ space: 7 }) {
+        SymbolGlyph($r('sys.symbol.lock_fill')).fontSize(14).fontColor([CALL_SUBTEXT]);
+        Text(this.callInteractionPresentation().composerHint)
+          .fontSize(11).fontColor(CALL_SUBTEXT);
+      }
+      .width('100%').height(48 + Math.max(0, this.bottomSafe))
+      .padding({ bottom: Math.max(0, this.bottomSafe) })
+      .justifyContent(FlexAlign.Center).backgroundColor(CALL_BACKGROUND);
+    }
+  }
+
+  @Builder
+  interactionDrawer() {
+    Stack({ alignContent: Alignment.Bottom }) {
+      Column()
+        .width('100%').height('100%').backgroundColor('#78000000')
+        .onClick((): void => this.closeInteractionDrawer());
+      Column() {
+        Column({ space: 7 }) {
+          Rect({ width: 38, height: 4, radius: 2 }).fill('#53616C');
+          Row({ space: 10 }) {
+            Column({ space: 2 }) {
+              Text('直播互动').fontSize(17).fontWeight(FontWeight.Bold).fontColor(CALL_TEXT);
+              Text(`${this.interactionMessages.length} 条 · ${this.callInteractionPresentation().statusText}`)
+                .fontSize(11).fontColor(CALL_SUBTEXT);
+            }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+            Button({ type: ButtonType.Circle }) {
+              SymbolGlyph($r('sys.symbol.xmark')).fontSize(17).fontColor([CALL_TEXT]);
+            }
+            .width(36).height(36).padding(0).backgroundColor('#263641')
+            .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
+            .onClick((): void => this.closeInteractionDrawer());
+          }.width('100%');
+        }
+        .width('100%').height(68).padding({ left: 14, right: 12, top: 8 })
+        .justifyContent(FlexAlign.Center)
+        .priorityGesture(
+          PanGesture({ fingers: 1, direction: PanDirection.Vertical, distance: 8 })
+            .onActionEnd((event: GestureEvent): void =>
+              this.closeInteractionDrawerOnSwipe(event.offsetY))
+        );
+        this.interactionMessageList();
+        this.interactionComposer();
+      }
+      .width('100%').height('68%').constraintSize({ minHeight: 390, maxHeight: 640 })
+      .backgroundColor(CALL_PANEL)
+      .borderRadius({ topLeft: 24, topRight: 24 })
+      .shadow({ radius: 28, color: '#90000000', offsetX: 0, offsetY: -8 })
+      .transition(
+        TransitionEffect.translate({ y: 80 }).combine(TransitionEffect.OPACITY).animation({
+          duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 220), curve: Curve.EaseOut
+        })
+      );
+    }
+    .width('100%').height('100%')
+    .transition(TransitionEffect.OPACITY.animation({
+      duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 160), curve: Curve.EaseOut
+    }));
   }
 
   @Builder
@@ -1741,21 +2722,39 @@ struct LiveStreamViewerPage {
           .onClick((): void => { this.fullscreenPanelOpen = false; });
         }
         .width('100%').height(58).padding({ left: 14, right: 12 });
-        Scroll() {
-          Column({ space: 1 }) {
-            ForEach(this.participants, (participant: GroupCallParticipantInfo) => {
-              this.participantRow(participant);
-            }, (participant: GroupCallParticipantInfo): string =>
-              `fullscreen:${participant.key}:${participant.revision}`)
-          }.width('100%');
+        if (this.participants.length === 0) {
+          Column({ space: 8 }) {
+            SymbolGlyph($r('sys.symbol.person_2')).fontSize(32).fontColor([CALL_SUBTEXT]);
+            Text('暂无成员信息').fontSize(14).fontWeight(FontWeight.Medium).fontColor(CALL_TEXT);
+            Text(this.headerPresentation().statusText)
+              .fontSize(11).fontColor(CALL_SUBTEXT).textAlign(TextAlign.Center);
+          }
+          .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center);
+        } else {
+          Scroll() {
+            Column({ space: 1 }) {
+              ForEach(this.participants, (participant: GroupCallParticipantInfo) => {
+                this.participantRow(participant);
+              }, (participant: GroupCallParticipantInfo): string =>
+                `fullscreen:${participant.key}:${participant.revision}`)
+            }.width('100%');
+          }
+          .width('100%').layoutWeight(1).scrollBar(BarState.Off);
         }
-        .width('100%').layoutWeight(1).scrollBar(BarState.Off);
       }
       .width('82%').height('100%').constraintSize({ maxWidth: 430 })
       .backgroundColor('#F2131D25')
-      .shadow({ radius: 24, color: '#80000000', offsetX: -8, offsetY: 0 });
+      .shadow({ radius: 24, color: '#80000000', offsetX: -8, offsetY: 0 })
+      .transition(
+        TransitionEffect.translate({ x: 26 }).combine(TransitionEffect.OPACITY).animation({
+          duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 210), curve: Curve.EaseOut
+        })
+      );
     }
-    .width('100%').height('100%');
+    .width('100%').height('100%')
+    .transition(TransitionEffect.OPACITY.animation({
+      duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 150), curve: Curve.EaseOut
+    }));
   }
 
   @Builder
@@ -1845,6 +2844,9 @@ struct LiveStreamViewerPage {
           .width(42).height(42).padding(0)
           .backgroundColor('#A617222B')
           .border({ width: 1, color: '#42FFFFFF' })
+          .enabled(!this.fullscreenTransitioning)
+          .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
+          .accessibilityText('退出全屏')
           .onClick((): void => this.toggleFullscreen());
           Button({ type: ButtonType.Circle }) {
             Stack({ alignContent: Alignment.Center }) {
@@ -1855,6 +2857,8 @@ struct LiveStreamViewerPage {
             }
           }
           .width(42).height(42).backgroundColor(this.isMuted ? '#8A40505A' : '#C539D98A')
+          .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
+          .accessibilityText(this.isMuted ? '打开麦克风' : '关闭麦克风')
           .onClick((): void => { this.toggleMuted(); });
           Button({ type: ButtonType.Circle }) {
             SymbolGlyph($r('sys.symbol.camera')).fontSize(20).fontColor([
@@ -1867,6 +2871,8 @@ struct LiveStreamViewerPage {
               (this.localVideoBusy ? '#A63D6256' : '#A640505A')
           )
           .enabled(!this.localVideoBusy)
+          .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
+          .accessibilityText(this.localVideoActive ? '关闭摄像头' : '打开摄像头')
           .onClick((): void => { this.toggleCamera(); });
           Button({ type: ButtonType.Circle }) {
             SymbolGlyph($r('sys.symbol.computer')).fontSize(20).fontColor([
@@ -1879,11 +2885,15 @@ struct LiveStreamViewerPage {
               (this.screenShareBusy ? '#A63D6256' : '#A640505A')
           )
           .enabled(!this.screenShareBusy)
+          .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
+          .accessibilityText(this.screenShareActive ? '停止屏幕共享' : '开始屏幕共享')
           .onClick((): void => { this.toggleScreenShare(); });
           Button({ type: ButtonType.Circle }) {
             SymbolGlyph($r('sys.symbol.phone_fill')).fontSize(21).fontColor([Color.White]);
           }
           .width(42).height(42).backgroundColor('#D9D94B55')
+          .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
+          .accessibilityText(this.canManageLive ? '管理或退出直播' : '退出直播')
           .onClick((): void => this.leave());
           Blank();
           Button() {
@@ -1894,9 +2904,24 @@ struct LiveStreamViewerPage {
           }
           .height(40).padding({ left: 12, right: 12 })
           .backgroundColor('#A617222B').borderRadius(20)
+          .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
+          .accessibilityText(`查看 ${this.participants.length} 名成员`)
           .onClick((): void => { this.fullscreenPanelOpen = true; });
         }
         .width('100%');
+        Row({ space: 6 }) {
+          Circle({ width: 7, height: 7 }).fill(this.headerDotColor())
+            .opacity(this.headerPresentation().pulse && this.pulseExpanded ? 1 : 0.62);
+          Text(this.headerPresentation().fullscreenText)
+            .fontSize(11).fontWeight(FontWeight.Bold).fontColor(Color.White);
+        }
+        .height(32).padding({ left: 10, right: 11 })
+        .margin({ top: 8 })
+        .backgroundColor('#A617222B').borderRadius(16)
+        .alignSelf(ItemAlign.Start)
+        .transition(TransitionEffect.OPACITY.animation({
+          duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 180), curve: Curve.EaseOut
+        }));
         Blank();
         if (this.participants.some(
           (participant: GroupCallParticipantInfo): boolean => participant.isSpeaking
@@ -1915,10 +2940,28 @@ struct LiveStreamViewerPage {
         }
       }
       .width('100%').height('100%')
-      .padding({ left: 14, right: 14, top: this.topSafe + 10, bottom: this.bottomSafe + 12 });
+      .padding({
+        left: Math.max(14, this.cutoutLeftSafe + 8),
+        right: Math.max(14, this.cutoutRightSafe + 8),
+        top: Math.max(this.topSafe, this.cutoutTopSafe) + 10,
+        bottom: this.bottomSafe + 12
+      });
 
       if (this.fullscreenPanelOpen) {
         this.fullscreenParticipantDrawer();
+      }
+
+      if (this.fullscreenTransitioning) {
+        Column({ space: 10 }) {
+          LoadingProgress().width(30).height(30).color(Color.White);
+          Text(this.fullscreenTransitionLabel)
+            .fontSize(13).fontWeight(FontWeight.Medium).fontColor(Color.White);
+        }
+        .width('100%').height('100%').justifyContent(FlexAlign.Center)
+        .backgroundColor('#A6000000')
+        .transition(TransitionEffect.OPACITY.animation({
+          duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 180), curve: Curve.EaseOut
+        }));
       }
     }
     .width('100%').height('100%').backgroundColor(Color.Black);
@@ -1933,18 +2976,11 @@ struct LiveStreamViewerPage {
           this.header();
           Scroll() {
             Column() {
-              if (this.videoSources.length > 0 || this.isLocalCameraActive()) {
-                Column() {
-                  this.videoArea();
-                }
-                .width('100%')
-                .opacity(this.videoAreaOpacity)
-                .scale({ x: this.videoAreaScale, y: this.videoAreaScale });
+              Column() {
+                this.mediaStage();
               }
-              if (this.state.error !== '') {
-                Text(this.state.error).fontSize(12).fontColor('#FF7B82')
-                  .padding(10).width('100%').backgroundColor('#332027');
-              }
+              .width('100%')
+              .opacity(this.videoAreaOpacity);
               if (this.participants.length > 0) {
                 Column({ space: 1 }) {
                   ForEach(this.participants, (participant: GroupCallParticipantInfo) => {
@@ -1958,9 +2994,27 @@ struct LiveStreamViewerPage {
             .width('100%').padding({ left: 8, right: 8, bottom: 8 });
           }
           .width('100%').layoutWeight(1).scrollBar(BarState.Off);
+          if (this.shouldShowInteractionSection()) {
+            this.interactionDock();
+          }
           this.controls();
         }
         .width('100%').height('100%');
+      }
+      if (this.interactionDrawerOpen && !this.isFullscreen) {
+        this.interactionDrawer();
+      }
+      if (this.fullscreenTransitioning && !this.isFullscreen) {
+        Column({ space: 10 }) {
+          LoadingProgress().width(30).height(30).color(Color.White);
+          Text(this.fullscreenTransitionLabel)
+            .fontSize(13).fontWeight(FontWeight.Medium).fontColor(Color.White);
+        }
+        .width('100%').height('100%').justifyContent(FlexAlign.Center)
+        .backgroundColor('#B8000000')
+        .transition(TransitionEffect.OPACITY.animation({
+          duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 180), curve: Curve.EaseOut
+        }));
       }
     }
     .width('100%').height('100%').backgroundColor(CALL_PANEL_ALT)

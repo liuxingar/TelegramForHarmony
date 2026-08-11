@@ -1,4 +1,9 @@
-import { getTdClient, getUnreadCountStore } from '../../tdkit/Globals';
+import { common } from '@kit.AbilityKit';
+import { router } from '@kit.ArkUI';
+import { getTdClient, getUnreadCountStore, getCallSession } from '../../tdkit/Globals';
+import { CallSnapshot } from '../../services/CallSession';
+import { callKeepAliveTask } from '../../services/CallKeepAliveTask';
+import { bindAccentPrimary } from '../../util/accentTheme';
 import { ProfileStore } from '../../store/ProfileStore';
 import { AvatarView } from '../chatlist/AvatarView';
 import { ChatListPage } from '../chatlist/ChatListPage';
@@ -9,7 +14,8 @@ import { TdObject, TdRequest, TdError } from '../../tdkit/TdTypes';
 import { COLOR_DIVIDER, COLOR_PRIMARY, COLOR_TAB_PILL_BG, COLOR_TAB_UNSELECTED } from '../../util/theme';
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
 
-const DOCK_BG: ResourceColor = $r('app.color.surface');
+// Translucent tint over a backdrop blur — the frosted-glass dock material.
+const DOCK_BG: ResourceColor = $r('app.color.dock_glass');
 const BADGE_BG: string = '#4CD964';
 const DOCK_H: number = 64;      // capsule height
 const DOCK_GAP: number = 12;    // gap below the capsule (above it: content padding)
@@ -24,6 +30,8 @@ const DOCK_SWITCH_DURATION: number = 240;
 @Component
 export struct MainScreen {
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
+  // 回前台补偿：后台期间的来电 push 可能被系统拒绝，前台一刻重查一次。
+  @StorageProp('appIsForeground') @Watch('onAppForegroundChanged') appIsForeground: boolean = true;
   @State tab: number = 0;
   @State unread: number = 0;
   @State myId: number = 0;
@@ -34,8 +42,32 @@ export struct MainScreen {
   private store: ProfileStore | null = null;
   private unsubStore: (() => void) | null = null;
   private unsubUnread: (() => void) | null = null;
+  private unsubAccent: (() => void) | null = null;
+  private unsubCall: (() => void) | null = null;
+  private callPagePushed: boolean = false;
 
   aboutToAppear(): void {
+    // 来电（应用存活时）：常驻订阅通话状态，响铃即弹入通话页。
+    this.unsubCall = getCallSession().subscribe((s: CallSnapshot): void => {
+      // 通话期保活：接通流程开始挂 voip 长时任务，结束即释放。
+      if (s.phase === 'connecting' || s.phase === 'active') {
+        callKeepAliveTask.start(getContext(this) as common.UIAbilityContext);
+      } else if (s.phase === 'ended' || s.phase === 'idle') {
+        callKeepAliveTask.stop();
+      }
+      if (s.phase === 'ringing' && !s.isOutgoing) {
+        if (this.callPagePushed) {
+          return;
+        }
+        this.callPagePushed = true;
+        router.pushUrl({ url: 'pages/call/CallPage' }).catch((error: Error): void => {
+          console.error(`MainScreen incoming call navigation failed: ${error.message}`);
+        });
+      } else if (s.phase === 'idle' || s.phase === 'ended') {
+        this.callPagePushed = false;
+      }
+    });
+    this.unsubAccent = bindAccentPrimary(getContext(this) as common.UIAbilityContext);
     this.unread = getUnreadCountStore().getUnread('main');
     this.unsubUnread = getUnreadCountStore().subscribe(() => {
       this.unread = getUnreadCountStore().getUnread('main');
@@ -59,9 +91,25 @@ export struct MainScreen {
   }
 
   aboutToDisappear(): void {
+    if (this.unsubAccent !== null) { this.unsubAccent(); this.unsubAccent = null; }
     if (this.unsubUnread !== null) { this.unsubUnread(); this.unsubUnread = null; }
     if (this.unsubStore !== null) { this.unsubStore(); this.unsubStore = null; }
+    if (this.unsubCall !== null) { this.unsubCall(); this.unsubCall = null; }
     if (this.store !== null) { this.store.close(); this.store = null; }
+  }
+
+  onAppForegroundChanged(): void {
+    if (!this.appIsForeground) {
+      return;
+    }
+    const s = getCallSession().current();
+    if (s.phase === 'ringing' && !s.isOutgoing && !this.callPagePushed) {
+      this.callPagePushed = true;
+      router.pushUrl({ url: 'pages/call/CallPage' }).catch((error: Error): void => {
+        this.callPagePushed = false;
+        console.error(`MainScreen foreground call check failed: ${error.message}`);
+      });
+    }
   }
 
   private select(index: number): void {
@@ -190,7 +238,12 @@ export struct MainScreen {
       }
       .width('100%').height(DOCK_H)
       .backgroundColor(DOCK_BG)
+      // backdropBlur over a light tint: COMPONENT_* material styles carry an
+      // opaque built-in backboard that reads as solid gray, so blur the
+      // backdrop directly instead.
+      .backdropBlur(22)
       .borderRadius(DOCK_H / 2)
+      .clip(true)
       .border({ width: 0.5, color: COLOR_DIVIDER })
       .shadow({ radius: 14, color: '#24000000', offsetX: 0, offsetY: 4 })
       .onAreaChange((_old: Area, area: Area) => {

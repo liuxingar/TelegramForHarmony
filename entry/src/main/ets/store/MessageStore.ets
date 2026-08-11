@@ -6,7 +6,9 @@ import { ReplyKeyboard, parseReplyKeyboard } from './ReplyKeyboard';
 import { formatUserStatus } from '../util/formatUserStatus';
 import { formatPreview } from '../util/formatPreview';
 import { formatMemberCount } from '../util/formatMemberCount';
-import { KEY_POWER_AUTOPLAY_GIF, powerFeatureEnabled, reduceAnimations } from './AppSettings';
+import {
+  KEY_POWER_AUTOPLAY_GIF, powerFeatureEnabled, reduceAnimations, shouldAutoDownload
+} from './AppSettings';
 import { PollOptionInfo } from '../util/formatMsgContent';
 
 const PAGE: number = 30;
@@ -21,6 +23,28 @@ const REPLY_KB_PROBE_LIMIT: number = 500;
 // Re-request a still-missing thumbnail at most this often (stalled downloads
 // whose bounded retries were exhausted by a transient network failure).
 const THUMB_REKICK_MS: number = 8000;
+
+function pollVoteErrorText(raw: string): string {
+  const normalized = raw.trim().toUpperCase();
+  if (normalized.indexOf('POLL_MEMBER_RESTRICTED') >= 0) {
+    return '该投票仅限符合条件的订阅成员参与（加入需满 24 小时）';
+  }
+  if (normalized.indexOf('POLL_COUNTRY_RESTRICTED') >= 0) {
+    return '该投票仅限指定国家或地区的用户参与';
+  }
+  if (normalized.indexOf('REVOTE_NOT_ALLOWED') >= 0) {
+    return '该投票提交后不能修改选择';
+  }
+  if (normalized.indexOf('MESSAGE_POLL_CLOSED') >= 0 ||
+    normalized.indexOf('POLL_CLOSED') >= 0) {
+    return '投票已经结束';
+  }
+  if (normalized.indexOf('OPTION_INVALID') >= 0 ||
+    normalized.indexOf('POLL_OPTION_INVALID') >= 0) {
+    return '该投票选项已经失效，请刷新后重试';
+  }
+  return raw.trim() !== '' ? `投票失败：${raw.trim()}` : '投票失败，请稍后重试';
+}
 
 type MsgListener = (msgs: MessageEntry[]) => void;
 type SubtitleListener = (s: string) => void;
@@ -54,10 +78,15 @@ export class MessageStore {
   private unsubs: Array<() => void> = [];
   private fileToMsg: Map<number, number> = new Map();
   private linkFileToMsg: Map<number, number> = new Map();
+  private linkThumbAttempts: Map<number, number> = new Map();
+  private linkThumbLastKick: Map<number, number> = new Map();
   private fullPhotoFileToMsg: Map<number, number> = new Map();
   private videoFileToMsg: Map<number, number> = new Map();
   private voiceListenPending: Set<number> = new Set();
   private stickerFileToMsg: Map<number, number> = new Map();
+  // Live incoming media is the only automatic-download/autosave candidate.
+  // Initial history never starts a burst of full-resolution downloads.
+  private liveIncomingMediaIds: number[] = [];
   private inlineCustomEmojiFileToId: Map<number, string> = new Map();
   private inlineCustomEmojiPathById: Map<string, string> = new Map();
   // Telegram reuses the same thumbnail/source file ids whenever the same
@@ -101,6 +130,18 @@ export class MessageStore {
   private initialHistoryError: string = '';
   private olderPending: boolean = false;
   private newerPending: boolean = false;
+  // chat.last_message captured at open. TDLib can hang a LOCAL service message
+  // (e.g. "您已加入此群组") off chat.last_message that getChatHistory never
+  // returns — it is also the chat's one unread message, so a timeline built
+  // purely from history can never view it and the unread badge sticks at 1.
+  // Grafted into the timeline once the loaded window reaches the live tail.
+  private pendingLastMessage: TdObject | null = null;
+  // A newly joined chat can expose its sole unread join notice only through
+  // chat.last_message. Because it is guaranteed to be the initial unread
+  // target, acknowledge it once the first real timeline snapshot is ready.
+  private initialJoinServiceReadId: number = 0;
+  private initialJoinServiceReadPending: boolean = false;
+  private manualUnreadClearSent: boolean = false;
   private latestPending: boolean = false;
   private hasMoreOlder: boolean = true;
   private hasMoreNewer: boolean = false;
@@ -136,17 +177,63 @@ export class MessageStore {
   private historyPageSize: number = PAGE;
 
   constructor(client: TdClient, users: UserStore, chatId: number,
-    threadRootId: number = 0, historyPageSize: number = PAGE) {
+    threadRootId: number = 0, historyPageSize: number = PAGE, forumTopicId: number = 0) {
     this.client = client;
     this.users = users;
     this.chatId = chatId;
     this.threadRootId = threadRootId;
+    this.forumTopicId = forumTopicId;
     this.historyPageSize = Math.max(1, Math.min(100, historyPageSize));
+  }
+
+  // 论坛话题（forum_topic_id，独立于评论线程的 message_thread_id）。
+  // 历史走 getForumTopicHistory，发送带 topic_id: messageTopicForum。
+  private forumTopicId: number = 0;
+
+  private topicIdObject(): TdObject {
+    const topic: TdObject = { '@type': 'messageTopicForum' };
+    topic['forum_topic_id'] = this.forumTopicId;
+    return topic;
+  }
+
+  // 发送/输入指示类请求的作用域。本 td 版本这些请求已无 message_thread_id
+  // 参数，评论线程同样要走 topic_id（messageTopicThread）。
+  private applyTopicScope(req: TdRequest): void {
+    if (this.forumTopicId > 0) {
+      req['topic_id'] = this.topicIdObject();
+    } else if (this.threadRootId > 0) {
+      const topic: TdObject = { '@type': 'messageTopicThread' };
+      topic['message_thread_id'] = this.threadRootId;
+      req['topic_id'] = topic;
+    }
+  }
+
+  // 实时更新过滤：不属于当前话题/线程窗口的消息不进入本窗口。
+  private outsideTopicScope(m: TdObject): boolean {
+    if (this.forumTopicId > 0) {
+      const topic = m['topic_id'] as TdObject | undefined;
+      const topicId: number = topic !== undefined
+        ? ((topic['forum_topic_id'] as number | undefined) ?? 0) : 0;
+      return topicId !== this.forumTopicId;
+    }
+    if (this.threadRootId > 0) {
+      return (m['message_thread_id'] as number | undefined) !== this.threadRootId;
+    }
+    return false;
   }
 
   // getChatHistory, or getMessageThreadHistory when scoped to a comment thread
   // (same paging contract: from_message_id + offset + limit).
   private historyRequest(fromId: number, offset: number): TdRequest {
+    if (this.forumTopicId > 0) {
+      const topicReq: TdRequest = { '@type': 'getForumTopicHistory' };
+      topicReq['chat_id'] = this.chatId;
+      topicReq['forum_topic_id'] = this.forumTopicId;
+      topicReq['from_message_id'] = fromId;
+      topicReq['offset'] = offset;
+      topicReq['limit'] = this.historyPageSize;
+      return topicReq;
+    }
     const req: TdRequest = { '@type': this.threadRootId > 0 ? 'getMessageThreadHistory' : 'getChatHistory' };
     req['chat_id'] = this.chatId;
     req['from_message_id'] = fromId;
@@ -167,6 +254,9 @@ export class MessageStore {
     if (!passive) {
       this.sendSimple('openChat');
       this.chatOpened = true;
+      // Opening the chat clears its @-mention and reaction badges, as in the
+      // official clients.
+      this.readAllBadges();
     }
     this.unsubs.push(this.client.onUpdate('updateNewMessage', (u: TdObject) => this.onNewMessage(u)));
     this.unsubs.push(this.client.onUpdate('updateMessageSendSucceeded', (u: TdObject) => this.onSendSucceeded(u)));
@@ -241,6 +331,12 @@ export class MessageStore {
 
   getMessages(): MessageEntry[] {
     return this.messages;
+  }
+
+  consumeLiveIncomingMediaIds(): number[] {
+    const ids = this.liveIncomingMediaIds.slice();
+    this.liveIncomingMediaIds = [];
+    return ids;
   }
 
   getSubtitle(): string {
@@ -717,9 +813,219 @@ export class MessageStore {
       req['reply_to'] = rt;
     }
     req['input_message_content'] = content;
-    if (this.threadRootId > 0) {
-      req['message_thread_id'] = this.threadRootId;
+    this.applyTopicScope(req);
+    return this.client.send(req).then((m: TdObject): void => {
+      this.upsert(buildMessageEntry(m, this.users));
+      this.resolveReplies();
+      this.notify();
+    });
+  }
+
+  // Replace a text message's content in place. TDLib returns the edited
+  // message; upsert applies it (updateMessageContent also mirrors the change
+  // on other devices).
+  editTextAsync(messageId: number, text: string): Promise<void> {
+    const ft: TdObject = { '@type': 'formattedText' };
+    ft['text'] = text;
+    const content: TdObject = { '@type': 'inputMessageText' };
+    content['text'] = ft;
+    const req: TdRequest = { '@type': 'editMessageText' };
+    req['chat_id'] = this.chatId;
+    req['message_id'] = messageId;
+    req['input_message_content'] = content;
+    return this.client.send(req).then((m: TdObject): void => {
+      this.upsert(buildMessageEntry(m, this.users));
+      this.resolveReplies();
+      this.notify();
+    });
+  }
+
+  private lastTypingAtMs: number = 0;
+
+  // "typing…" indicator for the peer. Throttled: Telegram clients resend the
+  // action at most every few seconds while input continues.
+  notifyTyping(): void {
+    const now = Date.now();
+    if (now - this.lastTypingAtMs < 4000) { return; }
+    this.lastTypingAtMs = now;
+    const req: TdRequest = { '@type': 'sendChatAction' };
+    req['chat_id'] = this.chatId;
+    this.applyTopicScope(req);
+    req['action'] = { '@type': 'chatActionTyping' } as TdObject;
+    this.client.send(req).catch((): void => {});
+  }
+
+  // Persist (or clear, when text is empty) the chat draft so it syncs to the
+  // account's other devices. TDLib clears the draft itself on send.
+  saveDraft(text: string, replyToId: number): void {
+    const req: TdRequest = { '@type': 'setChatDraftMessage' };
+    req['chat_id'] = this.chatId;
+    this.applyTopicScope(req);
+    if (text.trim() !== '') {
+      const ft: TdObject = { '@type': 'formattedText' };
+      ft['text'] = text;
+      const content: TdObject = { '@type': 'inputMessageText' };
+      content['text'] = ft;
+      const draft: TdObject = { '@type': 'draftMessage' };
+      draft['input_message_text'] = content;
+      if (replyToId !== 0) {
+        const rt: TdObject = { '@type': 'inputMessageReplyToMessage' };
+        rt['message_id'] = replyToId;
+        draft['reply_to'] = rt;
+      }
+      req['draft_message'] = draft;
     }
+    this.client.send(req).catch((e: TdError): void => {
+      console.error(`MessageStore.saveDraft failed: ${e.message}`);
+    });
+  }
+
+  // Send a text message at a future time (scheduling_state), or silently.
+  sendScheduledAsync(
+    text: string, replyToId: number, sendDate: number, silent: boolean
+  ): Promise<void> {
+    const ft: TdObject = { '@type': 'formattedText' };
+    ft['text'] = text;
+    const content: TdObject = { '@type': 'inputMessageText' };
+    content['text'] = ft;
+    const options: TdObject = { '@type': 'messageSendOptions' };
+    options['disable_notification'] = silent;
+    if (sendDate > 0) {
+      const schedule: TdObject = { '@type': 'messageSchedulingStateSendAtDate' };
+      schedule['send_date'] = sendDate;
+      options['scheduling_state'] = schedule;
+    }
+    const req: TdRequest = { '@type': 'sendMessage' };
+    req['chat_id'] = this.chatId;
+    if (replyToId !== 0) {
+      const rt: TdObject = { '@type': 'inputMessageReplyToMessage' };
+      rt['message_id'] = replyToId;
+      req['reply_to'] = rt;
+    }
+    req['input_message_content'] = content;
+    req['options'] = options;
+    this.applyTopicScope(req);
+    return this.client.send(req).then((m: TdObject): void => {
+      // Scheduled messages live in a separate list; only immediate silent
+      // sends belong in the visible history.
+      if (sendDate <= 0) {
+        this.upsert(buildMessageEntry(m, this.users));
+        this.notify();
+      }
+    });
+  }
+
+  stopPollAsync(messageId: number): Promise<void> {
+    const req: TdRequest = { '@type': 'stopPoll' };
+    req['chat_id'] = this.chatId;
+    req['message_id'] = messageId;
+    return this.client.send(req).then((): void => {});
+  }
+
+  // Public-poll voters for one option, resolved to display names.
+  pollVotersAsync(messageId: number, optionId: number): Promise<TdObject> {
+    const req: TdRequest = { '@type': 'getPollVoters' };
+    req['chat_id'] = this.chatId;
+    req['message_id'] = messageId;
+    req['option_id'] = optionId;
+    req['offset'] = 0;
+    req['limit'] = 50;
+    return this.client.send(req, 12000);
+  }
+
+  setAutoDeleteAsync(seconds: number): Promise<void> {
+    const req: TdRequest = { '@type': 'setChatMessageAutoDeleteTime' };
+    req['chat_id'] = this.chatId;
+    req['message_auto_delete_time'] = seconds;
+    return this.client.send(req).then((): void => {});
+  }
+
+  // Clear the @-mention and reaction badges for this chat.
+  readAllBadges(): void {
+    const mentions: TdRequest = { '@type': 'readAllChatMentions' };
+    mentions['chat_id'] = this.chatId;
+    this.client.send(mentions).catch((): void => {});
+    const reactions: TdRequest = { '@type': 'readAllChatReactions' };
+    reactions['chat_id'] = this.chatId;
+    this.client.send(reactions).catch((): void => {});
+  }
+
+  // Pin / unpin one message. The pinned banner refreshes through the store's
+  // existing pinned-message tracking (service message + pinned list updates).
+  pinAsync(messageId: number): Promise<void> {
+    const req: TdRequest = { '@type': 'pinChatMessage' };
+    req['chat_id'] = this.chatId;
+    req['message_id'] = messageId;
+    req['disable_notification'] = false;
+    req['only_for_self'] = false;
+    return this.client.send(req).then((): void => { this.refreshPinned(); });
+  }
+
+  unpinAsync(messageId: number): Promise<void> {
+    const req: TdRequest = { '@type': 'unpinChatMessage' };
+    req['chat_id'] = this.chatId;
+    req['message_id'] = messageId;
+    return this.client.send(req).then((): void => { this.refreshPinned(); });
+  }
+
+  // 新版 td_api：inputMessageXxx 的媒体字段是包装对象（inputPhoto/inputVideo/
+  // inputAudio/inputDocument/...），内部才是 InputFile。旧的裸 InputFile 会被
+  // 解析成 null，td 报 "InputFile is not specified"。
+  private static wrapInputFile(wrapperType: string, fileField: string,
+    inputFile: TdObject): TdObject {
+    const wrapper: TdObject = { '@type': wrapperType };
+    wrapper[fileField] = inputFile;
+    return wrapper;
+  }
+
+  private static localFile(path: string): TdObject {
+    const inputFile: TdObject = { '@type': 'inputFileLocal' };
+    inputFile['path'] = path;
+    return inputFile;
+  }
+
+  // Swap the media of an already-sent photo/video message (keeps the caption).
+  editMediaAsync(messageId: number, path: string, isVideo: boolean, caption: string): Promise<void> {
+    const inputFile: TdObject = MessageStore.localFile(path);
+    const content: TdObject = {
+      '@type': isVideo ? 'inputMessageVideo' : 'inputMessagePhoto'
+    };
+    content[isVideo ? 'video' : 'photo'] = MessageStore.wrapInputFile(
+      isVideo ? 'inputVideo' : 'inputPhoto', isVideo ? 'video' : 'photo', inputFile);
+    if (caption !== '') {
+      const ft: TdObject = { '@type': 'formattedText' };
+      ft['text'] = caption;
+      content['caption'] = ft;
+    }
+    const req: TdRequest = { '@type': 'editMessageMedia' };
+    req['chat_id'] = this.chatId;
+    req['message_id'] = messageId;
+    req['input_message_content'] = content;
+    return this.client.send(req, 30000).then((m: TdObject): void => {
+      this.upsert(buildMessageEntry(m, this.users));
+      this.notify();
+    });
+  }
+
+  // Reschedule a pending scheduled message.
+  editScheduleAsync(messageId: number, sendDate: number): Promise<void> {
+    const state: TdObject = { '@type': 'messageSchedulingStateSendAtDate' };
+    state['send_date'] = sendDate;
+    const req: TdRequest = { '@type': 'editMessageSchedulingState' };
+    req['chat_id'] = this.chatId;
+    req['message_id'] = messageId;
+    req['scheduling_state'] = state;
+    return this.client.send(req, 15000).then((): void => {});
+  }
+
+  // Replace a media message's caption (photo/video/file/audio/voice).
+  editCaptionAsync(messageId: number, caption: string): Promise<void> {
+    const ft: TdObject = { '@type': 'formattedText' };
+    ft['text'] = caption;
+    const req: TdRequest = { '@type': 'editMessageCaption' };
+    req['chat_id'] = this.chatId;
+    req['message_id'] = messageId;
+    req['caption'] = ft;
     return this.client.send(req).then((m: TdObject): void => {
       this.upsert(buildMessageEntry(m, this.users));
       this.resolveReplies();
@@ -770,10 +1076,9 @@ export class MessageStore {
   // Send a document from a local (sandbox) path. TDLib uploads it and the
   // pending message arrives via the normal update flow.
   sendDocument(path: string, caption: string): void {
-    const inputFile: TdObject = { '@type': 'inputFileLocal' };
-    inputFile['path'] = path;
     const content: TdObject = { '@type': 'inputMessageDocument' };
-    content['document'] = inputFile;
+    content['document'] = MessageStore.wrapInputFile(
+      'inputDocument', 'document', MessageStore.localFile(path));
     if (caption !== '') {
       const ft: TdObject = { '@type': 'formattedText' };
       ft['text'] = caption;
@@ -782,9 +1087,7 @@ export class MessageStore {
     const req: TdRequest = { '@type': 'sendMessage' };
     req['chat_id'] = this.chatId;
     req['input_message_content'] = content;
-    if (this.threadRootId > 0) {
-      req['message_thread_id'] = this.threadRootId;
-    }
+    this.applyTopicScope(req);
     this.client.send(req).then((m: TdObject) => {
       this.upsert(buildMessageEntry(m, this.users));
       // Media returned by sendMessage still needs the same local-file
@@ -807,9 +1110,7 @@ export class MessageStore {
       replyTo['message_id'] = replyToId;
       req['reply_to'] = replyTo;
     }
-    if (this.threadRootId > 0) {
-      req['message_thread_id'] = this.threadRootId;
-    }
+    this.applyTopicScope(req);
     this.client.send(req).then((m: TdObject) => {
       this.upsert(buildMessageEntry(m, this.users));
       this.requestPhotos();
@@ -819,11 +1120,72 @@ export class MessageStore {
     });
   }
 
+  // 投票：options 为选项文本；isQuiz 时 correctOptionId 指向正确选项下标。
+  // TDLib 1.8.15+ 的 question/options 是 formattedText（纯字符串会被拒）。
+  sendPoll(question: string, options: string[], isAnonymous: boolean,
+    isQuiz: boolean, correctOptionId: number): void {
+    const toFormatted = (text: string): TdObject => {
+      const ft: TdObject = { '@type': 'formattedText' };
+      ft['text'] = text;
+      return ft;
+    };
+    const content: TdObject = { '@type': 'inputMessagePoll' };
+    content['question'] = toFormatted(question);
+    content['options'] = options.map((option: string): TdObject => toFormatted(option));
+    content['is_anonymous'] = isAnonymous;
+    if (isQuiz) {
+      const quizType: TdObject = { '@type': 'pollTypeQuiz' };
+      quizType['correct_option_id'] = correctOptionId;
+      content['type'] = quizType;
+    } else {
+      content['type'] = { '@type': 'pollTypeRegular' } as TdObject;
+    }
+    this.sendContent(content, 'sendPoll');
+  }
+
+  sendLocation(latitude: number, longitude: number): void {
+    const location: TdObject = { '@type': 'location' };
+    location['latitude'] = latitude;
+    location['longitude'] = longitude;
+    const content: TdObject = { '@type': 'inputMessageLocation' };
+    content['location'] = location;
+    this.sendContent(content, 'sendLocation');
+  }
+
+  sendContact(phoneNumber: string, firstName: string, lastName: string, userId: number): void {
+    const contact: TdObject = { '@type': 'contact' };
+    contact['phone_number'] = phoneNumber;
+    contact['first_name'] = firstName;
+    contact['last_name'] = lastName;
+    contact['user_id'] = userId;
+    const content: TdObject = { '@type': 'inputMessageContact' };
+    content['contact'] = contact;
+    this.sendContent(content, 'sendContact');
+  }
+
+  sendAudio(path: string, caption: string): void {
+    const content: TdObject = { '@type': 'inputMessageAudio' };
+    content['audio'] = MessageStore.wrapInputFile(
+      'inputAudio', 'audio', MessageStore.localFile(path));
+    if (caption !== '') {
+      const ft: TdObject = { '@type': 'formattedText' };
+      ft['text'] = caption;
+      content['caption'] = ft;
+    }
+    this.sendContent(content, 'sendAudio');
+  }
+
+  sendDice(emoji: string): void {
+    const content: TdObject = { '@type': 'inputMessageDice' };
+    content['emoji'] = emoji;
+    content['clear_draft'] = false;
+    this.sendContent(content, 'sendDice');
+  }
+
   sendPhoto(path: string, caption: string, replyToId: number = 0): void {
-    const inputFile: TdObject = { '@type': 'inputFileLocal' };
-    inputFile['path'] = path;
     const content: TdObject = { '@type': 'inputMessagePhoto' };
-    content['photo'] = inputFile;
+    content['photo'] = MessageStore.wrapInputFile(
+      'inputPhoto', 'photo', MessageStore.localFile(path));
     if (caption !== '') {
       const ft: TdObject = { '@type': 'formattedText' };
       ft['text'] = caption;
@@ -833,10 +1195,9 @@ export class MessageStore {
   }
 
   sendVideo(path: string, caption: string, replyToId: number = 0): void {
-    const inputFile: TdObject = { '@type': 'inputFileLocal' };
-    inputFile['path'] = path;
     const content: TdObject = { '@type': 'inputMessageVideo' };
-    content['video'] = inputFile;
+    content['video'] = MessageStore.wrapInputFile(
+      'inputVideo', 'video', MessageStore.localFile(path));
     if (caption !== '') {
       const ft: TdObject = { '@type': 'formattedText' };
       ft['text'] = caption;
@@ -846,12 +1207,12 @@ export class MessageStore {
   }
 
   private mediaInputContent(item: MediaSendItem, caption: string): TdObject {
-    const inputFile: TdObject = { '@type': 'inputFileLocal' };
-    inputFile['path'] = item.path;
+    const inputFile: TdObject = MessageStore.localFile(item.path);
     const content: TdObject = {
       '@type': item.isVideo ? 'inputMessageVideo' : 'inputMessagePhoto'
     };
-    content[item.isVideo ? 'video' : 'photo'] = inputFile;
+    content[item.isVideo ? 'video' : 'photo'] = MessageStore.wrapInputFile(
+      item.isVideo ? 'inputVideo' : 'inputPhoto', item.isVideo ? 'video' : 'photo', inputFile);
     if (caption !== '') {
       const ft: TdObject = { '@type': 'formattedText' };
       ft['text'] = caption;
@@ -910,9 +1271,7 @@ export class MessageStore {
       replyTo['message_id'] = replyToId;
       req['reply_to'] = replyTo;
     }
-    if (this.threadRootId > 0) {
-      req['message_thread_id'] = this.threadRootId;
-    }
+    this.applyTopicScope(req);
     return this.client.send(req).then((result: TdObject): void => {
       const sent: TdObject[] = items.length > 1
         ? ((result['messages'] as TdObject[] | undefined) ?? [])
@@ -933,6 +1292,9 @@ export class MessageStore {
 
   // Send a sticker the user picked from an installed set (already on Telegram
   // servers — reference it by TDLib file id).
+  // 注意：捆绑的 td 快照是"半新" schema —— photo/video/audio/document 用
+  // 包装对象，但 sticker/animation/voiceNote 仍是旧的裸 InputFile
+  // （真机验证：inputSticker 包装报 Unknown class）。升级 tdlib 时重查。
   sendSticker(fileId: number, width: number, height: number): void {
     const inputFile: TdObject = { '@type': 'inputFileId' };
     inputFile['id'] = fileId;
@@ -956,10 +1318,8 @@ export class MessageStore {
   }
 
   sendVoiceNote(path: string, durationSec: number): void {
-    const inputFile: TdObject = { '@type': 'inputFileLocal' };
-    inputFile['path'] = path;
     const content: TdObject = { '@type': 'inputMessageVoiceNote' };
-    content['voice_note'] = inputFile;
+    content['voice_note'] = MessageStore.localFile(path);
     content['duration'] = durationSec;
     this.sendContent(content, 'sendVoiceNote');
   }
@@ -998,7 +1358,12 @@ export class MessageStore {
     this.initialHistoryState = 'ready';
     this.initialHistoryError = '';
     if (kind === 'latest') {
-      this.hasMoreOlder = arr.length >= this.historyPageSize;
+      // TDLib may legally return FEWER messages than requested — for a chat
+      // visited the first time, commonly just one (its newest message) — even
+      // though more history exists. Only an empty result proves the chat has
+      // no messages; a short non-empty page keeps older-paging enabled and is
+      // backfilled immediately below.
+      this.hasMoreOlder = arr.length > 0;
       this.olderLoadState = this.hasMoreOlder ? 'idle' : 'end';
       this.hasMoreNewer = false;
       this.newerLoadState = 'end';
@@ -1007,12 +1372,17 @@ export class MessageStore {
     // arbitrary around/older page here can resurrect a stale keyboard that a
     // newer remove marker already superseded.
     this.ensureKeyboardHistoryProbe();
-    for (const m of arr) {
-      this.upsert(buildMessageEntry(m, this.users));
-    }
+    this.upsertBatch(arr.map((m: TdObject): MessageEntry => buildMessageEntry(m, this.users)));
     if (this.messages.length > 0) {
       this.oldestId = this.messages[0].id;
     }
+    // First-visit backfill: chain one older-page request when the initial
+    // response came back short, so the page fills in right after the first
+    // (possibly single-message) snapshot renders.
+    if (kind === 'latest' && arr.length > 0 && arr.length < this.historyPageSize) {
+      this.loadOlder();
+    }
+    this.injectLastMessageAtTail();
     this.resolveReplies();
     this.resolveForwardTitles();
     this.requestPhotos();
@@ -1030,6 +1400,84 @@ export class MessageStore {
       this.historyPending = true;
       this.historyPendingKind = kind;
     }
+    this.acknowledgeInitialJoinService();
+  }
+
+  // Graft chat.last_message into the timeline when history alone didn't reach
+  // it (local service messages never come back from getChatHistory). Gated on
+  // the loaded window being at the live tail so a jump into old history can't
+  // create a gap between the window and an injected far-future tail message.
+  private injectLastMessageAtTail(): void {
+    const m = this.pendingLastMessage;
+    if (m === null || this.hasMoreNewer) {
+      return;
+    }
+    this.pendingLastMessage = null;
+    const id = (m['id'] as number | undefined) ?? 0;
+    const newestId = this.messages.length > 0 ? this.messages[this.messages.length - 1].id : 0;
+    if (id <= 0 || id <= newestId) {
+      return; // already part of the loaded window
+    }
+    this.upsert(buildMessageEntry(m, this.users));
+  }
+
+  // `messageChatJoinByLink` / the equivalent member-add notice can be LOCAL:
+  // getChat exposes it as last_message, while getChatHistory omits it forever.
+  // For the narrowly safe case of exactly one unread service notice at the
+  // live tail, insert it immediately instead of waiting for newer pagination
+  // to prove a tail that history can never contain.
+  private injectSoleUnreadJoinService(lastMessage: TdObject | undefined): void {
+    if (this.threadRootId > 0 || this.requestedAroundMessageId > 0 ||
+      this.unreadCount !== 1 || lastMessage === undefined) {
+      return;
+    }
+    const entry = buildMessageEntry(lastMessage, this.users);
+    if (entry.id <= 0 || entry.contentType !== 'system' ||
+      (entry.systemType !== 'messageChatJoinByLink' &&
+       entry.systemType !== 'messageChatJoinByRequest' &&
+       entry.systemType !== 'messageChatAddMembers')) {
+      return;
+    }
+    this.upsert(entry);
+    this.pendingLastMessage = null;
+    this.initialJoinServiceReadId = entry.id;
+  }
+
+  private acknowledgeInitialJoinService(): void {
+    const messageId = this.initialJoinServiceReadId;
+    if (messageId <= 0 || this.initialHistoryState !== 'ready' ||
+      this.initialJoinServiceReadPending) {
+      return;
+    }
+    this.initialJoinServiceReadPending = true;
+    const req: TdRequest = { '@type': 'viewMessages' };
+    req['chat_id'] = this.chatId;
+    req['message_ids'] = [messageId];
+    req['force_read'] = true;
+    this.client.send(req).then((): void => {
+      this.initialJoinServiceReadPending = false;
+      this.initialJoinServiceReadId = 0;
+      this.viewedUpTo = Math.max(this.viewedUpTo, messageId);
+      this.unreadCount = 0;
+      this.clearManualUnreadFlag();
+    }).catch((error: TdError): void => {
+      this.initialJoinServiceReadPending = false;
+      console.error(`MessageStore.viewInitialJoinService failed: ${error.message}`);
+    });
+  }
+
+  private clearManualUnreadFlag(): void {
+    if (this.manualUnreadClearSent) {
+      return;
+    }
+    this.manualUnreadClearSent = true;
+    const req: TdRequest = { '@type': 'toggleChatIsMarkedAsUnread' };
+    req['chat_id'] = this.chatId;
+    req['is_marked_as_unread'] = false;
+    this.client.send(req).catch((error: TdError): void => {
+      this.manualUnreadClearSent = false;
+      console.error(`MessageStore.clearMarkedUnread failed: ${error.message}`);
+    });
   }
 
   private flushInitial(): void {
@@ -1047,12 +1495,19 @@ export class MessageStore {
       return;
     }
     // Thread mode: only messages of this thread belong in the view.
-    if (this.threadRootId > 0 && (m['message_thread_id'] as number | undefined) !== this.threadRootId) {
+    if (this.outsideTopicScope(m)) {
       return;
     }
     // A bot that shows/removes its keyboard does it via a message's markup.
     this.scanKeyboardMarkup([m]);
-    this.upsert(buildMessageEntry(m, this.users));
+    const entry: MessageEntry = buildMessageEntry(m, this.users);
+    this.upsert(entry);
+    if (!entry.isOutgoing && (entry.contentType === 'photo' || entry.contentType === 'video' ||
+      entry.contentType === 'audio' || entry.contentType === 'file')) {
+      if (this.liveIncomingMediaIds.indexOf(entry.id) < 0) {
+        this.liveIncomingMediaIds.push(entry.id);
+      }
+    }
     this.resolveReplies();
     this.resolveForwardTitles();
     this.requestPhotos();
@@ -1070,8 +1525,7 @@ export class MessageStore {
       (m['chat_id'] as number | undefined) !== this.chatId) {
       return;
     }
-    if (this.threadRootId > 0 &&
-      (m['message_thread_id'] as number | undefined) !== this.threadRootId) {
+    if (this.outsideTopicScope(m)) {
       return;
     }
     this.messages = this.messages.filter((e: MessageEntry) => e.id !== oldId);
@@ -1086,8 +1540,7 @@ export class MessageStore {
     if (m === undefined || (m['chat_id'] as number | undefined) !== this.chatId) {
       return;
     }
-    if (this.threadRootId > 0 &&
-      (m['message_thread_id'] as number | undefined) !== this.threadRootId) {
+    if (this.outsideTopicScope(m)) {
       return;
     }
     const id = m['id'] as number;
@@ -1115,6 +1568,8 @@ export class MessageStore {
       const samePhotoFile: boolean = c.photoFileId !== 0 && c.photoFileId === rebuilt.photoFileId;
       const sameStickerFile: boolean = c.stickerFileId !== 0 &&
         c.stickerFileId === rebuilt.stickerFileId;
+      const sameLinkPhotoFile: boolean = c.linkPhotoFileId !== 0 &&
+        c.linkPhotoFileId === rebuilt.linkPhotoFileId;
       const sameContactUser: boolean = c.contactUserId !== 0 &&
         c.contactUserId === rebuilt.contactUserId;
       const previousContactAvatarPath: string = c.contactAvatarPath;
@@ -1125,6 +1580,10 @@ export class MessageStore {
       const previousVideoProgress: number = c.videoProgress;
       const previousVideoFailed: boolean = c.videoFailed;
       const previousDownloadActive: boolean = c.mediaDownloadActive;
+      const previousLinkPhotoPath: string = c.linkPhotoPath;
+      const previousLinkPhotoProgress: number = c.linkPhotoProgress;
+      const previousLinkPhotoFailed: boolean = c.linkPhotoFailed;
+      const previousLinkPhotoActive: boolean = c.linkPhotoDownloadActive;
       c.contentType = rebuilt.contentType;
       c.text = rebuilt.text;
       c.textEntities = rebuilt.textEntities;
@@ -1142,7 +1601,14 @@ export class MessageStore {
       c.linkDescription = rebuilt.linkDescription;
       c.linkDescriptionEntities = rebuilt.linkDescriptionEntities;
       c.linkPhotoFileId = rebuilt.linkPhotoFileId;
-      c.linkPhotoPath = '';
+      c.linkPhotoPath = sameLinkPhotoFile ? previousLinkPhotoPath : rebuilt.linkPhotoPath;
+      c.linkPhotoWidth = rebuilt.linkPhotoWidth;
+      c.linkPhotoHeight = rebuilt.linkPhotoHeight;
+      c.linkPhotoProgress = sameLinkPhotoFile ? previousLinkPhotoProgress : rebuilt.linkPhotoProgress;
+      c.linkPhotoFailed = sameLinkPhotoFile ? previousLinkPhotoFailed : rebuilt.linkPhotoFailed;
+      c.linkPhotoDownloadActive = sameLinkPhotoFile
+        ? previousLinkPhotoActive : rebuilt.linkPhotoDownloadActive;
+      c.linkPreviewType = rebuilt.linkPreviewType;
       c.linkUrl = rebuilt.linkUrl;
       c.photoFullFileId = rebuilt.photoFullFileId;
       c.photoFullPath = '';
@@ -1206,7 +1672,9 @@ export class MessageStore {
       c.pollOpenPeriod = rebuilt.pollOpenPeriod;
       c.pollCloseDate = rebuilt.pollCloseDate;
       c.pollIsClosed = rebuilt.pollIsClosed;
-      c.pollVotePending = false;
+      c.pollVotePending = rebuilt.pollOptions.some(
+        (option: PollOptionInfo): boolean => option.isBeingChosen
+      );
       c.pollVoteError = '';
       c.diceEmoji = rebuilt.diceEmoji;
       c.diceValue = rebuilt.diceValue;
@@ -1279,7 +1747,9 @@ export class MessageStore {
       next.pollOpenPeriod = rebuilt.pollOpenPeriod;
       next.pollCloseDate = rebuilt.pollCloseDate;
       next.pollIsClosed = rebuilt.pollIsClosed;
-      next.pollVotePending = false;
+      next.pollVotePending = rebuilt.pollOptions.some(
+        (option: PollOptionInfo): boolean => option.isBeingChosen
+      );
       next.pollVoteError = '';
       return next;
     });
@@ -1408,6 +1878,65 @@ export class MessageStore {
         this.setThumbnailFailed(fileId, true);
       }
     });
+  }
+
+  private patchLinkPreviewEntries(fileId: number, fn: (entry: MessageEntry) => void): void {
+    let changed: boolean = false;
+    this.messages = this.messages.map((message: MessageEntry): MessageEntry => {
+      if (message.linkPhotoFileId !== fileId) {
+        return message;
+      }
+      const next: MessageEntry = cloneMessage(message);
+      fn(next);
+      changed = true;
+      return next;
+    });
+    if (changed) {
+      this.notify();
+    }
+  }
+
+  private downloadLinkPreviewPhoto(fileId: number): void {
+    this.patchLinkPreviewEntries(fileId, (entry: MessageEntry): void => {
+      entry.linkPhotoFailed = false;
+      entry.linkPhotoDownloadActive = true;
+    });
+    const attempt: number = (this.linkThumbAttempts.get(fileId) ?? 0) + 1;
+    this.linkThumbAttempts.set(fileId, attempt);
+    const req: TdRequest = { '@type': 'downloadFile' };
+    req['file_id'] = fileId;
+    req['priority'] = THUMBNAIL_PRIORITY;
+    this.client.send(req).then((file: TdObject): void => {
+      this.applyFile(file);
+    }).catch((error: TdError): void => {
+      console.error(`MessageStore link photo ${fileId} (attempt ${attempt}): ${error.message}`);
+      if (attempt <= 2) {
+        setTimeout((): void => { this.downloadLinkPreviewPhoto(fileId); }, 1000 * attempt);
+      } else {
+        this.linkFileToMsg.delete(fileId);
+        this.patchLinkPreviewEntries(fileId, (entry: MessageEntry): void => {
+          entry.linkPhotoProgress = 0;
+          entry.linkPhotoFailed = true;
+          entry.linkPhotoDownloadActive = false;
+        });
+      }
+    });
+  }
+
+  retryLinkPreviewPhoto(messageId: number): void {
+    const index: number = this.indexOf(messageId);
+    if (index < 0) {
+      return;
+    }
+    const entry: MessageEntry = this.messages[index];
+    if (entry.linkPhotoFileId === 0 || entry.linkPhotoPath !== '') {
+      return;
+    }
+    this.linkFileToMsg.delete(entry.linkPhotoFileId);
+    this.linkThumbAttempts.delete(entry.linkPhotoFileId);
+    this.linkThumbLastKick.delete(entry.linkPhotoFileId);
+    this.linkFileToMsg.set(entry.linkPhotoFileId, messageId);
+    this.downloadLinkPreviewPhoto(entry.linkPhotoFileId);
   }
 
   // Resolve every custom-emoji id once. A message made of one custom emoji
@@ -1650,23 +2179,64 @@ export class MessageStore {
       // Telegram GIFs are compact muted MP4 loops. Download them eagerly only
       // while inline autoplay is enabled; normal videos remain tap-to-play.
       if (e.isAnimation && e.videoFileId !== 0 && e.videoPath === '' &&
-        powerFeatureEnabled(KEY_POWER_AUTOPLAY_GIF) && !reduceAnimations()) {
+        powerFeatureEnabled(KEY_POWER_AUTOPLAY_GIF) && !reduceAnimations() &&
+        shouldAutoDownload('animation', e.videoFileSize)) {
         this.requestVideoDownload(e.id);
       }
       // Animated (TGS) sticker source file — small (<64KB), download eagerly so
       // the Lottie animation starts as soon as the message is visible.
-      if (e.contentType === 'sticker' && e.stickerFileId !== 0 && e.stickerPath === '') {
+      // 骰子（messageDice）的结果动画走同一管线。
+      if ((e.contentType === 'sticker' || e.contentType === 'dice') &&
+        e.stickerFileId !== 0 && e.stickerPath === '') {
         this.requestStickerSource(e.id);
+      }
+      // 🎰 老虎机 5 层 TGS：逐层下载，完成经 applyFile 回填 diceLayerPaths。
+      if (e.contentType === 'dice' && e.diceLayerFileIds.length > 0) {
+        for (let layerIndex = 0; layerIndex < e.diceLayerFileIds.length; layerIndex++) {
+          const layerFileId: number = e.diceLayerFileIds[layerIndex];
+          if (layerFileId === 0 || e.diceLayerPaths[layerIndex] !== '' ||
+            this.diceLayerRequested.has(layerFileId)) {
+            continue;
+          }
+          const cachedLayerPath: string = this.completedFilePaths.get(layerFileId) ?? '';
+          if (cachedLayerPath !== '') {
+            this.applyDiceLayerPath(layerFileId, cachedLayerPath);
+            continue;
+          }
+          this.diceLayerRequested.add(layerFileId);
+          const layerReq: TdRequest = { '@type': 'downloadFile' };
+          layerReq['file_id'] = layerFileId;
+          layerReq['priority'] = THUMBNAIL_PRIORITY;
+          this.client.send(layerReq).then((f: TdObject) => this.applyFile(f))
+            .catch((err: TdError): void => {
+              this.diceLayerRequested.delete(layerFileId);
+              console.error(`MessageStore dice layer ${layerFileId}: ${err.message}`);
+            });
+        }
       }
       if (e.linkPhotoFileId !== 0 && e.linkPhotoPath === '') {
         if (!this.linkFileToMsg.has(e.linkPhotoFileId)) {
           this.linkFileToMsg.set(e.linkPhotoFileId, e.id);
-          const req: TdRequest = { '@type': 'downloadFile' };
-          req['file_id'] = e.linkPhotoFileId;
-          req['priority'] = THUMBNAIL_PRIORITY;
-          this.client.send(req).then((f: TdObject) => this.applyFile(f)).catch((err: TdError) => {
-            console.error(`MessageStore link photo ${e.linkPhotoFileId}: ${err.message}`);
-          });
+          this.linkThumbLastKick.set(e.linkPhotoFileId, Date.now());
+          this.downloadLinkPreviewPhoto(e.linkPhotoFileId);
+        } else if (!e.linkPhotoDownloadActive && !e.linkPhotoFailed) {
+          const now: number = Date.now();
+          const lastKick: number = this.linkThumbLastKick.get(e.linkPhotoFileId) ?? 0;
+          if (now - lastKick > THUMB_REKICK_MS) {
+            this.linkThumbLastKick.set(e.linkPhotoFileId, now);
+            this.downloadLinkPreviewPhoto(e.linkPhotoFileId);
+          }
+        }
+      }
+      if (this.liveIncomingMediaIds.indexOf(e.id) >= 0) {
+        if (e.contentType === 'photo' && shouldAutoDownload('photo', 0)) {
+          this.requestFullPhoto(e.id, false, false);
+        } else if (e.contentType === 'video' && !e.isAnimation &&
+          shouldAutoDownload('video', e.videoFileSize)) {
+          this.requestVideoDownload(e.id);
+        } else if ((e.contentType === 'audio' || e.contentType === 'file') &&
+          shouldAutoDownload(e.contentType, e.videoFileSize)) {
+          this.requestVideoDownload(e.id);
         }
       }
     }
@@ -1674,7 +2244,8 @@ export class MessageStore {
 
   // On-demand full-resolution photo download (triggered by opening the fullscreen
   // viewer). The inline bubble only ever downloads photoFileId (a small size).
-  requestFullPhoto(messageId: number, forceRetry: boolean = false): void {
+  requestFullPhoto(messageId: number, forceRetry: boolean = false,
+    userInitiated: boolean = true): void {
     const idx = this.indexOf(messageId);
     if (idx < 0) {
       return;
@@ -1695,7 +2266,7 @@ export class MessageStore {
     this.fullPhotoFileToMsg.set(e.photoFullFileId, messageId);
     const req: TdRequest = { '@type': 'downloadFile' };
     req['file_id'] = e.photoFullFileId;
-    req['priority'] = MEDIA_USER_PRIORITY;
+    req['priority'] = userInitiated ? MEDIA_USER_PRIORITY : MEDIA_PREFETCH_PRIORITY;
     this.client.send(req).then((f: TdObject) => this.applyFile(f)).catch((err: TdError) => {
       this.fullPhotoFileToMsg.delete(e.photoFullFileId);
       this.patch(messageId, (c: MessageEntry): void => {
@@ -1870,6 +2441,28 @@ export class MessageStore {
     });
   }
 
+  private diceLayerRequested: Set<number> = new Set();
+
+  // 🎰 某一层动画文件就绪：回填所有引用它的骰子消息的对应层路径。
+  private applyDiceLayerPath(fileId: number, path: string): void {
+    let changed = false;
+    const next = this.messages.map((e: MessageEntry): MessageEntry => {
+      const layerIndex: number = e.diceLayerFileIds.indexOf(fileId);
+      if (e.contentType !== 'dice' || layerIndex < 0 ||
+        e.diceLayerPaths[layerIndex] === path) {
+        return e;
+      }
+      const c = cloneMessage(e);
+      c.diceLayerPaths[layerIndex] = path;
+      changed = true;
+      return c;
+    });
+    if (changed) {
+      this.messages = next;
+      this.notify();
+    }
+  }
+
   private onFile(u: TdObject): void {
     const f = u['file'] as TdObject | undefined;
     if (f !== undefined) {
@@ -1896,6 +2489,7 @@ export class MessageStore {
     const path = (local['path'] as string | undefined) ?? '';
     if (done && path !== '') {
       this.completedFilePaths.set(id, path);
+      this.applyDiceLayerPath(id, path);
       const customEmojiId = this.inlineCustomEmojiFileToId.get(id);
       if (customEmojiId !== undefined) {
         this.applyInlineCustomEmojiPath(customEmojiId, path);
@@ -1925,6 +2519,27 @@ export class MessageStore {
         this.stickerFileToMsg.delete(id);
       }
       return;
+    }
+
+    // A Telegram preview thumbnail can be reused by several messages. Patch
+    // every matching card rather than the first message that requested it.
+    if (this.messages.some((m: MessageEntry): boolean => m.linkPhotoFileId === id)) {
+      const percent: number = done && path !== '' ? 100 : this.downloadPercent(file, local);
+      const active: boolean = !done &&
+        ((local['is_downloading_active'] as boolean | undefined) ?? false);
+      this.patchLinkPreviewEntries(id, (entry: MessageEntry): void => {
+        if (done && path !== '') {
+          entry.linkPhotoPath = path;
+          entry.linkPhotoFailed = false;
+        }
+        entry.linkPhotoProgress = percent;
+        entry.linkPhotoDownloadActive = active;
+      });
+      if (done && path !== '') {
+        this.linkFileToMsg.delete(id);
+        this.linkThumbAttempts.delete(id);
+        this.linkThumbLastKick.delete(id);
+      }
     }
 
     // Full-resolution photo / full video: progress while downloading, path on completion.
@@ -2008,10 +2623,6 @@ export class MessageStore {
       this.replierAvatarPaths.set(replierUid, path);
       this.applyReplierAvatar(replierUid, path);
       return;
-    }
-    const linkMsgId = this.linkFileToMsg.get(id);
-    if (linkMsgId !== undefined) {
-      this.patch(linkMsgId, (c: MessageEntry) => { c.linkPhotoPath = path; });
     }
   }
 
@@ -2155,13 +2766,23 @@ export class MessageStore {
       return;
     }
     const initials = name.substring(0, 1).toUpperCase();
-    for (const e of this.messages) {
-      if (e.senderIsUser && e.senderId === userId && e.senderName !== name) {
-        this.patch(e.id, (c: MessageEntry) => {
-          c.senderName = name;
-          c.senderInitials = initials;
-        });
+    // Single-pass bulk update with ONE notify. A per-message patch()+notify()
+    // loop here made every subscriber rebuild the whole timeline once per
+    // message right after an older page landed — the load-more jank.
+    let changed = false;
+    const next = this.messages.map((e: MessageEntry): MessageEntry => {
+      if (!e.senderIsUser || e.senderId !== userId || e.senderName === name) {
+        return e;
       }
+      const c = cloneMessage(e);
+      c.senderName = name;
+      c.senderInitials = initials;
+      changed = true;
+      return c;
+    });
+    if (changed) {
+      this.messages = next;
+      this.notify();
     }
   }
 
@@ -2316,6 +2937,11 @@ export class MessageStore {
     this.notifyPinned();
     const filter: TdObject = { '@type': 'searchMessagesFilterPinned' };
     const req: TdRequest = { '@type': 'searchChatMessages' };
+    // 话题模式：只取本话题内的置顶（全群作用域会把其它话题的置顶带进来，
+    // 点击后在本话题历史中找不到目标）。
+    if (this.forumTopicId > 0) {
+      req['topic_id'] = this.topicIdObject();
+    }
     req['chat_id'] = this.chatId;
     req['query'] = '';
     req['from_message_id'] = 0;
@@ -2463,11 +3089,24 @@ export class MessageStore {
   }
 
   private onChat(chat: TdObject): void {
+    // Thread views exclude it: chat.last_message need not belong to the thread.
+    if (this.threadRootId === 0) {
+      this.pendingLastMessage = (chat['last_message'] as TdObject | undefined) ?? null;
+    }
     // Capture the unread boundary BEFORE loading history / marking read, so the
     // page can position at the first unread message even after we mark it read.
     this.lastReadInboxId = (chat['last_read_inbox_message_id'] as number | undefined) ?? 0;
     this.lastReadOutboxId = (chat['last_read_outbox_message_id'] as number | undefined) ?? 0;
     this.unreadCount = (chat['unread_count'] as number | undefined) ?? 0;
+    // Phantom-unread recovery (see ChatStore.effectiveUnread): a stuck counter
+    // whose watermark already covers the newest message must not anchor the
+    // page at a "first unread" that does not exist.
+    const lastMsg = chat['last_message'] as TdObject | undefined;
+    const lastMsgId = lastMsg !== undefined ? ((lastMsg['id'] as number | undefined) ?? 0) : 0;
+    if (this.unreadCount > 0 && lastMsgId > 0 && this.lastReadInboxId >= lastMsgId) {
+      this.unreadCount = 0;
+    }
+    this.injectSoleUnreadJoinService(lastMsg);
     const photo = chat['photo'] as TdObject | undefined;
     const small = photo !== undefined ? (photo['small'] as TdObject | undefined) : undefined;
     this.chatPhotoFileId = small !== undefined ? ((small['id'] as number | undefined) ?? 0) : 0;
@@ -2679,6 +3318,7 @@ export class MessageStore {
       return;
     }
     this.viewedUpTo = maxVisibleId;
+    this.clearManualUnreadFlag();
     const req: TdRequest = { '@type': 'viewMessages' };
     req['chat_id'] = this.chatId;
     req['message_ids'] = [maxVisibleId];
@@ -2773,11 +3413,12 @@ export class MessageStore {
       });
       onFinished(true, '');
     }).catch((error: TdError): void => {
-      const message = error.message.trim() !== '' ? error.message : '网络异常';
+      const message = pollVoteErrorText(error.message);
       this.patch(messageId, (current: MessageEntry): void => {
         current.pollVotePending = false;
         current.pollVoteError = message;
         current.pollOptions = previousOptions;
+        if (message === '投票已经结束') { current.pollIsClosed = true; }
       });
       onFinished(false, message);
       console.error(`MessageStore.setPollAnswer failed: ${error.message}`);
@@ -2872,7 +3513,52 @@ export class MessageStore {
     return -1;
   }
 
+  // History pages arrive ~30 messages at a time; merging them one upsert()
+  // each costs a full array copy + sort per message. One copy and one sort
+  // for the whole page keeps the prepend cheap however long the window grows.
+  private upsertBatch(entries: MessageEntry[]): void {
+    if (entries.length === 0) {
+      return;
+    }
+    const next = this.messages.slice();
+    const indexById = new Map<number, number>();
+    for (let i = 0; i < next.length; i++) {
+      indexById.set(next[i].id, i);
+    }
+    let appended = false;
+    for (const entry of entries) {
+      const hydrated = this.hydrateFromFileCache(entry);
+      const idx = indexById.get(hydrated.id);
+      if (idx !== undefined) {
+        next[idx] = hydrated;
+      } else {
+        indexById.set(hydrated.id, next.length);
+        next.push(hydrated);
+        appended = true;
+      }
+    }
+    if (appended) {
+      next.sort((a: MessageEntry, b: MessageEntry) => a.id - b.id);
+    }
+    this.messages = next;
+  }
+
   private upsert(entry: MessageEntry): void {
+    const hydrated = this.hydrateFromFileCache(entry);
+    const idx = this.indexOf(hydrated.id);
+    if (idx >= 0) {
+      const next = this.messages.slice();
+      next[idx] = hydrated;
+      this.messages = next;
+      return;
+    }
+    const next = this.messages.slice();
+    next.push(hydrated);
+    next.sort((a: MessageEntry, b: MessageEntry) => a.id - b.id);
+    this.messages = next;
+  }
+
+  private hydrateFromFileCache(entry: MessageEntry): MessageEntry {
     // The picker commonly downloads the selected sticker before sendMessage
     // returns. Hydrate a new entry from that completed-file cache instead of
     // flashing an indefinite loading ring or downloading the same file again.
@@ -2925,17 +3611,7 @@ export class MessageStore {
         hydrated.stickerDownloadActive = false;
       }
     }
-    const idx = this.indexOf(hydrated.id);
-    if (idx >= 0) {
-      const next = this.messages.slice();
-      next[idx] = hydrated;
-      this.messages = next;
-      return;
-    }
-    const next = this.messages.slice();
-    next.push(hydrated);
-    next.sort((a: MessageEntry, b: MessageEntry) => a.id - b.id);
-    this.messages = next;
+    return hydrated;
   }
 
   private patch(id: number, fn: (c: MessageEntry) => void): void {
@@ -2974,6 +3650,14 @@ export class MessageStore {
   }
 
   private notify(kind: string = 'update'): void {
+    // openChat may emit updateNewMessage before the first getChatHistory page
+    // returns (commonly just the newest message of a newly visited channel).
+    // Keep those updates in `messages`, but publish the initial timeline only
+    // when history is ready; otherwise ChatPage treats that one-message
+    // snapshot as its completed first page and anchors the viewport to it.
+    if (kind === 'update' && this.initialHistoryState === 'loading') {
+      return;
+    }
     this.applyReadOutbox();
     this.currentNotifyKind = kind;
     try {

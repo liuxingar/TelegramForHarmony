@@ -64,6 +64,12 @@ export interface MessageEntry {
   linkDescriptionEntities: TdObject[];
   linkPhotoFileId: number;
   linkPhotoPath: string;
+  linkPhotoWidth: number;
+  linkPhotoHeight: number;
+  linkPhotoProgress: number;
+  linkPhotoFailed: boolean;
+  linkPhotoDownloadActive: boolean;
+  linkPreviewType: string;
   linkUrl: string;              // tap target to open the preview's link/message
   reactions: ReactionInfo[];    // emoji reaction pills (empty = none)
   inlineButtons: InlineBtn[][]; // bot inline keyboard rows (empty = none)
@@ -130,6 +136,9 @@ export interface MessageEntry {
   diceValue: number;
   diceSuccessFrame: number;
   diceHasFinalState: boolean;
+  // 🎰 老虎机：5 层 TGS（背景/拉杆/左中右转轮）文件 id 与本地路径（平行数组）。
+  diceLayerFileIds: number[];
+  diceLayerPaths: string[];
   gameId: string;
   gameShortName: string;
   gameTitle: string;
@@ -225,7 +234,10 @@ export function cloneMessage(m: MessageEntry): MessageEntry {
     commentReplierAvatarPaths: m.commentReplierAvatarPaths,
     linkSiteName: m.linkSiteName, linkTitle: m.linkTitle, linkDescription: m.linkDescription,
     linkDescriptionEntities: m.linkDescriptionEntities, linkPhotoFileId: m.linkPhotoFileId,
-    linkPhotoPath: m.linkPhotoPath, linkUrl: m.linkUrl,
+    linkPhotoPath: m.linkPhotoPath, linkPhotoWidth: m.linkPhotoWidth,
+    linkPhotoHeight: m.linkPhotoHeight, linkPhotoProgress: m.linkPhotoProgress,
+    linkPhotoFailed: m.linkPhotoFailed, linkPhotoDownloadActive: m.linkPhotoDownloadActive,
+    linkPreviewType: m.linkPreviewType, linkUrl: m.linkUrl,
     reactions: m.reactions,
     inlineButtons: m.inlineButtons,
     photoFullFileId: m.photoFullFileId, photoFullPath: m.photoFullPath,
@@ -265,6 +277,7 @@ export function cloneMessage(m: MessageEntry): MessageEntry {
     pollVotePending: m.pollVotePending, pollVoteError: m.pollVoteError,
     diceEmoji: m.diceEmoji, diceValue: m.diceValue,
     diceSuccessFrame: m.diceSuccessFrame, diceHasFinalState: m.diceHasFinalState,
+    diceLayerFileIds: [...m.diceLayerFileIds], diceLayerPaths: [...m.diceLayerPaths],
     gameId: m.gameId, gameShortName: m.gameShortName, gameTitle: m.gameTitle,
     gameDescription: m.gameDescription, gameText: m.gameText,
     paidMediaLocked: m.paidMediaLocked, paidMediaStarCount: m.paidMediaStarCount,
@@ -562,7 +575,11 @@ function systemMessageInfo(message: TdObject, users: UserStore): SystemMessageIn
     const ids = (content['member_user_ids'] as number[] | undefined) ?? [];
     const actorId = senderIdOf(message);
     if (ids.length === 1 && actorId > 0 && ids[0] === actorId) {
-      return { label: `${who} 加入了群组`, kind };
+      return {
+        label: ((message['is_outgoing'] as boolean | undefined) ?? false)
+          ? '您已加入此群组' : `${who} 加入了群组`,
+        kind
+      };
     }
     const names = userNames(ids, users);
     return { label: names !== '' ? `${who} 邀请了 ${names}` : `${who} 邀请了新成员`, kind };
@@ -576,7 +593,11 @@ function systemMessageInfo(message: TdObject, users: UserStore): SystemMessageIn
     return { label: name !== '' ? `${who} 移除了 ${name}` : `${who} 移除了一名成员`, kind };
   }
   if (type === 'messageChatJoinByLink') {
-    return { label: `${who} 通过邀请链接加入群组`, kind };
+    return {
+      label: ((message['is_outgoing'] as boolean | undefined) ?? false)
+        ? '您已加入此群组' : `${who} 通过邀请链接加入群组`,
+      kind
+    };
   }
   if (type === 'messageChatSetMessageAutoDeleteTime') {
     const secs = (content['message_auto_delete_time'] as number | undefined) ?? 0;
@@ -592,7 +613,11 @@ function systemMessageInfo(message: TdObject, users: UserStore): SystemMessageIn
     return { label: `${who} 将消息自动删除时间设为 ${duration}`, kind };
   }
   if (type === 'messageChatJoinByRequest') {
-    return { label: `${who} 的入群请求已通过`, kind };
+    return {
+      label: ((message['is_outgoing'] as boolean | undefined) ?? false)
+        ? '您已加入此群组' : `${who} 的入群请求已通过`,
+      kind
+    };
   }
   if (type === 'messageChatUpgradeTo' || type === 'messageChatUpgradeFrom') {
     return { label: '群组已升级为超级群组', kind };
@@ -938,7 +963,14 @@ export function buildMessageEntry(message: TdObject, users: UserStore): MessageE
     linkDescription: c.linkDescription,
     linkDescriptionEntities: c.linkDescriptionEntities,
     linkPhotoFileId: c.linkPhotoFileId,
-    linkPhotoPath: '',
+    linkPhotoPath: c.linkPhotoLocalPath ?? '',
+    linkPhotoWidth: c.linkPhotoWidth ?? 0,
+    linkPhotoHeight: c.linkPhotoHeight ?? 0,
+    linkPhotoProgress: c.linkPhotoLocalPath !== undefined && c.linkPhotoLocalPath !== ''
+      ? 100 : (c.linkPhotoInitialProgress ?? 0),
+    linkPhotoFailed: false,
+    linkPhotoDownloadActive: c.linkPhotoInitialActive ?? false,
+    linkPreviewType: c.linkPreviewType ?? '',
     linkUrl: c.linkUrl,
     reactions: reactions(message),
     inlineButtons: parseInlineKeyboard(message['reply_markup'] as TdObject | undefined),
@@ -1006,6 +1038,8 @@ export function buildMessageEntry(message: TdObject, users: UserStore): MessageE
     diceValue: c.diceValue ?? 0,
     diceSuccessFrame: c.diceSuccessFrame ?? 0,
     diceHasFinalState: c.diceHasFinalState ?? false,
+    diceLayerFileIds: c.diceLayerFileIds ?? [],
+    diceLayerPaths: c.diceLayerPaths ?? [],
     gameId: c.gameId ?? '',
     gameShortName: c.gameShortName ?? '',
     gameTitle: c.gameTitle ?? '',

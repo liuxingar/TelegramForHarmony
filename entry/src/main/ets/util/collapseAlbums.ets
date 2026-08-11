@@ -72,6 +72,9 @@ function mutableSig(m: MessageEntry): string {
   // senderName: chat-sender (posting-as-channel) names resolve async.
   let s = `${m.commentCount}_${m.forwardFrom}_${m.senderName}_${m.contentType}_${m.stickerFormat}` +
     `_${m.placeholderLabel}_${m.systemKind}_${m.isUnsupportedMessage}` +
+    `_${m.linkPreviewType}_${m.linkUrl}_${m.linkSiteName}_${m.linkTitle}_${m.linkDescription}` +
+    `_${m.linkPhotoFileId}_${m.linkPhotoPath !== '' ? 'lp' : ''}_${m.linkPhotoWidth}_${m.linkPhotoHeight}` +
+    `_${m.linkPhotoProgress}_${m.linkPhotoFailed}_${m.linkPhotoDownloadActive}` +
     `_${m.photoFileId}_${m.videoFileId}_${m.videoDuration}_${m.videoProgress}_${m.videoFailed}` +
     `_${m.videoPath !== '' ? 'v' : ''}_${m.stickerPath !== '' ? 's' : ''}` +
     `_${m.stickerProgress}_${m.stickerFailed}_${m.stickerDownloadActive}_${m.isEmojiSticker}` +
@@ -85,6 +88,7 @@ function mutableSig(m: MessageEntry): string {
     `_${m.pollTotalVoterCount}_${m.pollIsClosed}_${m.pollVotePending}_${m.pollVoteError}` +
     `_${m.pollCorrectOptionId}_${m.pollExplanation}_${m.pollCloseDate}` +
     `_${m.diceEmoji}_${m.diceValue}_${m.diceHasFinalState}` +
+    `_${m.diceLayerPaths.filter((p: string): boolean => p !== '').length}` +
     `_${m.gameId}_${m.gameTitle}_${m.gameDescription}_${m.gameText}` +
     `_${m.paidMediaLocked}_${m.paidMediaStarCount}_${m.paidMediaCount}_${m.paidMediaKind}` +
     `_${m.giftKind}_${m.giftTitle}_${m.giftValue}_${m.giftStatus}_${m.giftRefunded}` +

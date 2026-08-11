@@ -4,12 +4,19 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { getTdClient } from '../../tdkit/Globals';
 import { TdObject, TdRequest, TdError } from '../../tdkit/TdTypes';
+import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
+import {
+  activeSessionError, freshSessionSeconds, inactiveSessionTtlLabel,
+  sessionDeviceType, sessionWaitText
+} from '../../util/ActiveSessionPresentation';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
 
 const CARD_RADIUS: number = 16;
 const DANGER: string = '#EF5B5B';
 const ONLINE: string = '#34C759';
+const WARNING: string = '#F29A2E';
 const TTL_DAYS: number[] = [7, 30, 90, 180, 365];
+type SessionsLoadState = 'loading' | 'ready' | 'error';
 
 interface SessionRow {
   id: string;
@@ -19,6 +26,8 @@ interface SessionRow {
   canAcceptSecretChats: boolean;
   canAcceptCalls: boolean;
   type: string;
+  apiId: number;
+  isOfficialApplication: boolean;
   applicationName: string;
   applicationVersion: string;
   deviceModel: string;
@@ -39,6 +48,8 @@ function emptySession(): SessionRow {
     canAcceptSecretChats: false,
     canAcceptCalls: false,
     type: '',
+    apiId: 0,
+    isOfficialApplication: false,
     applicationName: '',
     applicationVersion: '',
     deviceModel: '',
@@ -60,6 +71,8 @@ function copySession(row: SessionRow): SessionRow {
     canAcceptSecretChats: row.canAcceptSecretChats,
     canAcceptCalls: row.canAcceptCalls,
     type: row.type,
+    apiId: row.apiId,
+    isOfficialApplication: row.isOfficialApplication,
     applicationName: row.applicationName,
     applicationVersion: row.applicationVersion,
     deviceModel: row.deviceModel,
@@ -104,14 +117,6 @@ function formatLastActive(seconds: number, isCurrent: boolean): string {
   return formatClock(seconds);
 }
 
-function ttlLabel(days: number): string {
-  if (days <= 7) { return '1 周'; }
-  if (days <= 30) { return '1 个月'; }
-  if (days <= 90) { return '3 个月'; }
-  if (days <= 180) { return '6 个月'; }
-  return '1 年';
-}
-
 @Entry
 @Component
 struct ActiveSessionsPage {
@@ -119,20 +124,51 @@ struct ActiveSessionsPage {
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @State current: SessionRow | null = null;
   @State others: SessionRow[] = [];
-  @State loading: boolean = true;
+  @State loadState: SessionsLoadState = 'loading';
+  @State loadError: string = '';
+  @State syncError: string = '';
   @State refreshing: boolean = false;
   @State linking: boolean = false;
   @State actionKey: string = '';
   @State detailOpen: boolean = false;
   @State selected: SessionRow = emptySession();
   @State inactiveTtlDays: number = 180;
+  @State nowSeconds: number = Math.floor(Date.now() / 1000);
+  @State serverFreshRestricted: boolean = false;
+  private active: boolean = false;
+  private loadSequence: number = 0;
+  private clockTimer: number = -1;
+
+  @Styles
+  pressNormal() {
+    .opacity(1).scale({ x: 1, y: 1 })
+  }
+
+  @Styles
+  pressDown() {
+    .opacity(0.7).scale({ x: 0.985, y: 0.985 })
+  }
 
   aboutToAppear(): void {
+    this.active = true;
+    this.nowSeconds = Math.floor(Date.now() / 1000);
     this.load(true);
+    this.clockTimer = setInterval((): void => {
+      this.nowSeconds = Math.floor(Date.now() / 1000);
+    }, 60000);
+  }
+
+  aboutToDisappear(): void {
+    this.active = false;
+    this.loadSequence += 1;
+    if (this.clockTimer !== -1) {
+      clearInterval(this.clockTimer);
+      this.clockTimer = -1;
+    }
+    this.detailOpen = false;
   }
 
   private parse(session: TdObject): SessionRow {
-    const typeObject = session['type'] as TdObject | undefined;
     return {
       id: `${session['id']}`,
       isCurrent: (session['is_current'] as boolean | undefined) ?? false,
@@ -141,7 +177,10 @@ struct ActiveSessionsPage {
       canAcceptSecretChats:
         (session['can_accept_secret_chats'] as boolean | undefined) ?? false,
       canAcceptCalls: (session['can_accept_calls'] as boolean | undefined) ?? false,
-      type: (typeObject?.['@type'] as string | undefined) ?? '',
+      type: sessionDeviceType(session),
+      apiId: (session['api_id'] as number | undefined) ?? 0,
+      isOfficialApplication:
+        (session['is_official_application'] as boolean | undefined) ?? false,
       applicationName: (session['application_name'] as string | undefined) ?? '',
       applicationVersion: (session['application_version'] as string | undefined) ?? '',
       deviceModel: (session['device_model'] as string | undefined) ?? '',
@@ -155,21 +194,35 @@ struct ActiveSessionsPage {
   }
 
   private async load(showLoading: boolean): Promise<void> {
-    if (showLoading) {
-      this.loading = true;
-    } else {
-      this.refreshing = true;
-    }
+    const sequence = ++this.loadSequence;
+    const hasVisibleData = this.current !== null || this.others.length > 0;
+    if (showLoading && !hasVisibleData) { this.loadState = 'loading'; }
+    else { this.refreshing = true; }
+    this.loadError = '';
     try {
       const response = await getTdClient().send(
         { '@type': 'getActiveSessions' } as TdRequest
       );
       const sessions = (response['sessions'] as TdObject[] | undefined) ?? [];
       const rows = sessions.map((session: TdObject): SessionRow => this.parse(session));
-      this.current = rows.find((row: SessionRow): boolean => row.isCurrent) ?? null;
-      this.others = rows.filter((row: SessionRow): boolean => !row.isCurrent);
+      if (!this.active || sequence !== this.loadSequence) { return; }
+      const nextCurrent = rows.find((row: SessionRow): boolean => row.isCurrent) ?? null;
+      if (nextCurrent === null) {
+        throw new Error('CURRENT_SESSION_MISSING');
+      }
+      this.current = nextCurrent;
+      this.others = rows.filter((row: SessionRow): boolean => !row.isCurrent)
+        .sort((left: SessionRow, right: SessionRow): number => {
+          if (left.isUnconfirmed !== right.isUnconfirmed) {
+            return left.isUnconfirmed ? -1 : 1;
+          }
+          return right.lastActiveDate - left.lastActiveDate;
+        });
       this.inactiveTtlDays =
         (response['inactive_session_ttl_days'] as number | undefined) ?? 180;
+      this.loadState = 'ready';
+      this.syncError = '';
+      this.serverFreshRestricted = false;
       if (this.detailOpen && this.selected.id !== '') {
         const updated = rows.find(
           (row: SessionRow): boolean => row.id === this.selected.id
@@ -181,12 +234,22 @@ struct ActiveSessionsPage {
         }
       }
     } catch (caught) {
-      const error = caught as TdError;
+      if (!this.active || sequence !== this.loadSequence) { return; }
+      const error = caught as Error;
       console.error(`ActiveSessionsPage.getActiveSessions failed: ${error.message}`);
-      promptAction.showToast({ message: '读取登录设备失败', duration: 1800 });
+      const presentation = activeSessionError(error.message, '读取登录设备失败，请重试');
+      const message = error.message === 'CURRENT_SESSION_MISSING'
+        ? '会话信息不完整，请刷新后重试'
+        : presentation.text;
+      if (hasVisibleData) {
+        this.loadState = 'ready';
+        this.syncError = message;
+      } else {
+        this.loadState = 'error';
+        this.loadError = message;
+      }
     } finally {
-      this.loading = false;
-      this.refreshing = false;
+      if (this.active && sequence === this.loadSequence) { this.refreshing = false; }
     }
   }
 
@@ -215,11 +278,8 @@ struct ActiveSessionsPage {
   }
 
   private freshRestrictionSeconds(): number {
-    if (this.current === null || (this.current as SessionRow).loginDate <= 0) {
-      return 0;
-    }
-    const unlockAt = (this.current as SessionRow).loginDate + 24 * 60 * 60;
-    return Math.max(0, unlockAt - Math.floor(Date.now() / 1000));
+    if (this.current === null) { return 0; }
+    return freshSessionSeconds((this.current as SessionRow).loginDate, this.nowSeconds);
   }
 
   private isFreshRestricted(): boolean {
@@ -227,14 +287,7 @@ struct ActiveSessionsPage {
   }
 
   private freshWaitText(): string {
-    const seconds = this.freshRestrictionSeconds();
-    if (seconds <= 0) { return '稍后'; }
-    const totalMinutes = Math.max(1, Math.ceil(seconds / 60));
-    const hours = Math.floor(totalMinutes / 60);
-    const minutes = totalMinutes % 60;
-    if (hours <= 0) { return `${minutes} 分钟后`; }
-    if (minutes === 0) { return `${hours} 小时后`; }
-    return `${hours} 小时 ${minutes} 分钟后`;
+    return sessionWaitText(this.freshRestrictionSeconds());
   }
 
   private showFreshRestriction(): void {
@@ -244,18 +297,17 @@ struct ActiveSessionsPage {
     });
   }
 
-  private guardSessionMutation(): boolean {
+  private guardSessionTermination(): boolean {
     if (!this.isFreshRestricted()) { return false; }
     this.showFreshRestriction();
     return true;
   }
 
   private showMutationError(caught: TdError, fallback: string): void {
-    if (caught.message.includes('FRESH_RESET_AUTHORISATION_FORBIDDEN')) {
-      this.showFreshRestriction();
-      return;
-    }
-    promptAction.showToast({ message: fallback, duration: 1800 });
+    const presentation = activeSessionError(caught.message, fallback);
+    if (presentation.kind === 'fresh') { this.serverFreshRestricted = true; }
+    promptAction.showToast({ message: presentation.text, duration: 2800 });
+    if (presentation.shouldRefresh) { this.load(false); }
   }
 
   private isMobile(row: SessionRow): boolean {
@@ -275,6 +327,14 @@ struct ActiveSessionsPage {
     if (value.includes('windows')) { return '#4A90E2'; }
     if (value.includes('harmony')) { return '#ED6C8D'; }
     return '#4CB5E8';
+  }
+
+  private unconfirmedSessions(): SessionRow[] {
+    return this.others.filter((row: SessionRow): boolean => row.isUnconfirmed);
+  }
+
+  private confirmedSessions(): SessionRow[] {
+    return this.others.filter((row: SessionRow): boolean => !row.isUnconfirmed);
   }
 
   private openDetails(row: SessionRow): void {
@@ -316,17 +376,17 @@ struct ActiveSessionsPage {
       const request: TdRequest = { '@type': 'confirmQrCodeAuthentication' };
       request['link'] = link;
       await getTdClient().send(request);
+      if (!this.active) { return; }
       promptAction.showToast({ message: '桌面设备已连接', duration: 1800 });
       await this.load(false);
     } catch (caught) {
       const error = caught as BusinessError;
       if (error.code !== 1000500002) {
         console.error(`ActiveSessionsPage.linkDesktopDevice failed: ${error.message}`);
+        const presentation = activeSessionError(error.message, '连接设备失败，请重试');
         promptAction.showToast({
-          message: error.message.includes('QR')
-            ? '此二维码无效或已过期'
-            : '连接设备失败，请重试',
-          duration: 2000
+          message: presentation.text,
+          duration: 2600
         });
       }
     } finally {
@@ -336,7 +396,7 @@ struct ActiveSessionsPage {
 
   private confirmTerminateAll(): void {
     if (this.others.length === 0 || this.actionKey !== '') { return; }
-    if (this.guardSessionMutation()) { return; }
+    if (this.guardSessionTermination()) { return; }
     promptAction.showDialog({
       title: '退出其他所有设备',
       message: '除当前设备外，其他设备都将退出登录。确定继续吗？',
@@ -368,7 +428,7 @@ struct ActiveSessionsPage {
 
   private confirmTerminate(row: SessionRow): void {
     if (row.isCurrent || this.actionKey !== '') { return; }
-    if (this.guardSessionMutation()) { return; }
+    if (this.guardSessionTermination()) { return; }
     promptAction.showDialog({
       title: '终止会话',
       message: `确定让“${this.titleFor(row)}”退出登录吗？`,
@@ -405,7 +465,6 @@ struct ActiveSessionsPage {
 
   private async toggleSecretChats(row: SessionRow, enabled: boolean): Promise<void> {
     if (this.actionKey !== '') { return; }
-    if (this.guardSessionMutation()) { return; }
     const before = copySession(row);
     const next = copySession(row);
     next.canAcceptSecretChats = enabled;
@@ -428,7 +487,6 @@ struct ActiveSessionsPage {
 
   private async toggleCalls(row: SessionRow, enabled: boolean): Promise<void> {
     if (this.actionKey !== '') { return; }
-    if (this.guardSessionMutation()) { return; }
     const before = copySession(row);
     const next = copySession(row);
     next.canAcceptCalls = enabled;
@@ -471,7 +529,6 @@ struct ActiveSessionsPage {
 
   private showTtlMenu(): void {
     if (this.actionKey !== '') { return; }
-    if (this.guardSessionMutation()) { return; }
     promptAction.showActionMenu({
       title: '自动退出不活跃会话',
       buttons: [
@@ -512,7 +569,9 @@ struct ActiveSessionsPage {
       const request: TdRequest = { '@type': 'setInactiveSessionTtl' };
       request['inactive_session_ttl_days'] = days;
       await getTdClient().send(request);
-      promptAction.showToast({ message: `已设置为 ${ttlLabel(days)}`, duration: 1600 });
+      promptAction.showToast({
+        message: `已设置为 ${inactiveSessionTtlLabel(days)}`, duration: 1600
+      });
     } catch (caught) {
       const error = caught as TdError;
       console.error(`ActiveSessionsPage.setInactiveTtl failed: ${error.message}`);
@@ -531,8 +590,9 @@ struct ActiveSessionsPage {
           .fontSize(26).fontColor([COLOR_TEXT_PRIMARY]);
       }
       .width(40).height(40).borderRadius(20)
+      .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
       .onClick((): void => { router.back(); });
-      Text('设备')
+      Text('设备与会话')
         .fontSize(24).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
         .layoutWeight(1);
       Stack({ alignContent: Alignment.Center }) {
@@ -544,6 +604,7 @@ struct ActiveSessionsPage {
         }
       }
       .width(40).height(40).borderRadius(20)
+      .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
       .enabled(!this.refreshing && this.actionKey === '')
       .onClick((): void => { this.load(false); });
     }
@@ -566,42 +627,36 @@ struct ActiveSessionsPage {
 
   @Builder
   linkDeviceCard() {
-    Column({ space: 14 }) {
+    Row({ space: 13 }) {
       Stack({ alignContent: Alignment.Center }) {
-        SymbolGlyph($r('sys.symbol.computer'))
-          .fontSize(72).fontColor([COLOR_PRIMARY]);
-        Row()
-          .width(94).height(5).borderRadius(3)
-          .backgroundColor('#334CB5E8')
-          .margin({ top: 73 });
+        SymbolGlyph($r('sys.symbol.qrcode'))
+          .fontSize(25).fontColor([Color.White]);
       }
-      .width(126).height(108);
-
-      Text('在电脑或网页端打开 Telegram，\n扫描二维码即可连接此账号。')
-        .fontSize(16).fontColor(COLOR_TEXT_PRIMARY)
-        .lineHeight(23).textAlign(TextAlign.Center);
-
-      Button() {
-        Row({ space: 9 }) {
-          if (this.linking) {
-            LoadingProgress().width(21).height(21).color(Color.White);
-          } else {
-            SymbolGlyph($r('sys.symbol.qrcode'))
-              .fontSize(21).fontColor([Color.White]);
-          }
-          Text(this.linking ? '正在连接…' : '连接桌面设备')
-            .fontSize(16).fontWeight(FontWeight.Medium).fontColor(Color.White);
-        }
+      .width(46).height(46).borderRadius(14).backgroundColor(COLOR_PRIMARY);
+      Column({ space: 3 }) {
+        Text(this.linking ? '正在连接设备…' : '连接桌面设备')
+          .fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+        Text('扫描 Telegram 桌面端或网页版二维码')
+          .fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
+          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
       }
-      .width('100%').height(52)
-      .backgroundColor(COLOR_PRIMARY).borderRadius(26)
-      .enabled(!this.linking && this.actionKey === '')
-      .onClick((): void => { this.linkDesktopDevice(); });
+      .layoutWeight(1).alignItems(HorizontalAlign.Start);
+      if (this.linking) {
+        LoadingProgress().width(22).height(22).color(COLOR_PRIMARY);
+      } else {
+        SymbolGlyph($r('sys.symbol.chevron_right'))
+          .fontSize(15).fontColor([COLOR_TEXT_SECONDARY]);
+      }
     }
     .width('100%')
-    .padding({ left: 18, right: 18, top: 22, bottom: 18 })
+    .constraintSize({ minHeight: 72 })
+    .padding({ left: 14, right: 14, top: 12, bottom: 12 })
     .backgroundColor($r('app.color.surface'))
-    .borderRadius(CARD_RADIUS);
+    .borderRadius(CARD_RADIUS)
+    .alignItems(VerticalAlign.Center)
+    .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
+    .enabled(!this.linking && this.actionKey === '')
+    .onClick((): void => { this.linkDesktopDevice(); });
   }
 
   @Builder
@@ -654,6 +709,7 @@ struct ActiveSessionsPage {
     .width('100%')
     .padding({ left: 14, right: 13, top: 11, bottom: 11 })
     .alignItems(VerticalAlign.Center)
+    .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
     .onClick((): void => this.openDetails(row));
   }
 
@@ -687,6 +743,7 @@ struct ActiveSessionsPage {
       .width('100%')
       .padding({ left: 14, right: 16, top: 11, bottom: 13 })
       .alignItems(VerticalAlign.Center)
+      .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
       .enabled(this.others.length > 0 && this.actionKey === '' && !this.isFreshRestricted())
       .onClick((): void => this.confirmTerminateAll());
     }
@@ -696,10 +753,19 @@ struct ActiveSessionsPage {
   }
 
   @Builder
-  otherSessionsCard() {
+  sessionGroupCard(title: string, rows: SessionRow[], warning: boolean) {
     Column() {
-      this.sectionTitle('活跃会话');
-      ForEach(this.others, (row: SessionRow, index: number) => {
+      Row({ space: 7 }) {
+        if (warning) {
+          SymbolGlyph($r('sys.symbol.exclamationmark_triangle_fill'))
+            .fontSize(15).fontColor([WARNING]);
+        }
+        Text(title)
+          .fontSize(15).fontWeight(FontWeight.Medium)
+          .fontColor(warning ? WARNING : COLOR_PRIMARY);
+      }
+      .width('100%').padding({ left: 16, right: 16, top: 13, bottom: 5 });
+      ForEach(rows, (row: SessionRow, index: number) => {
         if (index > 0) {
           Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 76 });
         }
@@ -724,16 +790,14 @@ struct ActiveSessionsPage {
         Column({ space: 2 }) {
           Text('自动退出不活跃会话')
             .fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
-          Text(this.isFreshRestricted()
-            ? `安全保护中，${this.freshWaitText()}可修改`
-            : '超过期限未上线的设备将自动退出')
+          Text('超过期限未上线的设备将自动退出')
             .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
         }
         .alignItems(HorizontalAlign.Start).layoutWeight(1);
         if (this.actionKey === 'ttl') {
           LoadingProgress().width(20).height(20).color(COLOR_PRIMARY);
         } else {
-          Text(ttlLabel(this.inactiveTtlDays))
+          Text(inactiveSessionTtlLabel(this.inactiveTtlDays))
             .fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
           SymbolGlyph($r('sys.symbol.chevron_right'))
             .fontSize(14).fontColor([COLOR_TEXT_SECONDARY]);
@@ -742,7 +806,8 @@ struct ActiveSessionsPage {
       .width('100%')
       .padding({ left: 14, right: 14, top: 12, bottom: 12 })
       .alignItems(VerticalAlign.Center)
-      .enabled(this.actionKey === '' && !this.isFreshRestricted())
+      .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
+      .enabled(this.actionKey === '')
       .onClick((): void => this.showTtlMenu());
     }
     .width('100%')
@@ -784,7 +849,33 @@ struct ActiveSessionsPage {
             this.selected.lastActiveDate
           )}`)
             .fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
-            .margin({ bottom: 14 });
+            .margin({ bottom: 7 });
+          Row({ space: 6 }) {
+            if (this.selected.isOfficialApplication) {
+              Text('官方应用')
+                .fontSize(11).fontColor(COLOR_PRIMARY)
+                .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+                .backgroundColor('#164CB5E8').borderRadius(9);
+            } else {
+              Text('第三方应用')
+                .fontSize(11).fontColor(WARNING)
+                .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+                .backgroundColor('#16F29A2E').borderRadius(9);
+            }
+            if (this.selected.isUnconfirmed) {
+              Text('等待确认')
+                .fontSize(11).fontColor(DANGER)
+                .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+                .backgroundColor('#16EF5B5B').borderRadius(9);
+            }
+            if (this.selected.isPasswordPending) {
+              Text('待完成两步验证')
+                .fontSize(11).fontColor(WARNING)
+                .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+                .backgroundColor('#16F29A2E').borderRadius(9);
+            }
+          }
+          .margin({ bottom: 12 });
 
           this.detailInfoRow(
             'sys.symbol.computer',
@@ -800,6 +891,14 @@ struct ActiveSessionsPage {
               ? this.locationFor(this.selected)
               : '未知位置',
             '根据 IP 地址估算的位置'
+          );
+          Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 62 });
+          this.detailInfoRow(
+            'sys.symbol.clock',
+            formatClock(this.selected.loginDate) !== ''
+              ? formatClock(this.selected.loginDate)
+              : '时间未知',
+            '首次登录时间'
           );
           Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 62 });
 
@@ -820,7 +919,7 @@ struct ActiveSessionsPage {
                 isOn: this.selected.canAcceptSecretChats
               })
                 .selectedColor(COLOR_PRIMARY)
-                .enabled(this.actionKey === '' && !this.isFreshRestricted())
+                .enabled(this.actionKey === '')
                 .onChange((enabled: boolean): void => {
                   this.toggleSecretChats(this.selected, enabled);
                 });
@@ -828,8 +927,7 @@ struct ActiveSessionsPage {
           }
           .width('100%')
           .padding({ left: 18, right: 16, top: 11, bottom: 11 })
-          .alignItems(VerticalAlign.Center)
-          .opacity(this.isFreshRestricted() ? 0.62 : 1);
+          .alignItems(VerticalAlign.Center);
 
           Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 62 });
 
@@ -850,7 +948,7 @@ struct ActiveSessionsPage {
                 isOn: this.selected.canAcceptCalls
               })
                 .selectedColor(COLOR_PRIMARY)
-                .enabled(this.actionKey === '' && !this.isFreshRestricted())
+                .enabled(this.actionKey === '')
                 .onChange((enabled: boolean): void => {
                   this.toggleCalls(this.selected, enabled);
                 });
@@ -858,14 +956,13 @@ struct ActiveSessionsPage {
           }
           .width('100%')
           .padding({ left: 18, right: 16, top: 11, bottom: 11 })
-          .alignItems(VerticalAlign.Center)
-          .opacity(this.isFreshRestricted() ? 0.62 : 1);
+          .alignItems(VerticalAlign.Center);
 
           if (this.isFreshRestricted()) {
             Row({ space: 8 }) {
               SymbolGlyph($r('sys.symbol.info_circle'))
                 .fontSize(18).fontColor([COLOR_PRIMARY]);
-              Text(`当前会话刚登录，Telegram 将在${this.freshWaitText()}开放会话管理`)
+              Text(`当前会话刚登录，预计${this.freshWaitText()}可终止其他会话；其余设备设置不受影响`)
                 .fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
                 .lineHeight(18).layoutWeight(1);
             }
@@ -926,49 +1023,156 @@ struct ActiveSessionsPage {
     .width('100%').height('100%');
   }
 
+  @Builder
+  loadingSkeleton() {
+    Column({ space: 12 }) {
+      Row({ space: 13 }) {
+        Row().width(46).height(46).borderRadius(14)
+          .backgroundColor($r('app.color.surface_alt'));
+        Column({ space: 8 }) {
+          Row().width('48%').height(14).borderRadius(7)
+            .backgroundColor($r('app.color.surface_alt'));
+          Row().width('72%').height(10).borderRadius(5)
+            .backgroundColor($r('app.color.surface_alt'));
+        }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+      }
+      .width('100%').height(72).padding({ left: 14, right: 14 })
+      .backgroundColor($r('app.color.surface')).borderRadius(CARD_RADIUS);
+      ForEach([0, 1, 2], (index: number) => {
+        Column({ space: 10 }) {
+          Row().width(index === 0 ? '32%' : '24%').height(11).borderRadius(6)
+            .backgroundColor($r('app.color.surface_alt'));
+          Row({ space: 12 }) {
+            Circle({ width: 50, height: 50 }).fill($r('app.color.surface_alt'));
+            Column({ space: 8 }) {
+              Row().width(index === 1 ? '58%' : '46%').height(13).borderRadius(7)
+                .backgroundColor($r('app.color.surface_alt'));
+              Row().width(index === 1 ? '72%' : '62%').height(10).borderRadius(5)
+                .backgroundColor($r('app.color.surface_alt'));
+            }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+          }.width('100%');
+        }
+        .width('100%').padding(14)
+        .backgroundColor($r('app.color.surface')).borderRadius(CARD_RADIUS);
+      }, (index: number): string => `session_skeleton_${index}`);
+    }
+    .layoutWeight(1).width('100%')
+    .padding({ left: 12, right: 12, top: 8 });
+  }
+
+  @Builder
+  errorState() {
+    Column({ space: 11 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        SymbolGlyph($r('sys.symbol.exclamationmark_triangle_fill'))
+          .fontSize(31).fontColor([WARNING]);
+      }
+      .width(64).height(64).borderRadius(22).backgroundColor('#16F29A2E');
+      Text('设备列表加载失败')
+        .fontSize(19).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+      Text(this.loadError !== '' ? this.loadError : '暂时无法读取登录设备，请稍后重试')
+        .fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
+        .lineHeight(19).textAlign(TextAlign.Center).width('78%');
+      Button('重新加载')
+        .height(42).padding({ left: 24, right: 24 })
+        .fontSize(15).fontColor(Color.White).backgroundColor(COLOR_PRIMARY).borderRadius(21)
+        .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
+        .onClick((): void => { this.load(true); });
+    }
+    .layoutWeight(1).width('100%').justifyContent(FlexAlign.Center)
+    .transition(TransitionEffect.OPACITY.animation({
+      duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+      curve: Curve.EaseOut
+    }));
+  }
+
+  @Builder
+  syncWarning() {
+    Row({ space: 10 }) {
+      SymbolGlyph($r('sys.symbol.exclamationmark_triangle_fill'))
+        .fontSize(17).fontColor([WARNING]);
+      Text(this.syncError)
+        .fontSize(12).fontColor(COLOR_TEXT_PRIMARY).lineHeight(18).layoutWeight(1);
+      Text('重试').fontSize(13).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
+        .padding({ left: 8, right: 8, top: 6, bottom: 6 })
+        .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
+        .onClick((): void => { this.load(false); });
+    }
+    .width('100%').padding({ left: 13, right: 9, top: 9, bottom: 9 })
+    .backgroundColor('#14F29A2E').borderRadius(12)
+    .transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: -4 }))
+      .animation({
+        duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 170),
+        curve: Curve.EaseOut
+      }));
+  }
+
+  @Builder
+  securityProtectionCard() {
+    Row({ space: 10 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        SymbolGlyph($r('sys.symbol.lock_fill')).fontSize(18).fontColor([COLOR_PRIMARY]);
+      }.width(34).height(34).borderRadius(11).backgroundColor('#164CB5E8');
+      Column({ space: 3 }) {
+        Text('新设备安全保护')
+          .fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+        Text(this.isFreshRestricted()
+          ? `预计${this.freshWaitText()}可终止其他会话；设置与设备确认仍可使用`
+          : 'Telegram 暂时拒绝从此设备终止较早的会话，请稍后重试')
+          .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).lineHeight(18);
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+    }
+    .width('100%').padding({ left: 13, right: 13, top: 10, bottom: 10 })
+    .backgroundColor('#104CB5E8').borderRadius(13);
+  }
+
+  @Builder
+  noOtherSessionsCard() {
+    Row({ space: 12 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        SymbolGlyph($r('sys.symbol.checkmark_circle_fill'))
+          .fontSize(25).fontColor([ONLINE]);
+      }.width(44).height(44).borderRadius(14).backgroundColor('#1634C759');
+      Column({ space: 3 }) {
+        Text('没有其他活跃会话')
+          .fontSize(15).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+        Text('目前只有这台设备登录了你的账号')
+          .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+    }
+    .width('100%').padding({ left: 14, right: 14, top: 12, bottom: 12 })
+    .backgroundColor($r('app.color.surface')).borderRadius(CARD_RADIUS);
+  }
+
   build() {
     Column() {
       this.header();
-      if (this.loading) {
-        Column({ space: 12 }) {
-          LoadingProgress().width(38).height(38).color(COLOR_PRIMARY);
-          Text('正在读取登录设备…').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
-        }
-        .layoutWeight(1).width('100%')
-        .justifyContent(FlexAlign.Center);
+      if (this.loadState === 'loading') {
+        this.loadingSkeleton();
+      } else if (this.loadState === 'error') {
+        this.errorState();
       } else {
         Scroll() {
           Column({ space: 12 }) {
+            if (this.syncError !== '') { this.syncWarning(); }
             this.linkDeviceCard();
             if (this.current !== null) {
               this.currentSessionCard();
               Text('退出其他设备后，它们必须重新登录才能访问你的账号。')
                 .width('100%').fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
                 .padding({ left: 16, right: 16 });
-              if (this.isFreshRestricted()) {
-                Row({ space: 9 }) {
-                  SymbolGlyph($r('sys.symbol.info_circle'))
-                    .fontSize(19).fontColor([COLOR_PRIMARY]);
-                  Column({ space: 2 }) {
-                    Text('新登录设备安全保护')
-                      .fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-                    Text(`Telegram 要求等待 24 小时，预计${this.freshWaitText()}可管理其他会话`)
-                      .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).lineHeight(18);
-                  }
-                  .alignItems(HorizontalAlign.Start).layoutWeight(1);
-                }
-                .width('100%')
-                .padding({ left: 14, right: 14, top: 11, bottom: 11 })
-                .backgroundColor('#124CB5E8')
-                .borderRadius(13);
+              if (this.isFreshRestricted() || this.serverFreshRestricted) {
+                this.securityProtectionCard();
               }
             }
-            if (this.others.length > 0) {
-              this.otherSessionsCard();
-            } else {
-              Text('没有其他活跃会话')
-                .width('100%').fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
-                .textAlign(TextAlign.Center).padding({ top: 5, bottom: 5 });
+            if (this.unconfirmedSessions().length > 0) {
+              this.sessionGroupCard('需要确认', this.unconfirmedSessions(), true);
+            }
+            if (this.confirmedSessions().length > 0) {
+              this.sessionGroupCard('其他活跃会话', this.confirmedSessions(), false);
+            }
+            if (this.others.length === 0) {
+              this.noOtherSessionsCard();
             }
             this.ttlCard();
           }

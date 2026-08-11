@@ -81,6 +81,25 @@ export class TgcallsGroupSession {
     this.onVideoGeometry = onVideoGeometry;
   }
 
+  // Re-targets UI/controller callbacks without recreating the native group-call
+  // engine. Live floating uses this only when ownership moves between the full
+  // viewer and its overlay; media transport and device state stay intact.
+  setListeners(
+    onNetworkState: TgcallsNetworkListener = (): void => {},
+    onAudioActivity: TgcallsAudioActivityListener = (): void => {},
+    onBroadcastStreams: TgcallsBroadcastStreamsListener = (): void => {},
+    onBroadcastActivity: TgcallsBroadcastActivityListener = (): void => {},
+    onLocalVideoState: TgcallsLocalVideoListener = (): void => {},
+    onVideoGeometry: TgcallsVideoGeometryListener = (): void => {}
+  ): void {
+    this.onNetworkState = onNetworkState;
+    this.onAudioActivity = onAudioActivity;
+    this.onBroadcastStreams = onBroadcastStreams;
+    this.onBroadcastActivity = onBroadcastActivity;
+    this.onLocalVideoState = onLocalVideoState;
+    this.onVideoGeometry = onVideoGeometry;
+  }
+
   async join(client: TdClient, groupCallId: number, muted: boolean = true): Promise<TgcallsJoinResult> {
     if (this.created || groupCallId <= 0) {
       throw new Error(this.created ? 'tgcalls session already started' : 'invalid group call id');

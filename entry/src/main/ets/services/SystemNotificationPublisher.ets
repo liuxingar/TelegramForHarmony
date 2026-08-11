@@ -29,6 +29,8 @@ export class SystemNotificationPublisher implements NotificationPublisher {
         wantAgent: agent
       };
       return notificationManager.publish(request);
+    }).then((): void => {
+      console.info(`[NotifDiag] system publish ok id=${notice.id} "${notice.title}"`);
     }).catch((e: Error): void => {
       console.error(`SystemNotificationPublisher.publish(${notice.id}) failed: ${e.message}`);
     });

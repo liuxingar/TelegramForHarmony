@@ -5,16 +5,21 @@ import {
 import { GroupCallParticipantsStore } from '../../store/GroupCallParticipantsStore';
 import { LiveStreamStore } from '../../store/LiveStreamStore';
 import { liveStreamBackgroundTask } from '../../services/LiveStreamBackgroundTask';
-import { TgcallsGroupSession, TgcallsJoinResult } from '../../services/TgcallsGroupSession';
+import { TgcallsGroupSession } from '../../services/TgcallsGroupSession';
 import {
   GroupCallParticipantInfo, GroupCallStreamInfo, GroupCallVideoSource, LiveStreamState
 } from '../../tdkit/GroupCallTypes';
-import { getGroupCall, leaveGroupCall } from '../../tdkit/GroupCallApi';
+import {
+  getGroupCall, leaveGroupCall, setGroupCallParticipantIsSpeaking
+} from '../../tdkit/GroupCallApi';
 import { getTdClient } from '../../tdkit/Globals';
-import { confirmLeaveLiveStream } from './LiveViewerUi';
+import { confirmLeaveLiveStream, setLiveStreamKeepScreenOn } from './LiveViewerUi';
 import {
   KEY_POWER_CALL_ANIMATIONS, powerAnimationDuration
 } from '../../store/AppSettings';
+import {
+  FloatingDragAnchor, FloatingDragBounds, clampFloatingTranslation, dragFloatingTranslation
+} from '../../util/floatingDrag';
 
 const FLOAT_BACKGROUND: string = '#101820';
 const FLOAT_PANEL: string = '#E9142029';
@@ -22,6 +27,7 @@ const FLOAT_TEXT: string = '#F4F7F9';
 const FLOAT_SUBTEXT: string = '#A7B4BE';
 const FLOAT_GREEN: string = '#39D98A';
 const FLOAT_RED: string = '#FF405C';
+const DRAG_MARGIN: number = 8;
 const HEALTH_INTERVAL_MS: number = 5000;
 const RECONNECT_GRACE_MS: number = 5000;
 
@@ -44,6 +50,29 @@ export interface FloatingLiveState {
   recovering: boolean;
   isRtmp: boolean;
   sourceName: string;
+  visualReady: boolean;
+  ended: boolean;
+  isMuted: boolean;
+  actionBusy: boolean;
+  error: boolean;
+}
+
+// In-memory ownership packet. It never crosses a process boundary and contains
+// the same live session object, so minimizing/restoring does not join again.
+export interface FloatingLiveSessionHandoff {
+  descriptor: FloatingLiveDescriptor;
+  session: TgcallsGroupSession;
+  liveState: LiveStreamState;
+  isMuted: boolean;
+  mediaConnected: boolean;
+  hasJoinedOnce: boolean;
+  visualReady: boolean;
+  videoAspectRatio: number;
+  localVideoMode: number;
+  localVideoActive: boolean;
+  desiredLocalVideoMode: number;
+  screenShareActive: boolean;
+  screenShareDesired: boolean;
 }
 
 type FloatingLiveListener = (state: FloatingLiveState) => void;
@@ -87,7 +116,27 @@ function copyState(state: FloatingLiveState): FloatingLiveState {
     hasVideo: state.hasVideo,
     recovering: state.recovering,
     isRtmp: state.isRtmp,
-    sourceName: state.sourceName
+    sourceName: state.sourceName,
+    visualReady: state.visualReady,
+    ended: state.ended,
+    isMuted: state.isMuted,
+    actionBusy: state.actionBusy,
+    error: state.error
+  };
+}
+
+function copyLiveState(state: LiveStreamState): LiveStreamState {
+  return {
+    title: state.title,
+    isActive: state.isActive,
+    isRtmpStream: state.isRtmpStream,
+    isJoined: state.isJoined,
+    needRejoin: state.needRejoin,
+    canSendMessages: state.canSendMessages,
+    areMessagesAllowed: state.areMessagesAllowed,
+    participantCount: state.participantCount,
+    streams: state.streams,
+    error: state.error
   };
 }
 
@@ -114,7 +163,12 @@ export class LiveFloatingWindowController {
     hasVideo: false,
     recovering: false,
     isRtmp: false,
-    sourceName: ''
+    sourceName: '',
+    visualReady: false,
+    ended: false,
+    isMuted: true,
+    actionBusy: false,
+    error: false
   };
   private listeners: FloatingLiveListener[] = [];
   private overlayManager: OverlayManager | null = null;
@@ -130,13 +184,25 @@ export class LiveFloatingWindowController {
   private surfaceBinding: FloatingSurfaceBinding | null = null;
   private generation: number = 0;
   private hasJoinedOnce: boolean = false;
-  private reconnectAttempt: number = 0;
   private reconnectTimer: number = -1;
   private healthTimer: number = -1;
   private refreshInFlight: boolean = false;
+  private seamlessLiveState: LiveStreamState | null = null;
+  private seamlessMediaConnected: boolean = false;
+  private seamlessLocalVideoMode: number = 0;
+  private seamlessLocalVideoActive: boolean = false;
+  private seamlessDesiredLocalVideoMode: number = 0;
+  private seamlessScreenShareActive: boolean = false;
+  private seamlessScreenShareDesired: boolean = false;
+  private seamlessVideoAspectRatio: number = 0;
 
   isVisible(): boolean {
     return this.descriptor !== null && this.state.visible;
+  }
+
+  isShowing(groupCallId: number, isRtmp: boolean): boolean {
+    return this.isVisible() && this.descriptor?.groupCallId === groupCallId &&
+      this.descriptor?.isRtmp === isRtmp;
   }
 
   subscribe(listener: FloatingLiveListener): () => void {
@@ -149,11 +215,12 @@ export class LiveFloatingWindowController {
     };
   }
 
-  show(
-    uiContext: UIContext, abilityContext: common.UIAbilityContext, descriptor: FloatingLiveDescriptor
-  ): void {
-    this.removeOverlay();
-    this.stopRuntime();
+  showSeamless(
+    uiContext: UIContext, abilityContext: common.UIAbilityContext,
+    handoff: FloatingLiveSessionHandoff
+  ): boolean {
+    if (this.isVisible() || handoff.descriptor.groupCallId <= 0) { return false; }
+    const descriptor = handoff.descriptor;
     this.abilityContext = abilityContext;
     this.descriptor = {
       groupCallId: descriptor.groupCallId,
@@ -164,25 +231,58 @@ export class LiveFloatingWindowController {
       primarySource: cloneSource(descriptor.primarySource)
     };
     this.primarySource = cloneSource(descriptor.primarySource);
+    this.requestedEndpoint = descriptor.isRtmp
+      ? (uniqueVideoChannelIds(handoff.liveState.streams).length > 0 ? 'unified' : '')
+      : (descriptor.primarySource?.endpointId ?? '');
+    this.seamlessLiveState = copyLiveState(handoff.liveState);
+    this.seamlessMediaConnected = handoff.mediaConnected;
+    this.seamlessLocalVideoMode = handoff.localVideoMode;
+    this.seamlessLocalVideoActive = handoff.localVideoActive;
+    this.seamlessDesiredLocalVideoMode = handoff.desiredLocalVideoMode;
+    this.seamlessScreenShareActive = handoff.screenShareActive;
+    this.seamlessScreenShareDesired = handoff.screenShareDesired;
+    this.seamlessVideoAspectRatio = handoff.videoAspectRatio;
+    this.hasJoinedOnce = handoff.hasJoinedOnce;
     this.state = {
       visible: true,
       large: false,
       title: descriptor.title !== '' ? descriptor.title : '正在直播',
       participantCount: descriptor.participantCount,
-      status: '正在切换到悬浮窗…',
-      hasVideo: descriptor.primarySource !== null,
-      recovering: false,
+      status: handoff.visualReady
+        ? (this.requestedEndpoint !== '' ? '直播播放中' : '直播音频播放中')
+        : '正在切换到悬浮窗…',
+      hasVideo: this.requestedEndpoint !== '',
+      recovering: !handoff.mediaConnected,
       isRtmp: descriptor.isRtmp,
-      sourceName: descriptor.primarySource?.name ?? ''
+      sourceName: descriptor.primarySource?.name ?? '',
+      visualReady: handoff.visualReady,
+      ended: !handoff.liveState.isActive,
+      isMuted: handoff.isMuted,
+      actionBusy: false,
+      error: false
     };
+    try {
+      this.overlayManager = uiContext.getOverlayManager();
+      this.overlayContent = new ComponentContent<FloatingOverlayArgs>(
+        uiContext, wrapBuilder(buildFloatingLiveOverlay), new FloatingOverlayArgs(this)
+      );
+      this.overlayManager.addComponentContent(this.overlayContent);
+    } catch (caught) {
+      console.error(`LiveFloating.showSeamless overlay failed: ${caught}`);
+      this.removeOverlay();
+      this.descriptor = null;
+      this.primarySource = null;
+      this.requestedEndpoint = '';
+      this.seamlessLiveState = null;
+      this.state.visible = false;
+      return false;
+    }
+    this.session = handoff.session;
+    this.startSeamlessRuntime();
+    setLiveStreamKeepScreenOn(abilityContext, true);
+    liveStreamBackgroundTask.start(abilityContext, !handoff.isMuted);
     this.emit();
-    this.overlayManager = uiContext.getOverlayManager();
-    this.overlayContent = new ComponentContent<FloatingOverlayArgs>(
-      uiContext, wrapBuilder(buildFloatingLiveOverlay), new FloatingOverlayArgs(this)
-    );
-    this.overlayManager.addComponentContent(this.overlayContent);
-    liveStreamBackgroundTask.start(abilityContext, false);
-    this.startRuntime();
+    return true;
   }
 
   expand(): void {
@@ -237,6 +337,7 @@ export class LiveFloatingWindowController {
   }
 
   requestClose(): void {
+    if (this.state.actionBusy) { return; }
     confirmLeaveLiveStream((): void => {
       this.dismissAndLeave();
     });
@@ -244,6 +345,9 @@ export class LiveFloatingWindowController {
 
   async closeForAccountSwitch(): Promise<void> {
     const groupCallId = this.descriptor?.groupCallId ?? 0;
+    if (this.abilityContext !== null) {
+      setLiveStreamKeepScreenOn(this.abilityContext, false);
+    }
     this.removeOverlay();
     this.stopRuntime();
     this.descriptor = null;
@@ -262,6 +366,9 @@ export class LiveFloatingWindowController {
   async prepareForOpeningFullPage(): Promise<void> {
     if (this.descriptor === null) { return; }
     const groupCallId = this.descriptor.groupCallId;
+    if (this.abilityContext !== null) {
+      setLiveStreamKeepScreenOn(this.abilityContext, false);
+    }
     this.removeOverlay();
     this.stopRuntime();
     this.descriptor = null;
@@ -278,21 +385,92 @@ export class LiveFloatingWindowController {
 
   async restoreFullPage(): Promise<void> {
     const descriptor = this.descriptor;
-    if (descriptor === null) { return; }
-    await this.prepareForOpeningFullPage();
+    if (descriptor === null || this.state.actionBusy) { return; }
+    await this.openFullPage(descriptor);
+  }
+
+  takeSeamlessSession(
+    groupCallId: number, isRtmp: boolean
+  ): FloatingLiveSessionHandoff | null {
+    const descriptor = this.descriptor;
+    const session = this.session;
+    const liveState = this.seamlessLiveState;
+    if (descriptor === null || session === null || liveState === null ||
+      descriptor.groupCallId !== groupCallId || descriptor.isRtmp !== isRtmp) {
+      return null;
+    }
+    const packet: FloatingLiveSessionHandoff = {
+      descriptor: {
+        groupCallId: descriptor.groupCallId,
+        chatId: descriptor.chatId,
+        isRtmp: descriptor.isRtmp,
+        title: this.state.title,
+        participantCount: this.state.participantCount,
+        primarySource: cloneSource(this.primarySource)
+      },
+      session,
+      liveState: copyLiveState(liveState),
+      isMuted: this.state.isMuted,
+      mediaConnected: this.seamlessMediaConnected,
+      hasJoinedOnce: this.hasJoinedOnce,
+      visualReady: this.state.visualReady,
+      videoAspectRatio: this.seamlessVideoAspectRatio,
+      localVideoMode: this.seamlessLocalVideoMode,
+      localVideoActive: this.seamlessLocalVideoActive,
+      desiredLocalVideoMode: this.seamlessDesiredLocalVideoMode,
+      screenShareActive: this.seamlessScreenShareActive,
+      screenShareDesired: this.seamlessScreenShareDesired
+    };
+    if (this.requestedEndpoint !== '') {
+      session.setVideoSurface(this.requestedEndpoint, '0');
+    }
+    if (!descriptor.isRtmp && this.seamlessLocalVideoActive) {
+      session.setLocalVideoSurface('0');
+    }
+    session.setListeners();
+    this.session = null;
+    this.removeOverlay();
+    this.stopRuntime();
+    this.descriptor = null;
+    this.primarySource = null;
+    this.state.visible = false;
+    this.state.actionBusy = false;
+    this.emit();
+    return packet;
+  }
+
+  private async openFullPage(descriptor: FloatingLiveDescriptor): Promise<void> {
+    this.state.actionBusy = true;
+    this.state.large = true;
+    this.state.status = '正在返回直播…';
+    this.emit();
     const params: Record<string, Object> = {
       'groupCallId': descriptor.groupCallId,
-      'chatId': descriptor.chatId
+      'chatId': descriptor.chatId,
+      'initialTitle': this.state.title,
+      'initialParticipantCount': this.state.participantCount
     };
-    router.pushUrl({
-      url: descriptor.isRtmp
-        ? 'pages/chat/RtmpLiveStreamViewerPage' : 'pages/chat/LiveStreamViewerPage',
-      params
-    });
+    try {
+      await router.pushUrl({
+        url: descriptor.isRtmp
+          ? 'pages/chat/RtmpLiveStreamViewerPage' : 'pages/chat/LiveStreamViewerPage',
+        params
+      });
+    } catch (caught) {
+      if (this.descriptor?.groupCallId === descriptor.groupCallId) {
+        this.state.actionBusy = false;
+        this.state.status = this.state.hasVideo ? '直播播放中' : '直播音频播放中';
+        this.emit();
+      }
+      console.error(`LiveFloating.restore failed: ${caught}`);
+    }
   }
 
   private dismissAndLeave(): void {
     const groupCallId = this.descriptor?.groupCallId ?? 0;
+    if (this.abilityContext !== null) {
+      setLiveStreamKeepScreenOn(this.abilityContext, false);
+    }
     this.removeOverlay();
     this.stopRuntime();
     this.descriptor = null;
@@ -306,9 +484,11 @@ export class LiveFloatingWindowController {
     }
   }
 
-  private startRuntime(): void {
+  private startSeamlessRuntime(): void {
     const descriptor = this.descriptor;
-    if (descriptor === null || descriptor.groupCallId <= 0) { return; }
+    const session = this.session;
+    if (descriptor === null || session === null || descriptor.groupCallId <= 0) { return; }
+    const sequence = ++this.generation;
     const client = getTdClient();
     this.liveStore = new LiveStreamStore(client, descriptor.groupCallId);
     this.offLive = this.liveStore.subscribe(
@@ -320,12 +500,64 @@ export class LiveFloatingWindowController {
         (participants: GroupCallParticipantInfo[]): void => this.onParticipants(participants)
       );
     }
+    session.setListeners(
+      (connected: boolean): void => this.onNetworkState(session, sequence, connected),
+      (audioSourceId: number, speaking: boolean): void => {
+        if (this.isCurrent(session, sequence)) {
+          this.onFloatingAudioActivity(session, audioSourceId, speaking);
+        }
+      },
+      (streams: GroupCallStreamInfo[], unified: boolean): void => {
+        if (this.isCurrent(session, sequence) && descriptor.isRtmp && unified) {
+          this.configureRtmpStreams(streams);
+        }
+      },
+      (received: boolean): void => {
+        if (!this.isCurrent(session, sequence) || !descriptor.isRtmp) { return; }
+        if (received && this.state.hasVideo) { this.state.visualReady = true; }
+        this.setPlaybackState(
+          received ? (this.state.hasVideo ? '直播播放中' : '直播音频播放中') : '直播缓冲中…',
+          this.state.hasVideo,
+          !received
+        );
+      },
+      (mode: number, active: boolean, _error: number): void => {
+        if (!this.isCurrent(session, sequence)) { return; }
+        if (mode === 3) {
+          this.seamlessScreenShareActive = active;
+          this.seamlessScreenShareDesired = active;
+          return;
+        }
+        this.seamlessLocalVideoMode = mode;
+        this.seamlessLocalVideoActive = active;
+        if (active) {
+          this.seamlessDesiredLocalVideoMode = mode;
+        } else if (mode === this.seamlessDesiredLocalVideoMode) {
+          this.seamlessDesiredLocalVideoMode = 0;
+        }
+      },
+      (_endpointId: string, width: number, height: number): void => {
+        if (!this.isCurrent(session, sequence) || width <= 0 || height <= 0) { return; }
+        this.seamlessVideoAspectRatio = width / height;
+        this.state.visualReady = true;
+        this.emit();
+      }
+    );
     this.healthTimer = setInterval((): void => {
       this.session?.resumeMedia();
       this.bindCurrentSurface();
       this.refreshGroupCall();
     }, HEALTH_INTERVAL_MS);
-    this.replaceSession('进入悬浮窗');
+    if (descriptor.isRtmp) {
+      this.configureRtmpStreams(this.seamlessLiveState?.streams ?? []);
+    } else {
+      if (this.primarySource !== null) { this.configurePrimarySource(this.primarySource); }
+      this.participantStore?.load(100).catch((caught: Error): void => {
+        console.error(`LiveFloating.loadParticipants failed: ${caught.message}`);
+      });
+    }
+    session.resumeMedia();
+    this.bindCurrentSurface();
     this.refreshGroupCall();
   }
 
@@ -356,81 +588,15 @@ export class LiveFloatingWindowController {
     this.requestedEndpoint = '';
     this.surfaceBinding = null;
     this.hasJoinedOnce = false;
-    this.reconnectAttempt = 0;
     this.refreshInFlight = false;
-  }
-
-  private replaceSession(reason: string): void {
-    const descriptor = this.descriptor;
-    if (descriptor === null || descriptor.groupCallId <= 0) { return; }
-    this.clearReconnectTimer();
-    const sequence = ++this.generation;
-    if (this.session !== null) {
-      this.session.clearVideo();
-      this.session.stop();
-    }
-    this.session = null;
-    this.requestedEndpoint = '';
-    this.setPlaybackState(
-      this.hasJoinedOnce ? '正在恢复悬浮直播…' : '正在连接悬浮直播…',
-      this.state.hasVideo,
-      this.hasJoinedOnce
-    );
-    const client = getTdClient();
-    const session = new TgcallsGroupSession(
-      (connected: boolean): void => this.onNetworkState(session, sequence, connected),
-      (): void => {},
-      (streams: GroupCallStreamInfo[], unified: boolean): void => {
-        if (this.isCurrent(session, sequence) && descriptor.isRtmp && unified) {
-          this.configureRtmpStreams(streams);
-        }
-      },
-      (received: boolean): void => {
-        if (this.isCurrent(session, sequence) && descriptor.isRtmp) {
-          this.setPlaybackState(
-            received ? (this.state.hasVideo ? '直播播放中' : '直播音频播放中') : '直播缓冲中…',
-            this.state.hasVideo,
-            !received
-          );
-        }
-      }
-    );
-    this.session = session;
-    console.info(`[LiveFloating] session=${sequence} reason=${reason}`);
-    session.join(client, descriptor.groupCallId, true).then((result: TgcallsJoinResult): void => {
-      if (!this.isCurrent(session, sequence)) { return; }
-      if (descriptor.isRtmp && (!result.isBroadcast || !result.isUnifiedBroadcast)) {
-        this.setPlaybackState('直播模式已经变化', false, false);
-        return;
-      }
-      this.hasJoinedOnce = true;
-      this.reconnectAttempt = 0;
-      this.liveStore?.setStreams(result.streams);
-      if (descriptor.isRtmp) {
-        this.configureRtmpStreams(result.streams);
-      } else if (this.primarySource !== null) {
-        this.configurePrimarySource(this.primarySource);
-      }
-      this.participantStore?.load(100).catch((caught: Error): void => {
-        console.error(`LiveFloating.loadParticipants failed: ${caught.message}`);
-      });
-      session.resumeMedia();
-      this.bindCurrentSurface();
-      this.setPlaybackState(
-        this.state.hasVideo ? '直播播放中' : '直播音频播放中',
-        this.state.hasVideo,
-        false
-      );
-      this.refreshGroupCall();
-    }).catch((caught: Error): void => {
-      if (!this.isCurrent(session, sequence)) { return; }
-      session.stop();
-      this.session = null;
-      this.reconnectAttempt += 1;
-      this.setPlaybackState('悬浮直播连接中断，正在重试…', this.state.hasVideo, true);
-      const delay = Math.min(30000, 1000 * Math.pow(2, Math.min(this.reconnectAttempt - 1, 5)));
-      this.scheduleReconnect(delay, `加入失败：${caught.message}`);
-    });
+    this.seamlessLiveState = null;
+    this.seamlessMediaConnected = false;
+    this.seamlessLocalVideoMode = 0;
+    this.seamlessLocalVideoActive = false;
+    this.seamlessDesiredLocalVideoMode = 0;
+    this.seamlessScreenShareActive = false;
+    this.seamlessScreenShareDesired = false;
+    this.seamlessVideoAspectRatio = 0;
   }
 
   private isCurrent(session: TgcallsGroupSession, sequence: number): boolean {
@@ -441,9 +607,10 @@ export class LiveFloatingWindowController {
     session: TgcallsGroupSession, sequence: number, connected: boolean
   ): void {
     if (!this.isCurrent(session, sequence)) { return; }
+    this.seamlessMediaConnected = connected;
     if (connected) {
-      this.reconnectAttempt = 0;
       this.clearReconnectTimer();
+      this.state.error = false;
       session.resumeMedia();
       this.bindCurrentSurface();
       this.setPlaybackState(
@@ -455,31 +622,55 @@ export class LiveFloatingWindowController {
     }
     if (this.hasJoinedOnce) {
       this.setPlaybackState('网络波动，正在恢复…', this.state.hasVideo, true);
-      this.scheduleReconnect(RECONNECT_GRACE_MS, '媒体网络断开');
+      this.scheduleReconnect(RECONNECT_GRACE_MS);
     }
   }
 
   private onLiveState(state: LiveStreamState): void {
     if (this.descriptor === null) { return; }
+    const next = copyLiveState(state);
+    if (next.streams.length === 0 && this.seamlessLiveState !== null &&
+      this.seamlessLiveState.streams.length > 0) {
+      next.streams = this.seamlessLiveState.streams;
+    }
+    this.seamlessLiveState = next;
     this.state.title = state.title !== '' ? state.title : this.state.title;
     this.state.participantCount = state.participantCount;
     if (!state.isActive && this.hasJoinedOnce) {
       this.clearReconnectTimer();
+      if (this.abilityContext !== null) {
+        setLiveStreamKeepScreenOn(this.abilityContext, false);
+      }
+      this.state.ended = true;
+      this.state.error = false;
       this.setPlaybackState('直播已结束', this.state.hasVideo, false);
     } else if (state.needRejoin || (this.hasJoinedOnce && !state.isJoined)) {
+      this.state.ended = false;
       this.setPlaybackState('正在重新加入直播…', this.state.hasVideo, true);
-      this.scheduleReconnect(500, 'TDLib 要求重新加入');
+      this.scheduleReconnect(500);
     } else {
+      this.state.ended = false;
       this.emit();
     }
   }
 
   private onParticipants(participants: GroupCallParticipantInfo[]): void {
+    const current = participants.find(
+      (participant: GroupCallParticipantInfo): boolean => participant.isCurrentUser
+    );
+    if (current !== undefined && current.isMuted !== this.state.isMuted) {
+      this.state.isMuted = current.isMuted;
+      this.session?.setMuted(current.isMuted);
+      liveStreamBackgroundTask.setRecording(!current.isMuted);
+    }
     const sources: GroupCallVideoSource[] = [];
     for (const participant of participants) {
       for (const source of participant.videoSources) { sources.push(source); }
     }
     if (sources.length === 0) {
+      // A freshly-created participant store emits an empty snapshot before
+      // TDLib has delivered the loaded participants. Keep the handed-off
+      // source alive through that gap so minimizing cannot blank the video.
       if (this.primarySource === null) {
         this.setPlaybackState('直播音频播放中', false, this.state.recovering);
       }
@@ -497,6 +688,24 @@ export class LiveFloatingWindowController {
       (source: GroupCallVideoSource): boolean => source.endpointId === previousEndpoint
     );
     this.configurePrimarySource(retained ?? sources[0]);
+  }
+
+  private onFloatingAudioActivity(
+    session: TgcallsGroupSession, audioSourceId: number, speaking: boolean
+  ): void {
+    if (this.session !== session || audioSourceId === 0) { return; }
+    this.participantStore?.applyAudioActivity(audioSourceId, speaking);
+    const descriptor = this.descriptor;
+    if (descriptor === null || descriptor.isRtmp) { return; }
+    setGroupCallParticipantIsSpeaking(
+      getTdClient(), descriptor.groupCallId, audioSourceId, speaking
+    ).then((sender): void => {
+      if (this.session === session) {
+        this.participantStore?.applyAudioActivity(audioSourceId, speaking, sender);
+      }
+    }).catch((caught: Error): void => {
+      console.error(`LiveFloating.set speaking failed: ${caught.message}`);
+    });
   }
 
   private configurePrimarySource(source: GroupCallVideoSource): void {
@@ -519,9 +728,15 @@ export class LiveFloatingWindowController {
   }
 
   private configureRtmpStreams(streams: GroupCallStreamInfo[]): void {
+    if (this.seamlessLiveState !== null) {
+      const next = copyLiveState(this.seamlessLiveState);
+      next.streams = streams;
+      this.seamlessLiveState = next;
+    }
     const ids = uniqueVideoChannelIds(streams);
     if (ids.length === 0) {
       this.requestedEndpoint = '';
+      this.state.visualReady = false;
       this.setPlaybackState('等待主播画面…', false, this.state.recovering);
       return;
     }
@@ -541,11 +756,19 @@ export class LiveFloatingWindowController {
     );
   }
 
-  private scheduleReconnect(delayMs: number, reason: string): void {
-    if (this.descriptor === null || this.reconnectTimer !== -1) { return; }
+  private scheduleReconnect(delayMs: number): void {
+    if (this.descriptor === null || this.state.ended || this.reconnectTimer !== -1) { return; }
     this.reconnectTimer = setTimeout((): void => {
       this.reconnectTimer = -1;
-      this.replaceSession(reason);
+      if (this.descriptor === null || this.state.ended) { return; }
+      // The floating window always owns the exact Session handed off by the
+      // full viewer. Keep it alive; hard rejoin belongs to the full page where
+      // camera and screen-share recovery context is available.
+      this.session?.resumeMedia();
+      this.bindCurrentSurface();
+      this.refreshGroupCall();
+      this.state.error = true;
+      this.setPlaybackState('连接仍未恢复 · 返回直播重试', this.state.hasVideo, true);
     }, Math.max(0, delayMs));
   }
 
@@ -618,12 +841,25 @@ struct FloatingLiveOverlay {
     hasVideo: false,
     recovering: false,
     isRtmp: false,
-    sourceName: ''
+    sourceName: '',
+    visualReady: false,
+    ended: false,
+    isMuted: true,
+    actionBusy: false,
+    error: false
   };
   private off: (() => void) | null = null;
   private surfaceController: XComponentController = new XComponentController();
   private surfaceId: string = '';
   @State controlsVisible: boolean = true;
+  @State dragX: number = 0;
+  @State dragY: number = 0;
+  private panStartX: number = 0;
+  private panStartY: number = 0;
+  private rootOriginX: number = 0;
+  private rootOriginY: number = 0;
+  private dragBounds: FloatingDragBounds | null = null;
+  private dragAnchor: FloatingDragAnchor | null = null;
 
   aboutToAppear(): void {
     this.off = this.controller.subscribe((state: FloatingLiveState): void => {
@@ -669,6 +905,49 @@ struct FloatingLiveOverlay {
     this.controller.collapse();
   }
 
+  private onRootArea(area: Area): void {
+    this.rootOriginX = Number(area.globalPosition.x ?? 0);
+    this.rootOriginY = Number(area.globalPosition.y ?? 0);
+    this.dragBounds = {
+      width: Number(area.width),
+      height: Number(area.height),
+      margin: DRAG_MARGIN
+    };
+    this.reclampDrag();
+  }
+
+  // onAreaChange reports the layout position, which the drag translation does
+  // not move, so this anchor stays the fixed reference the clamp math needs.
+  private onPlayerArea(area: Area): void {
+    this.dragAnchor = {
+      x: Number(area.globalPosition.x ?? 0) - this.rootOriginX,
+      y: Number(area.globalPosition.y ?? 0) - this.rootOriginY,
+      width: Number(area.width),
+      height: Number(area.height)
+    };
+    this.reclampDrag();
+  }
+
+  private reclampDrag(): void {
+    if (this.dragAnchor === null || this.dragBounds === null) { return; }
+    const held = clampFloatingTranslation(
+      this.dragX, this.dragY, this.dragAnchor, this.dragBounds
+    );
+    this.dragX = held.x;
+    this.dragY = held.y;
+  }
+
+  private onPanUpdate(event: GestureEvent): void {
+    if (this.dragAnchor === null || this.dragBounds === null) { return; }
+    const next = dragFloatingTranslation(
+      this.panStartX, this.panStartY,
+      event.offsetX, event.offsetY,
+      this.dragAnchor, this.dragBounds
+    );
+    this.dragX = next.x;
+    this.dragY = next.y;
+  }
+
   build() {
     Column() {
       // Layout-only spacers must not become full-screen touch targets. The
@@ -701,12 +980,17 @@ struct FloatingLiveOverlay {
             .width('100%').height('100%')
             .onClick((): void => this.onPlayerTap());
 
-          if ((!this.state.hasVideo || this.state.recovering) &&
+          if ((!this.state.hasVideo || !this.state.visualReady || this.state.recovering ||
+            this.state.ended) &&
             (!this.state.large || this.controlsVisible)) {
             Column({ space: 7 }) {
               Stack({ alignContent: Alignment.Center }) {
-                Circle({ width: 34, height: 34 }).fill('#384B59');
-                SymbolGlyph($r('sys.symbol.play_fill')).fontSize(16).fontColor([Color.White]);
+                Circle({ width: 34, height: 34 }).fill(
+                  this.state.error ? '#6B3039' : '#384B59'
+                );
+                SymbolGlyph(this.state.error
+                  ? $r('sys.symbol.exclamationmark_circle') : $r('sys.symbol.play_fill'))
+                  .fontSize(16).fontColor([Color.White]);
               }.width(38).height(38);
               Text(this.state.status).fontSize(11).fontColor(FLOAT_SUBTEXT)
                 .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
@@ -727,9 +1011,12 @@ struct FloatingLiveOverlay {
                   .onClick((): void => this.collapsePlayer());
                 }
                 Circle({ width: 6, height: 6 }).fill(
-                  this.state.recovering ? '#F5A623' : FLOAT_RED
+                  this.state.ended ? '#7C8992' :
+                    (this.state.error ? FLOAT_RED :
+                      (this.state.recovering ? '#F5A623' : FLOAT_RED))
                 );
-                Text('LIVE').fontSize(10).fontWeight(FontWeight.Bold).fontColor(Color.White);
+                Text(this.state.ended ? '结束' : (this.state.hasVideo ? 'LIVE' : 'AUDIO'))
+                  .fontSize(10).fontWeight(FontWeight.Bold).fontColor(Color.White);
                 Text(this.state.title).fontSize(11).fontColor(FLOAT_TEXT)
                   .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
                   .layoutWeight(1);
@@ -745,17 +1032,24 @@ struct FloatingLiveOverlay {
               Blank()
                 .onClick((): void => this.onPlayerTap());
               Row({ space: 7 }) {
-                Text(this.state.large ? '点击画面隐藏控件' : '点击画面放大')
-                  .fontSize(10).fontColor(FLOAT_SUBTEXT).layoutWeight(1);
+                Text(this.state.isMuted ? '麦克风已关闭' : '麦克风已开启')
+                  .fontSize(10).fontColor(this.state.isMuted ? FLOAT_SUBTEXT : FLOAT_GREEN)
+                  .layoutWeight(1);
                 Button() {
                   Row({ space: 5 }) {
-                    SymbolGlyph($r('sys.symbol.plus_square_on_square'))
-                      .fontSize(14).fontColor([Color.White]);
-                    Text('返回直播').fontSize(11).fontColor(Color.White);
+                    if (this.state.actionBusy) {
+                      LoadingProgress().width(14).height(14).color(Color.White);
+                    } else {
+                      SymbolGlyph($r('sys.symbol.plus_square_on_square'))
+                        .fontSize(14).fontColor([Color.White]);
+                    }
+                    Text(this.state.actionBusy ? '正在返回' : '返回直播')
+                      .fontSize(11).fontColor(Color.White);
                   }
                 }
                 .height(30).padding({ left: 9, right: 9 })
                 .backgroundColor('#C93390EC').borderRadius(15)
+                .enabled(!this.state.actionBusy)
                 .onClick((): void => { this.controller.restoreFullPage(); });
               }
               .width('100%')
@@ -780,7 +1074,19 @@ struct FloatingLiveOverlay {
         .animation({
           duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 240), curve: Curve.Friction
         })
-        .onAreaChange((_old: Area, _area: Area): void => {
+        // Written after .animation() on purpose: dragging must track the finger
+        // immediately instead of chasing it through the size-change animation.
+        .translate({ x: this.dragX, y: this.dragY })
+        .gesture(
+          PanGesture({ fingers: 1, direction: PanDirection.All, distance: 5 })
+            .onActionStart((): void => {
+              this.panStartX = this.dragX;
+              this.panStartY = this.dragY;
+            })
+            .onActionUpdate((event: GestureEvent): void => this.onPanUpdate(event))
+        )
+        .onAreaChange((_old: Area, area: Area): void => {
+          this.onPlayerArea(area);
           setTimeout((): void => this.refreshSurfaceSize(), 30);
         })
         .transition(
@@ -798,14 +1104,25 @@ struct FloatingLiveOverlay {
     }
     .width('100%').height('100%')
     .padding({ right: 12, bottom: this.bottomSafe + 82, top: this.topSafe + 8 })
-    // The root itself is layout-only. HitTestMode.None still allows children
-    // to participate, so the player remains interactive while every point
-    // outside its real bounds falls through to the current app page.
-    .hitTestBehavior(HitTestMode.None);
+    .onAreaChange((_old: Area, area: Area): void => this.onRootArea(area))
+    // OverlayManager delivers events to the WrappedBuilder content first and
+    // does NOT forward them to the page underneath by default. Transparent (not
+    // None) is the documented mode that lets the hit test continue past this
+    // full-screen root, so the player stays interactive while everything
+    // outside its bounds reaches the current app page.
+    .hitTestBehavior(HitTestMode.Transparent);
   }
 }
 
 @Builder
 function buildFloatingLiveOverlay(args: FloatingOverlayArgs) {
-  FloatingLiveOverlay({ controller: args.controller });
+  // The builder root must be a plain container: a custom-component root makes
+  // ArkUI insert a BuilderProxyNode that cannot carry attributes and swallows
+  // hit tests, blocking every tap on the page beneath the overlay. Transparent
+  // on this real root is what lets touches fall through to the page.
+  Stack() {
+    FloatingLiveOverlay({ controller: args.controller });
+  }
+  .width('100%').height('100%')
+  .hitTestBehavior(HitTestMode.Transparent);
 }

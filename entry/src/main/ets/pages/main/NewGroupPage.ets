@@ -2,12 +2,25 @@ import { router, promptAction } from '@kit.ArkUI';
 import { ContactsStore, ContactItem } from '../../store/ContactsStore';
 import { getTdClient } from '../../tdkit/Globals';
 import { TdError, TdObject, TdRequest } from '../../tdkit/TdTypes';
+import {
+  KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration
+} from '../../store/AppSettings';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
 import { AvatarView } from '../chatlist/AvatarView';
-import { searchPublicUsers } from '../../store/PublicUserSearch';
+import {
+  PublicUserSearchResult, searchPublicUsersDetailed
+} from '../../store/PublicUserSearch';
+import {
+  NewBasicGroupResult, maxSelectableBasicGroupMembers, newGroupCreationErrorText,
+  newGroupCreationOutcomeUncertain, newGroupTitleError, parseNewBasicGroupResult
+} from '../../util/newGroupLogic';
 
 const PAGE_BG: ResourceColor = $r('app.color.page_bg');
 const CARD_BG: ResourceColor = $r('app.color.surface');
+const CARD_RADIUS: number = 14;
+const SEARCH_DELAY_MS: number = 350;
+const DEFAULT_BASIC_GROUP_SIZE_MAX: number = 200;
+const SKELETON_ROWS: number[] = [0, 1, 2, 3, 4];
 
 @Entry
 @Component
@@ -16,31 +29,93 @@ struct NewGroupPage {
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @State contacts: ContactItem[] = [];
   @State loading: boolean = true;
+  @State loadError: string = '';
   @State query: string = '';
   @State remoteUsers: ContactItem[] = [];
   @State knownRemoteUsers: ContactItem[] = [];
-  @State remoteLoading: boolean = false;
+  @State remoteState: string = 'idle'; // idle | loading | ready | empty | error | timeout
+  @State searchFocused: boolean = false;
   @State selectedIds: number[] = [];
   @State naming: boolean = false;
+  // 'group'（基础群）| 'channel'（createNewSupergroupChat is_channel）。
+  @State kind: string = 'group';
+  @State channelDescription: string = '';
   @State title: string = '';
+  @State titleError: string = '';
+  @State createError: string = '';
   @State creating: boolean = false;
+  @State openingCreatedChat: boolean = false;
+  @State createdChatId: number = 0;
+  @State creationOutcomeUnknown: boolean = false;
+  @State maxSelectableMembers: number = DEFAULT_BASIC_GROUP_SIZE_MAX - 1;
+  @State skeletonBright: boolean = false;
   private store: ContactsStore | null = null;
   private unsubscribe: (() => void) | null = null;
   private searchTimer: number = -1;
+  private skeletonTimer: number = -1;
   private searchSequence: number = 0;
+  private creationSequence: number = 0;
+  private active: boolean = false;
+
+  @Styles
+  topActionNormalStyle() {
+    .backgroundColor(Color.Transparent)
+    .opacity(1)
+    .scale({ x: 1, y: 1 })
+  }
+
+  @Styles
+  topActionPressedStyle() {
+    .backgroundColor($r('app.color.surface_alt'))
+    .opacity(0.74)
+    .scale({ x: 0.92, y: 0.92 })
+  }
+
+  @Styles
+  rowNormalStyle() {
+    .backgroundColor(CARD_BG)
+  }
+
+  @Styles
+  rowPressedStyle() {
+    .backgroundColor($r('app.color.surface_alt'))
+  }
+
+  @Styles
+  primaryActionNormalStyle() {
+    .opacity(1)
+    .scale({ x: 1, y: 1 })
+  }
+
+  @Styles
+  primaryActionPressedStyle() {
+    .opacity(0.72)
+    .scale({ x: 0.95, y: 0.95 })
+  }
 
   aboutToAppear(): void {
+    this.active = true;
+    this.loadBasicGroupLimit();
     const store = new ContactsStore(getTdClient());
     this.store = store;
     this.unsubscribe = store.subscribe((): void => {
       this.contacts = store.contacts;
       this.loading = store.loading;
+      this.loadError = store.errorMessage;
+      if (store.loading && store.contacts.length === 0) {
+        this.startSkeletonPulse();
+      } else {
+        this.stopSkeletonPulse();
+      }
     });
     store.open();
   }
 
   aboutToDisappear(): void {
+    this.active = false;
     this.searchSequence++;
+    this.creationSequence++;
+    this.stopSkeletonPulse();
     if (this.searchTimer !== -1) {
       clearTimeout(this.searchTimer);
       this.searchTimer = -1;
@@ -55,8 +130,56 @@ struct NewGroupPage {
     }
   }
 
+  onBackPress(): boolean {
+    if (this.creating || this.openingCreatedChat) { return true; }
+    if (this.naming) {
+      this.back();
+      return true;
+    }
+    return false;
+  }
+
+  private animationDuration(fallback: number): number {
+    return powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, fallback);
+  }
+
+  private startSkeletonPulse(): void {
+    if (this.skeletonTimer !== -1 || this.animationDuration(1) === 0) { return; }
+    this.skeletonTimer = setInterval((): void => {
+      this.skeletonBright = !this.skeletonBright;
+    }, 680);
+  }
+
+  private stopSkeletonPulse(): void {
+    if (this.skeletonTimer !== -1) {
+      clearInterval(this.skeletonTimer);
+      this.skeletonTimer = -1;
+    }
+    this.skeletonBright = false;
+  }
+
+  private loadBasicGroupLimit(): void {
+    const request: TdRequest = { '@type': 'getOption' };
+    request['name'] = 'basic_group_size_max';
+    getTdClient().send(request).then((result: TdObject): void => {
+      if (!this.active) { return; }
+      const sizeMax = (result['value'] as number | undefined) ?? DEFAULT_BASIC_GROUP_SIZE_MAX;
+      this.maxSelectableMembers = maxSelectableBasicGroupMembers(sizeMax);
+    }).catch((error: TdError): void => {
+      console.warn(`NewGroupPage basic_group_size_max failed: ${error.message}`);
+    });
+  }
+
+  private retryContacts(): void {
+    if (this.store !== null && !this.loading) { this.store.reload(); }
+  }
+
   private onQueryChanged(value: string): void {
     this.query = value;
+    this.scheduleRemoteSearch(value, SEARCH_DELAY_MS);
+  }
+
+  private scheduleRemoteSearch(value: string, delayMs: number): void {
     const sequence = ++this.searchSequence;
     if (this.searchTimer !== -1) {
       clearTimeout(this.searchTimer);
@@ -65,45 +188,52 @@ struct NewGroupPage {
     const normalized = value.trim().replace(/^@/, '');
     if (normalized.length < 2) {
       this.remoteUsers = [];
-      this.remoteLoading = false;
+      this.remoteState = 'idle';
       return;
     }
-    this.remoteLoading = true;
-    this.searchTimer = setTimeout((): void => {
+    this.remoteState = 'loading';
+    const run = (): void => {
       this.searchTimer = -1;
-      searchPublicUsers(getTdClient(), value).then((users: ContactItem[]): void => {
-        if (sequence !== this.searchSequence) {
-          return;
-        }
-        this.remoteUsers = users;
-        const known = [...this.knownRemoteUsers];
-        for (const user of users) {
-          if (!known.some((item: ContactItem): boolean => item.id === user.id)) {
-            known.push(user);
+      searchPublicUsersDetailed(getTdClient(), value).then(
+        (result: PublicUserSearchResult): void => {
+          if (!this.active || sequence !== this.searchSequence) { return; }
+          this.remoteUsers = result.users;
+          const known = [...this.knownRemoteUsers];
+          for (const user of result.users) {
+            if (!known.some((item: ContactItem): boolean => item.id === user.id)) {
+              known.push(user);
+            }
           }
+          this.knownRemoteUsers = known;
+          this.remoteState = result.state;
         }
-        this.knownRemoteUsers = known;
-        this.remoteLoading = false;
-      }).catch((error: TdError): void => {
-        if (sequence !== this.searchSequence) {
-          return;
-        }
+      ).catch((error: TdError): void => {
+        if (!this.active || sequence !== this.searchSequence) { return; }
         console.warn(`NewGroupPage.searchPublicUsers failed: ${error.message}`);
         this.remoteUsers = [];
-        this.remoteLoading = false;
+        this.remoteState = 'error';
       });
-    }, 350);
+    };
+    if (delayMs <= 0) { run(); } else { this.searchTimer = setTimeout(run, delayMs); }
+  }
+
+  private retryRemoteSearch(): void {
+    if (this.query.trim().replace(/^@/, '').length >= 2) {
+      this.scheduleRemoteSearch(this.query, 0);
+    }
+  }
+
+  private clearSearch(): void {
+    this.onQueryChanged('');
   }
 
   private filteredContacts(): ContactItem[] {
     const value = this.query.trim().toLowerCase();
-    if (value === '') {
-      return this.contacts;
-    }
+    if (value === '') { return this.contacts; }
     const localQuery = value.replace(/^@/, '');
     const result = this.contacts.filter((contact: ContactItem): boolean =>
-      contact.name.toLowerCase().includes(localQuery) ||
-        contact.statusText.toLowerCase().includes(value)
+      contact.name.toLowerCase().indexOf(localQuery) >= 0 ||
+        contact.statusText.toLowerCase().indexOf(value) >= 0
     );
     for (const user of this.remoteUsers) {
       if (!result.some((item: ContactItem): boolean => item.id === user.id)) {
@@ -118,71 +248,198 @@ struct NewGroupPage {
   }
 
   private toggle(userId: number): void {
+    if (this.creating || this.openingCreatedChat) { return; }
+    let next: number[];
     if (this.selected(userId)) {
-      this.selectedIds = this.selectedIds.filter((id: number): boolean => id !== userId);
+      next = this.selectedIds.filter((id: number): boolean => id !== userId);
     } else {
-      this.selectedIds = [...this.selectedIds, userId];
+      if (this.selectedIds.length >= this.maxSelectableMembers) {
+        promptAction.showToast({
+          message: `基础群最多可选择 ${this.maxSelectableMembers} 位成员`, duration: 1800
+        });
+        return;
+      }
+      next = [...this.selectedIds, userId];
     }
+    animateTo({ duration: this.animationDuration(170), curve: Curve.EaseOut }, (): void => {
+      this.selectedIds = next;
+    });
   }
 
   private contactFor(userId: number): ContactItem {
     const contact = [...this.contacts, ...this.knownRemoteUsers]
       .find((item: ContactItem): boolean => item.id === userId);
-    if (contact !== undefined) {
-      return contact;
-    }
+    if (contact !== undefined) { return contact; }
     return {
-      id: userId,
-      name: '联系人',
-      initials: '?',
-      avatarPath: '',
-      statusText: '',
-      online: false,
-      sortKey: 0
+      id: userId, name: '联系人', initials: '?', avatarPath: '', statusText: '',
+      online: false, sortKey: 0
     };
   }
 
   private goNext(): void {
-    if (this.selectedIds.length === 0) {
-      promptAction.showToast({ message: '请至少选择一位联系人', duration: 1600 });
-      return;
-    }
-    this.naming = true;
+    if (this.selectedIds.length === 0) { return; }
+    this.titleError = '';
+    this.createError = '';
+    animateTo({ duration: this.animationDuration(220), curve: Curve.EaseOut }, (): void => {
+      this.naming = true;
+    });
+    setTimeout((): void => {
+      if (this.active && this.naming) { focusControl.requestFocus('new_group_title'); }
+    }, this.animationDuration(220) + 20);
+  }
+
+  private createActionEnabled(): boolean {
+    if (!this.naming) { return this.selectedIds.length > 0 && !this.loading; }
+    if (this.creating || this.openingCreatedChat || this.creationOutcomeUnknown) { return false; }
+    if (this.createdChatId > 0) { return true; }
+    // 频道不要求成员（创建后可选拉人）。
+    return newGroupTitleError(this.title) === '' &&
+      (this.kind === 'channel' || this.selectedIds.length > 0);
+  }
+
+  private headerActionText(): string {
+    if (!this.naming) { return '下一步'; }
+    if (this.openingCreatedChat) { return '正在打开'; }
+    if (this.creating) { return '创建中'; }
+    if (this.createdChatId > 0) { return '打开'; }
+    return '创建';
   }
 
   private createGroup(): void {
+    if (this.createdChatId > 0) {
+      this.openCreatedGroup();
+      return;
+    }
+    if (this.creating || this.openingCreatedChat || this.creationOutcomeUnknown) { return; }
+    const validation = newGroupTitleError(this.title);
+    if (validation !== '') {
+      this.titleError = validation;
+      return;
+    }
+    if (this.kind === 'channel') {
+      this.createChannel();
+      return;
+    }
+    if (this.selectedIds.length === 0 || this.selectedIds.length > this.maxSelectableMembers) {
+      this.createError = '请返回并重新选择群组成员';
+      return;
+    }
     const groupTitle = this.title.trim();
-    if (groupTitle === '') {
-      promptAction.showToast({ message: '请输入群组名称', duration: 1600 });
-      return;
-    }
-    if (this.creating) {
-      return;
-    }
+    const selectedSnapshot = this.selectedIds.slice();
+    const sequence = ++this.creationSequence;
+    this.titleError = '';
+    this.createError = '';
     this.creating = true;
     const request: TdRequest = { '@type': 'createNewBasicGroupChat' };
-    request['user_ids'] = this.selectedIds;
+    request['user_ids'] = selectedSnapshot;
     request['title'] = groupTitle;
     request['message_auto_delete_time'] = 0;
-    getTdClient().send(request).then((chat: TdObject): void => {
+    getTdClient().send(request, 20000).then((result: TdObject): void => {
+      if (!this.active || sequence !== this.creationSequence) { return; }
       this.creating = false;
-      const chatId = (chat['id'] as number | undefined) ?? 0;
-      if (chatId <= 0) {
-        promptAction.showToast({ message: '群组创建失败，请重试', duration: 1800 });
+      const parsed: NewBasicGroupResult = parseNewBasicGroupResult(result);
+      if (parsed.chatId <= 0) {
+        // A malformed success must never turn the Create button back into a
+        // second create request; the first group may already exist remotely.
+        this.creationOutcomeUnknown = true;
+        this.createError = '创建结果暂时无法确认，请返回聊天列表查看，避免重复创建';
         return;
       }
-      const params: Record<string, Object> = { 'chatId': chatId };
-      router.replaceUrl({ url: 'pages/chat/ChatPage', params: params });
+      this.createdChatId = parsed.chatId;
+      if (parsed.failedUserIds.length > 0) {
+        const names = parsed.failedUserIds.slice(0, 2).map(
+          (userId: number): string => this.contactFor(userId).name
+        ).join('、');
+        const suffix = parsed.failedUserIds.length > 2
+          ? `${names} 等 ${parsed.failedUserIds.length} 人` : names;
+        promptAction.showToast({
+          message: `群组已创建，但 ${suffix} 因权限或隐私限制未能加入`, duration: 2600
+        });
+      }
+      this.openCreatedGroup();
     }).catch((error: TdError): void => {
+      if (!this.active || sequence !== this.creationSequence) { return; }
       this.creating = false;
+      if (newGroupCreationOutcomeUncertain(error.message)) {
+        this.creationOutcomeUnknown = true;
+        this.createError = '创建请求超时，结果暂时无法确认；请返回聊天列表查看，避免重复创建';
+      } else {
+        this.createError = newGroupCreationErrorText(error.message);
+      }
       console.error(`NewGroupPage.createNewBasicGroupChat failed: ${error.message}`);
-      promptAction.showToast({ message: `群组创建失败：${error.message}`, duration: 2200 });
+    });
+  }
+
+  // 频道：createNewSupergroupChat(is_channel) → 可选 addChatMembers。
+  private createChannel(): void {
+    const channelTitle = this.title.trim();
+    const selectedSnapshot = this.selectedIds.slice();
+    const sequence = ++this.creationSequence;
+    this.titleError = '';
+    this.createError = '';
+    this.creating = true;
+    const request: TdRequest = { '@type': 'createNewSupergroupChat' };
+    request['title'] = channelTitle;
+    request['is_channel'] = true;
+    request['is_forum'] = false;
+    request['description'] = this.channelDescription.trim();
+    getTdClient().send(request, 20000).then((result: TdObject): void => {
+      if (!this.active || sequence !== this.creationSequence) { return; }
+      this.creating = false;
+      const chatId: number = (result['id'] as number | undefined) ?? 0;
+      if (chatId <= 0) {
+        this.creationOutcomeUnknown = true;
+        this.createError = '创建结果暂时无法确认，请返回聊天列表查看，避免重复创建';
+        return;
+      }
+      this.createdChatId = chatId;
+      if (selectedSnapshot.length > 0) {
+        const invite: TdRequest = { '@type': 'addChatMembers' };
+        invite['chat_id'] = chatId;
+        invite['user_ids'] = selectedSnapshot;
+        getTdClient().send(invite).catch((error: TdError): void => {
+          console.error(`NewGroupPage.addChatMembers failed: ${error.message}`);
+          promptAction.showToast({
+            message: '频道已创建，但部分成员因权限或隐私限制未能加入', duration: 2600
+          });
+        });
+      }
+      this.openCreatedGroup();
+    }).catch((error: TdError): void => {
+      if (!this.active || sequence !== this.creationSequence) { return; }
+      this.creating = false;
+      if (newGroupCreationOutcomeUncertain(error.message)) {
+        this.creationOutcomeUnknown = true;
+        this.createError = '创建请求超时，结果暂时无法确认；请返回聊天列表查看，避免重复创建';
+      } else {
+        this.createError = newGroupCreationErrorText(error.message);
+      }
+      console.error(`NewGroupPage.createNewSupergroupChat failed: ${error.message}`);
+    });
+  }
+
+  private openCreatedGroup(): void {
+    const chatId = this.createdChatId;
+    if (chatId <= 0 || this.openingCreatedChat) { return; }
+    this.openingCreatedChat = true;
+    this.createError = '';
+    const params: Record<string, Object> = { 'chatId': chatId };
+    router.replaceUrl({ url: 'pages/chat/ChatPage', params: params }).catch((error: Error): void => {
+      if (!this.active) { return; }
+      this.openingCreatedChat = false;
+      this.createError = '群组已经创建，但暂时无法打开；点击“打开”重试';
+      console.error(`NewGroupPage.openCreatedGroup failed: ${error.message}`);
     });
   }
 
   private back(): void {
+    if (this.creating || this.openingCreatedChat) { return; }
     if (this.naming) {
-      this.naming = false;
+      animateTo({ duration: this.animationDuration(210), curve: Curve.EaseOut }, (): void => {
+        this.naming = false;
+        this.titleError = '';
+        this.createError = '';
+      });
       return;
     }
     router.back();
@@ -190,67 +447,83 @@ struct NewGroupPage {
 
   @Builder
   header() {
-    Row({ space: 12 }) {
+    Row({ space: 8 }) {
       Row() {
-        SymbolGlyph($r('sys.symbol.chevron_left'))
-          .fontSize(24)
-          .fontColor([COLOR_TEXT_PRIMARY]);
+        SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(24).fontColor([COLOR_TEXT_PRIMARY]);
       }
-      .width(40).height(40)
-      .justifyContent(FlexAlign.Center)
-      .onClick((): void => { this.back(); });
+      .width(44).height(44).borderRadius(22).justifyContent(FlexAlign.Center)
+      .enabled(!this.creating && !this.openingCreatedChat)
+      .opacity(this.creating || this.openingCreatedChat ? 0.42 : 1)
+      .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
+      .accessibilityText(this.naming ? '返回成员选择' : '返回')
+      .onClick((): void => this.back());
 
       Column({ space: 1 }) {
         Text(this.naming ? '新建群组' : '添加成员')
-          .fontSize(22)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(COLOR_TEXT_PRIMARY);
+          .fontSize(21).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
         Text(this.naming ? `${this.selectedIds.length} 位成员` :
-          (this.selectedIds.length > 0 ? `已选择 ${this.selectedIds.length} 人` : '选择群组成员'))
-          .fontSize(12)
-          .fontColor(COLOR_TEXT_SECONDARY);
+          (this.selectedIds.length > 0
+            ? `已选择 ${this.selectedIds.length}/${this.maxSelectableMembers} 人`
+            : '选择群组成员'))
+          .fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
       }
-      .alignItems(HorizontalAlign.Start)
-      .layoutWeight(1);
+      .alignItems(HorizontalAlign.Start).layoutWeight(1);
 
-      Text(this.naming ? (this.creating ? '创建中' : '创建') : '下一步')
-        .fontSize(16)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(this.creating ? COLOR_TEXT_SECONDARY : COLOR_PRIMARY)
-        .padding({ left: 10, right: 4, top: 10, bottom: 10 })
-        .onClick((): void => {
-          if (this.naming) {
-            this.createGroup();
-          } else {
-            this.goNext();
-          }
-        });
+      Row({ space: 5 }) {
+        if (this.creating || this.openingCreatedChat) {
+          LoadingProgress().width(16).height(16).color(COLOR_PRIMARY);
+        }
+        Text(this.headerActionText())
+          .fontSize(15).fontWeight(FontWeight.Medium)
+          .fontColor(this.createActionEnabled() ? COLOR_PRIMARY : COLOR_TEXT_SECONDARY);
+      }
+      .height(44).padding({ left: 10, right: 8 }).borderRadius(22)
+      .enabled(this.createActionEnabled())
+      .opacity(this.createActionEnabled() || this.creating || this.openingCreatedChat ? 1 : 0.48)
+      .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
+      .accessibilityText(this.headerActionText())
+      .onClick((): void => {
+        if (this.naming) { this.createGroup(); } else { this.goNext(); }
+      });
     }
-    .width('100%')
-    .height(58)
-    .padding({ left: 8, right: 14 })
-    .alignItems(VerticalAlign.Center);
+    .width('100%').height(58).padding({ left: 6, right: 8 })
+    .alignItems(VerticalAlign.Center).backgroundColor(PAGE_BG);
   }
 
   @Builder
   searchBox() {
     Row({ space: 8 }) {
       SymbolGlyph($r('sys.symbol.magnifyingglass'))
-        .fontSize(17)
-        .fontColor([COLOR_TEXT_SECONDARY]);
+        .fontSize(18).fontColor([this.searchFocused ? COLOR_PRIMARY : COLOR_TEXT_SECONDARY])
+        .animation({ duration: this.animationDuration(150), curve: Curve.EaseOut });
       TextInput({ text: this.query, placeholder: '搜索联系人或 @用户名' })
-        .layoutWeight(1)
-        .height(42)
-        .fontSize(16)
-        .backgroundColor(Color.Transparent)
-        .padding(0)
-        .onChange((value: string): void => { this.onQueryChanged(value); });
+        .layoutWeight(1).height(38).fontSize(16)
+        .backgroundColor(Color.Transparent).padding(0).borderRadius(0)
+        .placeholderColor(COLOR_TEXT_SECONDARY).caretColor(COLOR_PRIMARY)
+        .enterKeyType(EnterKeyType.Search)
+        .onFocus((): void => { this.searchFocused = true; })
+        .onBlur((): void => { this.searchFocused = false; })
+        .onSubmit((): void => this.retryRemoteSearch())
+        .onChange((value: string): void => this.onQueryChanged(value));
+      if (this.remoteState === 'loading') {
+        LoadingProgress().width(18).height(18).color(COLOR_PRIMARY)
+          .transition(TransitionEffect.OPACITY.combine(
+            TransitionEffect.scale({ x: 0.75, y: 0.75 })
+          ).animation({ duration: this.animationDuration(150), curve: Curve.EaseOut }));
+      } else if (this.query !== '') {
+        Row() {
+          SymbolGlyph($r('sys.symbol.xmark_circle')).fontSize(19).fontColor([COLOR_TEXT_SECONDARY]);
+        }
+        .width(32).height(32).borderRadius(16).justifyContent(FlexAlign.Center)
+        .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
+        .accessibilityText('清空搜索').onClick((): void => this.clearSearch());
+      }
     }
-    .height(46)
-    .padding({ left: 13, right: 13 })
-    .margin({ left: 14, right: 14, top: 4, bottom: 8 })
-    .backgroundColor(CARD_BG)
-    .borderRadius(14);
+    .width('calc(100% - 24vp)').height(46).padding({ left: 13, right: 9 })
+    .margin({ left: 12, right: 12, top: 4, bottom: 8 })
+    .backgroundColor(CARD_BG).borderRadius(23)
+    .border({ width: 1, color: this.searchFocused ? COLOR_PRIMARY : Color.Transparent })
+    .animation({ duration: this.animationDuration(150), curve: Curve.EaseOut });
   }
 
   @Builder
@@ -258,28 +531,26 @@ struct NewGroupPage {
     Column({ space: 3 }) {
       Stack({ alignContent: Alignment.TopEnd }) {
         AvatarView({
-          avatarPath: contact.avatarPath,
-          initials: contact.initials,
-          colorSeed: contact.id,
-          avatarSize: 46
+          avatarPath: contact.avatarPath, initials: contact.initials,
+          colorSeed: contact.id, avatarSize: 46
         });
         Row() {
           SymbolGlyph($r('sys.symbol.xmark')).fontSize(10).fontColor([Color.White]);
         }
-        .width(18).height(18).borderRadius(9)
-        .backgroundColor('#8E8E93')
-        .justifyContent(FlexAlign.Center)
-        .offset({ x: 4, y: -4 });
+        .width(18).height(18).borderRadius(9).backgroundColor('#8E8E93')
+        .justifyContent(FlexAlign.Center).offset({ x: 4, y: -4 });
       }
-      Text(contact.name)
-        .fontSize(11)
-        .fontColor(COLOR_TEXT_PRIMARY)
-        .maxLines(1)
-        .width(62)
-        .textAlign(TextAlign.Center)
+      Text(contact.name).fontSize(11).fontColor(COLOR_TEXT_PRIMARY).maxLines(1)
+        .width(62).textAlign(TextAlign.Center)
         .textOverflow({ overflow: TextOverflow.Ellipsis });
     }
-    .onClick((): void => { this.toggle(contact.id); });
+    .padding({ top: 2, bottom: 2 }).borderRadius(12)
+    .stateStyles({ normal: this.primaryActionNormalStyle, pressed: this.primaryActionPressedStyle })
+    .accessibilityText(`移除成员 ${contact.name}`)
+    .onClick((): void => this.toggle(contact.id))
+    .transition(TransitionEffect.OPACITY.combine(
+      TransitionEffect.scale({ x: 0.78, y: 0.78 })
+    ).animation({ duration: this.animationDuration(180), curve: Curve.EaseOut }));
   }
 
   @Builder
@@ -291,11 +562,12 @@ struct NewGroupPage {
             this.selectedChip(this.contactFor(userId));
           }, (userId: number): string => `${userId}`);
         }
-        .padding({ left: 16, right: 16, top: 6, bottom: 8 });
+        .padding({ left: 16, right: 16, top: 5, bottom: 9 });
       }
-      .scrollable(ScrollDirection.Horizontal)
-      .scrollBar(BarState.Off)
-      .width('100%');
+      .scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).width('100%')
+      .transition(TransitionEffect.OPACITY.combine(
+        TransitionEffect.translate({ y: -8 })
+      ).animation({ duration: this.animationDuration(190), curve: Curve.EaseOut }));
     }
   }
 
@@ -303,40 +575,189 @@ struct NewGroupPage {
   contactRow(contact: ContactItem) {
     Row({ space: 13 }) {
       AvatarView({
-        avatarPath: contact.avatarPath,
-        initials: contact.initials,
-        colorSeed: contact.id,
-        avatarSize: 48
+        avatarPath: contact.avatarPath, initials: contact.initials,
+        colorSeed: contact.id, avatarSize: 48
       });
       Column({ space: 2 }) {
-        Text(contact.name)
-          .fontSize(16)
-          .fontColor(COLOR_TEXT_PRIMARY)
-          .maxLines(1)
+        Text(contact.name).fontSize(16).fontColor(COLOR_TEXT_PRIMARY).maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
-        Text(contact.statusText)
-          .fontSize(13)
-          .fontColor(contact.online ? COLOR_PRIMARY : COLOR_TEXT_SECONDARY);
+        Text(contact.statusText).fontSize(13)
+          .fontColor(contact.online ? COLOR_PRIMARY : COLOR_TEXT_SECONDARY)
+          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
       }
-      .alignItems(HorizontalAlign.Start)
-      .layoutWeight(1);
+      .alignItems(HorizontalAlign.Start).layoutWeight(1);
       Row() {
         if (this.selected(contact.id)) {
-          SymbolGlyph($r('sys.symbol.checkmark'))
-            .fontSize(15)
-            .fontColor([Color.White]);
+          SymbolGlyph($r('sys.symbol.checkmark')).fontSize(15).fontColor([Color.White])
+            .transition(TransitionEffect.OPACITY.combine(
+              TransitionEffect.scale({ x: 0.55, y: 0.55 })
+            ).animation({ duration: this.animationDuration(150), curve: Curve.EaseOut }));
         }
       }
-      .width(24).height(24)
-      .borderRadius(12)
+      .width(24).height(24).borderRadius(12)
       .border({ width: this.selected(contact.id) ? 0 : 1.5, color: '#C7C7CC' })
       .backgroundColor(this.selected(contact.id) ? COLOR_PRIMARY : Color.Transparent)
-      .justifyContent(FlexAlign.Center);
+      .justifyContent(FlexAlign.Center)
+      .animation({ duration: this.animationDuration(150), curve: Curve.EaseOut });
     }
-    .width('100%')
-    .padding({ left: 16, right: 18, top: 8, bottom: 8 })
+    .width('100%').padding({ left: 12, right: 14, top: 8, bottom: 8 })
     .alignItems(VerticalAlign.Center)
-    .onClick((): void => { this.toggle(contact.id); });
+    .stateStyles({ normal: this.rowNormalStyle, pressed: this.rowPressedStyle })
+    .accessibilityText(`${contact.name}，${this.selected(contact.id) ? '已选择' : '未选择'}`)
+    .onClick((): void => this.toggle(contact.id));
+  }
+
+  @Builder
+  skeletonRow(index: number) {
+    Row({ space: 13 }) {
+      Circle({ width: 48, height: 48 }).fill($r('app.color.surface_alt'));
+      Column({ space: 7 }) {
+        Row().width(index % 2 === 0 ? '48%' : '58%').height(13)
+          .borderRadius(7).backgroundColor($r('app.color.surface_alt'));
+        Row().width(index % 2 === 0 ? '68%' : '43%').height(10)
+          .borderRadius(5).backgroundColor($r('app.color.surface_alt'));
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+      Circle({ width: 24, height: 24 }).fill($r('app.color.surface_alt'));
+    }
+    .width('100%').height(64).padding({ left: 12, right: 14 });
+  }
+
+  @Builder
+  loadingState() {
+    Column() {
+      ForEach(SKELETON_ROWS, (index: number): void => this.skeletonRow(index),
+        (index: number): string => `${index}`);
+    }
+    .width('calc(100% - 24vp)').margin({ left: 12, right: 12, top: 4 })
+    .backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
+    .opacity(this.skeletonBright ? 0.56 : 0.94)
+    .animation({ duration: this.animationDuration(640), curve: Curve.EaseInOut })
+    .transition(TransitionEffect.OPACITY.animation({
+      duration: this.animationDuration(160), curve: Curve.EaseOut
+    }));
+  }
+
+  @Builder
+  centeredState(icon: Resource, title: string, detail: string, retryKind: string) {
+    Column({ space: 8 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        Circle({ width: 58, height: 58 }).fill($r('app.color.surface_alt'));
+        SymbolGlyph(icon).fontSize(28).fontColor([COLOR_TEXT_SECONDARY]);
+      }
+      Text(title).fontSize(17).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+      Text(detail).fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
+        .textAlign(TextAlign.Center).constraintSize({ maxWidth: 280 });
+      if (retryKind !== '') {
+        Row({ space: 6 }) {
+          SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(14).fontColor([Color.White]);
+          Text('重新加载').fontSize(14).fontWeight(FontWeight.Medium).fontColor(Color.White);
+        }
+        .height(38).padding({ left: 15, right: 16 }).borderRadius(19)
+        .backgroundColor(COLOR_PRIMARY)
+        .stateStyles({ normal: this.primaryActionNormalStyle, pressed: this.primaryActionPressedStyle })
+        .onClick((): void => {
+          if (retryKind === 'contacts') { this.retryContacts(); } else { this.retryRemoteSearch(); }
+        });
+      }
+    }
+    .layoutWeight(1).width('calc(100% - 24vp)')
+    .margin({ left: 12, right: 12, top: 4, bottom: this.bottomSafe + 12 })
+    .justifyContent(FlexAlign.Center).backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
+    .transition(TransitionEffect.OPACITY.combine(
+      TransitionEffect.scale({ x: 0.97, y: 0.97 })
+    ).animation({ duration: this.animationDuration(180), curve: Curve.EaseOut }));
+  }
+
+  private shouldShowRemoteError(): boolean {
+    return this.remoteState === 'error' || this.remoteState === 'timeout';
+  }
+
+  private isShortRemoteQuery(): boolean {
+    return this.query.trim().replace(/^@/, '').length < 2;
+  }
+
+  @Builder
+  searchStatusRow() {
+    if (this.remoteState === 'loading') {
+      Row({ space: 8 }) {
+        LoadingProgress().width(18).height(18).color(COLOR_PRIMARY);
+        Text('正在搜索陌生用户…').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+      }.width('100%').height(50).justifyContent(FlexAlign.Center);
+    } else if (this.shouldShowRemoteError()) {
+      Row({ space: 7 }) {
+        SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+          .fontSize(14).fontColor([COLOR_PRIMARY]);
+        Text(this.remoteState === 'timeout' ? '搜索超时' : '陌生用户搜索失败')
+          .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+        Text('重试').fontSize(12).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY);
+      }
+      .width('100%').height(46).justifyContent(FlexAlign.Center)
+      .stateStyles({ normal: this.rowNormalStyle, pressed: this.rowPressedStyle })
+      .onClick((): void => this.retryRemoteSearch());
+    }
+  }
+
+  @Builder
+  contactList() {
+    List() {
+      ForEach(this.filteredContacts(), (contact: ContactItem) => {
+        ListItem() {
+          Column() {
+            this.contactRow(contact);
+            Divider().strokeWidth(0.5).color($r('app.color.divider')).margin({ left: 73 });
+          }
+        }
+        .transition(TransitionEffect.OPACITY.combine(
+          TransitionEffect.translate({ x: 10 })
+        ).animation({ duration: this.animationDuration(170), curve: Curve.EaseOut }));
+      }, (contact: ContactItem): string =>
+        `${contact.id}_${contact.avatarPath}_${this.selected(contact.id)}`
+      );
+      if (this.remoteState === 'loading' || this.shouldShowRemoteError()) {
+        ListItem() { this.searchStatusRow(); }
+      }
+    }
+    .layoutWeight(1).width('calc(100% - 24vp)')
+    .margin({ left: 12, right: 12, top: 4 })
+    .backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
+    .scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring)
+    .contentEndOffset(this.bottomSafe + 12);
+  }
+
+  @Builder
+  memberContent() {
+    if (this.loading && this.contacts.length === 0 && this.query.trim() === '') {
+      this.loadingState();
+    } else if (this.filteredContacts().length > 0) {
+      this.contactList();
+    } else if (this.query.trim() === '' && this.loadError !== '') {
+      this.centeredState(
+        $r('sys.symbol.exclamationmark_circle'), '联系人加载失败',
+        '无法读取联系人，请检查网络后重试', 'contacts'
+      );
+    } else if (this.query.trim() === '') {
+      this.centeredState(
+        $r('sys.symbol.person_2'), '暂无联系人',
+        '可以在搜索框输入 @用户名查找并选择陌生用户', ''
+      );
+    } else if (this.remoteState === 'loading') {
+      this.centeredState(
+        $r('sys.symbol.magnifyingglass'), '正在搜索用户',
+        '正在同时搜索本地联系人和公开用户名', ''
+      );
+    } else if (this.shouldShowRemoteError()) {
+      this.centeredState(
+        $r('sys.symbol.exclamationmark_circle'),
+        this.remoteState === 'timeout' ? '搜索超时' : '搜索失败',
+        '网络恢复后可以重新搜索，不会影响已选择的成员', 'search'
+      );
+    } else {
+      this.centeredState(
+        $r('sys.symbol.person_2'), this.isShortRemoteQuery() ? '继续输入' : '没有找到用户',
+        this.isShortRemoteQuery()
+          ? '至少输入 2 个字符后会搜索公开用户名' : '请检查姓名或 @用户名是否正确', ''
+      );
+    }
   }
 
   @Builder
@@ -344,123 +765,155 @@ struct NewGroupPage {
     Column() {
       this.searchBox();
       this.selectedSummary();
-      if (this.loading) {
-        Column({ space: 10 }) {
-          LoadingProgress().width(30).height(30).color(COLOR_PRIMARY);
-          Text('正在加载联系人…').fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
-        }
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center);
-      } else if (this.filteredContacts().length === 0 && !this.remoteLoading) {
-        Column({ space: 8 }) {
-          SymbolGlyph($r('sys.symbol.person_2')).fontSize(42).fontColor([COLOR_TEXT_SECONDARY]);
-          Text(this.query.trim() === '' ? '暂无联系人' : '没有找到用户')
-            .fontSize(15).fontColor(COLOR_TEXT_SECONDARY);
-        }
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center);
-      } else {
-        List() {
-          ForEach(this.filteredContacts(), (contact: ContactItem) => {
-            ListItem() {
-              Column() {
-                this.contactRow(contact);
-                Divider().strokeWidth(0.5).color($r('app.color.divider')).margin({ left: 77 });
-              }
-            }
-          }, (contact: ContactItem): string =>
-            `${contact.id}_${contact.avatarPath}_${this.selected(contact.id)}`
-          );
-          if (this.remoteLoading) {
-            ListItem() {
-              Row({ space: 8 }) {
-                LoadingProgress().width(18).height(18).color(COLOR_PRIMARY);
-                Text('正在搜索陌生用户…').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
-              }
-              .width('100%')
-              .height(54)
-              .justifyContent(FlexAlign.Center);
-            }
-          }
-        }
-        .layoutWeight(1)
-        .scrollBar(BarState.Off)
-        .edgeEffect(EdgeEffect.Spring);
-      }
+      this.memberContent();
     }
-    .layoutWeight(1);
+    .layoutWeight(1).width('100%')
+    .transition(TransitionEffect.OPACITY.combine(
+      TransitionEffect.translate({ x: -18 })
+    ).animation({ duration: this.animationDuration(210), curve: Curve.EaseOut }));
   }
 
   @Builder
   namingMember(contact: ContactItem, index: number) {
     if (index > 0) {
-      Divider().strokeWidth(0.5).color($r('app.color.divider')).margin({ left: 76 });
+      Divider().strokeWidth(0.5).color($r('app.color.divider')).margin({ left: 68 });
     }
     Row({ space: 12 }) {
       AvatarView({
-        avatarPath: contact.avatarPath,
-        initials: contact.initials,
-        colorSeed: contact.id,
-        avatarSize: 44
+        avatarPath: contact.avatarPath, initials: contact.initials,
+        colorSeed: contact.id, avatarSize: 44
       });
-      Text(contact.name).fontSize(16).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
+      Text(contact.name).fontSize(16).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1)
+        .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
+      SymbolGlyph($r('sys.symbol.checkmark')).fontSize(14).fontColor([COLOR_PRIMARY]);
     }
-    .width('100%')
-    .padding({ left: 16, right: 16, top: 8, bottom: 8 });
+    .width('100%').padding({ left: 12, right: 14, top: 8, bottom: 8 });
+  }
+
+  @Builder
+  kindSegment() {
+    Row() {
+      ForEach(['group', 'channel'], (value: string) => {
+        Text(value === 'group' ? '群组' : '频道')
+          .fontSize(14)
+          .fontWeight(this.kind === value ? FontWeight.Medium : FontWeight.Normal)
+          .fontColor(this.kind === value ? Color.White : COLOR_TEXT_PRIMARY)
+          .padding({ left: 18, right: 18, top: 7, bottom: 7 })
+          .borderRadius(16)
+          .backgroundColor(this.kind === value ? COLOR_PRIMARY : Color.Transparent)
+          .onClick((): void => {
+            if (!this.creating && this.createdChatId === 0) {
+              this.kind = value;
+            }
+          });
+      }, (value: string): string => `kind_${value}`);
+    }
+    .borderRadius(18)
+    .padding(2)
+    .backgroundColor(CARD_BG);
   }
 
   @Builder
   namingPage() {
-    Column({ space: 18 }) {
-      Row({ space: 15 }) {
-        Row() {
-          SymbolGlyph($r('sys.symbol.person_3_fill')).fontSize(34).fontColor([Color.White]);
+    Scroll() {
+      Column({ space: 14 }) {
+        this.kindSegment();
+        Row({ space: 14 }) {
+          Stack({ alignContent: Alignment.Center }) {
+            Circle({ width: 70, height: 70 }).fill(COLOR_PRIMARY);
+            SymbolGlyph($r(this.kind === 'channel'
+              ? 'sys.symbol.speaker' : 'sys.symbol.person_3_fill'))
+              .fontSize(32).fontColor([Color.White]);
+          }
+          Column({ space: 5 }) {
+            TextInput({ text: this.title, placeholder: this.kind === 'channel' ? '频道名称' : '群组名称' })
+              .id('new_group_title').width('100%').height(42).fontSize(18)
+              .backgroundColor(Color.Transparent).padding(0).borderRadius(0)
+              .placeholderColor(COLOR_TEXT_SECONDARY).caretColor(COLOR_PRIMARY)
+              .maxLength(128).enterKeyType(EnterKeyType.Done)
+              .enabled(!this.creating && !this.openingCreatedChat && this.createdChatId === 0)
+              .onChange((value: string): void => {
+                this.title = value;
+                this.titleError = '';
+                if (this.createdChatId === 0) { this.createError = ''; }
+              })
+              .onSubmit((): void => {
+                if (this.createActionEnabled()) { this.createGroup(); }
+              });
+            Divider().strokeWidth(1)
+              .color(this.titleError !== '' ? '#E64646' : COLOR_PRIMARY);
+            Row() {
+              Text(this.titleError).fontSize(11).fontColor('#E64646')
+                .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1);
+              Text(`${this.title.length}/128`).fontSize(10).fontColor(COLOR_TEXT_SECONDARY);
+            }.width('100%');
+          }
+          .layoutWeight(1).alignItems(HorizontalAlign.Start);
         }
-        .width(72).height(72)
-        .borderRadius(36)
-        .backgroundColor(COLOR_PRIMARY)
-        .justifyContent(FlexAlign.Center);
-        TextInput({ text: this.title, placeholder: '群组名称' })
-          .layoutWeight(1)
-          .height(52)
-          .fontSize(18)
-          .backgroundColor(Color.Transparent)
-          .border({ width: { bottom: 1 }, color: COLOR_PRIMARY })
-          .onChange((value: string): void => { this.title = value; });
-      }
-      .padding({ left: 18, right: 18, top: 24 });
+        .width('100%').padding({ left: 14, right: 14, top: 16, bottom: 14 })
+        .backgroundColor(CARD_BG).borderRadius(CARD_RADIUS);
 
-      Column() {
-        Text(`${this.selectedIds.length} 位成员`)
-          .width('100%')
-          .fontSize(14)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(COLOR_PRIMARY)
-          .padding({ left: 16, top: 12, bottom: 8 });
-        ForEach(this.selectedIds, (userId: number, index: number) => {
-          this.namingMember(this.contactFor(userId), index);
-        }, (userId: number): string => `selected_${userId}`);
+        if (this.kind === 'channel') {
+          Column({ space: 4 }) {
+            TextInput({ text: this.channelDescription, placeholder: '频道简介（可选）' })
+              .width('100%').fontSize(14)
+              .backgroundColor(Color.Transparent).padding({ top: 4, bottom: 4 })
+              .maxLength(255)
+              .enabled(!this.creating && !this.openingCreatedChat && this.createdChatId === 0)
+              .onChange((value: string): void => {
+                this.channelDescription = value;
+              });
+            Text('订阅者可在频道资料页看到简介')
+              .fontSize(11).fontColor(COLOR_TEXT_SECONDARY).width('100%');
+          }
+          .width('100%').padding({ left: 14, right: 14, top: 10, bottom: 10 })
+          .backgroundColor(CARD_BG).borderRadius(CARD_RADIUS);
+        }
+
+        if (this.createError !== '') {
+          Row({ space: 8 }) {
+            SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+              .fontSize(15).fontColor(['#E64646']);
+            Text(this.createError).fontSize(12).fontColor('#E64646')
+              .layoutWeight(1).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis });
+          }
+          .width('100%').padding({ left: 13, right: 13, top: 10, bottom: 10 })
+          .backgroundColor('#14E64646').borderRadius(12)
+          .transition(TransitionEffect.OPACITY.combine(
+            TransitionEffect.translate({ y: -6 })
+          ).animation({ duration: this.animationDuration(160), curve: Curve.EaseOut }));
+        }
+
+        Column() {
+          Row() {
+            Text('成员').fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY);
+            Blank();
+            Text(`${this.selectedIds.length} 人`).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+          }
+          .width('100%').height(42).padding({ left: 14, right: 14 });
+          ForEach(this.selectedIds, (userId: number, index: number) => {
+            this.namingMember(this.contactFor(userId), index);
+          }, (userId: number): string => `selected_${userId}`);
+        }
+        .width('100%').backgroundColor(CARD_BG).borderRadius(CARD_RADIUS);
       }
-      .margin({ left: 14, right: 14 })
-      .backgroundColor(CARD_BG)
-      .borderRadius(14);
+      .width('100%').padding({
+        left: 12, right: 12, top: 4, bottom: this.bottomSafe + 24
+      });
     }
-    .layoutWeight(1)
-    .width('100%');
+    .layoutWeight(1).width('100%').scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring)
+    .transition(TransitionEffect.OPACITY.combine(
+      TransitionEffect.translate({ x: 18 })
+    ).animation({ duration: this.animationDuration(210), curve: Curve.EaseOut }));
   }
 
   build() {
     Column() {
       this.header();
-      if (this.naming) {
-        this.namingPage();
-      } else {
-        this.memberPicker();
-      }
+      if (this.naming) { this.namingPage(); } else { this.memberPicker(); }
     }
-    .width('100%')
-    .height('100%')
-    .padding({ top: this.topSafe, bottom: this.bottomSafe })
-    .backgroundColor(PAGE_BG);
+    .width('100%').height('100%').padding({ top: this.topSafe })
+    .backgroundColor(PAGE_BG)
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM]);
   }
 }

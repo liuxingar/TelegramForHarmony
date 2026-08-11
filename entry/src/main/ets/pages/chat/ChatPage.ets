@@ -1,6 +1,18 @@
 import { router, promptAction } from '@kit.ArkUI';
 import { pasteboard } from '@kit.BasicServicesKit';
-import { common } from '@kit.AbilityKit';
+import { i18n } from '@kit.LocalizationKit';
+import { PollOptionInfo } from '../../util/formatMsgContent';
+import { getStickersForEmoji, rememberRecentSticker } from '../../store/StickerApi';
+import { botMiniAppUrl, openMiniApp } from '../../store/BotApi';
+import {
+  InlineQueryPage, InlineResultRow, getInlineResults, sendInlineResult
+} from '../../store/BotApi';
+import { common, abilityAccessCtrl, Permissions } from '@kit.AbilityKit';
+import { geoLocationManager } from '@kit.LocationKit';
+import { BusinessError } from '@kit.BasicServicesKit';
+import { PollComposeSheet } from './PollComposeSheet';
+import { formatPreview } from '../../util/formatPreview';
+import { ContactPickerSheet, PickedContact } from './ContactPickerSheet';
 import { picker, fileIo as fs } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { VoiceRecorder } from '../../services/VoiceRecorder';
@@ -16,9 +28,10 @@ import { GifItem } from './GifPicker';
 import { getVoicePlayback } from '../../services/VoicePlayback';
 import { openLocalFile } from '../../util/openLocalFile';
 import { saveMediaToGallery, saveFileToLocal } from '../../util/mediaSaver';
-import { getTdClient, getUserStore, getChatStore } from '../../tdkit/Globals';
+import { getTdClient, getUserStore, getChatStore, getChatThemeStore } from '../../tdkit/Globals';
+import { fillColorsOf } from '../../util/backgroundPresentation';
 import { MessageStore, MediaSendItem } from '../../store/MessageStore';
-import { MessageEntry } from '../../store/MessageEntry';
+import { MessageEntry, buildMessageEntry } from '../../store/MessageEntry';
 import { ReplyKeyboard, KeyboardBtn, KB_TEXT } from '../../store/ReplyKeyboard';
 import { ChatEntry, computeInitials, isMutedFrom } from '../../store/ChatEntry';
 import { MessageBubble } from './MessageBubble';
@@ -32,15 +45,28 @@ import {
   KEY_POWER_EFFECT_BACKGROUND, KEY_POWER_EFFECT_BLUR, KEY_POWER_EFFECT_MENU,
   KEY_POWER_EFFECT_REACTION, KEY_POWER_EFFECT_REPLY, KEY_POWER_PARTICLES,
   KEY_POWER_SMOOTH_TRANSITIONS, KEY_REDUCE_ANIM, KEY_SEND_BY_ENTER, powerAnimationDuration,
-  powerFeatureEnabled, powerGroupAnimationDuration, powerGroupFeatureEnabled
+  powerFeatureEnabled, powerGroupAnimationDuration, powerGroupFeatureEnabled, autosaveEnabled
 } from '../../store/AppSettings';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY, botButtonBg } from '../../util/theme';
-import { normalizeTelegramLink, bareUsernameOf, inviteLinkOf, chatLinkActionOf } from '../../util/linkNav';
-import { openInviteLink, openChatLinkAction } from '../../util/openTelegramLink';
+import {
+  normalizeTelegramLink, bareUsernameOf, inviteLinkOf, chatLinkActionOf,
+  chatFolderInviteLinkOf, stickerSetLinkOf
+} from '../../util/linkNav';
+import {
+  openTelegramLink, openInviteLink, openChatLinkAction, openChatFolderInviteLink, openStickerSetLink
+} from '../../util/openTelegramLink';
 import { openUrl } from '../../util/openUrl';
+import { openWebUrl } from '../../util/webBrowserNav';
 import { TdObject, TdRequest, TdError } from '../../tdkit/TdTypes';
 import { searchMentions, loadBotCommands, MentionItem, CommandItem } from '../../store/InputSuggestions';
 import { floatingLiveWindow } from './LiveFloatingWindow';
+
+// One emoji-triggered sticker hint shown above the composer.
+interface StickerSuggestion {
+  fileId: number;
+  thumbId: number;
+  thumbPath: string;
+}
 
 const PINNED_SEG_MAX: number = 5;
 // Scroll-to-bottom FAB: beyond this many groups from the end, reload the newest
@@ -94,6 +120,10 @@ struct ChatPage {
   private groups: AlbumGroup[] = [];
   private groupsData: AlbumGroupDataSource = new AlbumGroupDataSource();
   @State subtitle: string = '';
+  @State typingLabel: string = '';   // "×× 正在输入…" — overrides subtitle while live
+  private typingSenders: Map<number, number> = new Map(); // senderId -> expiry ms
+  private typingTimer: number = -1;
+  private unsubChatAction: (() => void) | null = null;
   @State title: string = '';
   @State avatarPath: string = '';
   @State initials: string = '?';
@@ -118,6 +148,7 @@ struct ChatPage {
   @State chatBackgroundImageOpacity: number = 1;
   @State chatBackgroundDimming: number = 0;
   @State chatBackgroundBlurred: boolean = false;
+  @State themeBubbleOutColor: string = '';
   private chatBackgroundFileId: number = 0;
   private chatBackgroundSignature: string = '';
   private chatBackgroundResolveSeq: number = 0;
@@ -130,13 +161,27 @@ struct ChatPage {
   @State replyToId: number = 0;      // message being replied to (0 = none)
   @State replyToName: string = '';
   @State replyToText: string = '';
+  @State editingId: number = 0;      // message being edited (0 = none)
+  @State editingPreview: string = '';
+  @State editingKind: string = 'text'; // 'text' | 'caption'
+  private draftBeforeEdit: string = ''; // composer text stashed while editing
   @State showReactionSheet: boolean = false; // full emoji reaction picker
   @State reactionTargetId: number = 0;
+  // Reactions this chat actually allows for the sheet's target message,
+  // fetched per open; the static list is only the instant fallback.
+  @State sheetReactions: string[] = [];
   @State reactionPendingKey: string = '';
   @State paidMediaPendingIds: number[] = [];
   // Forwarding is deliberately kept as an in-page sheet: leaving ChatPage to
   // pick a destination used to discard the long-press/selection context.
   @State showForwardSheet: boolean = false;
+  @State showPollSheet: boolean = false;
+  @State showContactSheet: boolean = false;
+  @State showScheduledSheet: boolean = false;
+  @State scheduledIds: number[] = [];
+  @State scheduledPreviews: string[] = [];   // 与 scheduledIds 平行
+  @State scheduledTimeLabels: string[] = []; // 与 scheduledIds 平行
+  @State scheduledLoadState: string = 'idle'; // idle | loading | ready | error
   @State forwardChats: ChatEntry[] = [];
   @State forwardQuery: string = '';
   @State forwardLoadState: string = 'ready'; // loading | ready | error
@@ -216,6 +261,8 @@ struct ChatPage {
   private botCallbackPending: Set<string> = new Set();
   // >0: comment-thread view over the linked discussion group (see onCommentTap)
   private threadRootId: number = 0;
+  private topicName: string = '';
+  private forumTopicId: number = 0;
   @State isGroup: boolean = false;
   @State isChannel: boolean = false;
   // TDLib keeps membership on the underlying basicGroup/supergroup rather
@@ -225,6 +272,15 @@ struct ChatPage {
   // blocked = banned/unavailable, checking = waiting for the group object.
   @State membershipState: string = 'writable';
   @State joiningChat: boolean = false;
+  // TDLib doesn't consistently return the local "joined" service message in
+  // getChatHistory. Keep the confirmed join event as a client-only timeline
+  // row until the real service message arrives. It deliberately has no member
+  // ids, so it can never leak into viewMessages/read or pagination requests.
+  private clientJoinNoticeVisible: boolean = false;
+  private clientJoinNoticeIsChannel: boolean = false;
+  private clientJoinNoticeDate: number = 0;
+  private clientJoinNoticeEntryCache: MessageEntry | null = null;
+  private clientJoinNoticeRouteChatId: number = 0;
   private membershipSupergroupId: number = 0;
   private membershipBasicGroupId: number = 0;
   private membershipSeq: number = 0;
@@ -288,6 +344,8 @@ struct ChatPage {
   private lastKeyboardH: number = 0;
   // Message id of a video waiting to be saved to the gallery once downloaded.
   private pendingGallerySaveId: number = 0;
+  private autoSavePendingIds: number[] = [];
+  private autoSaveInFlight: boolean = false;
   // Separate intents keep "tap to open" and the explicit save action honest:
   // a completed download performs exactly the action the user requested.
   private pendingFileOpenId: number = 0;
@@ -306,6 +364,13 @@ struct ChatPage {
   private prependRestoreSeq: number = 0;
   // '@' mention / '/' command suggestion panels above the input bar.
   @State mentionItems: MentionItem[] = [];
+  @State stickerSuggestions: StickerSuggestion[] = []; // emoji-typed sticker hints
+  private stickerSuggestSeq: number = 0;
+  @State botMiniAppUrlValue: string = ''; // bot menu-button Mini App ('' = none)
+  @State inlineResults: InlineResultRow[] = [];  // @bot query results
+  private inlineQueryId: string = '';
+  private inlineSeq: number = 0;
+  private inlineTimer: number = -1;
   @State commandItems: CommandItem[] = [];
   private allCommands: CommandItem[] = [];
   @State commandLoadState: string = 'idle'; // idle | loading | ready | error
@@ -476,6 +541,81 @@ struct ChatPage {
     this.forwardMessageIds = [];
   }
 
+  private isRealClientJoinNotice(message: MessageEntry): boolean {
+    if (message.contentType !== 'system' || !message.isOutgoing) {
+      return false;
+    }
+    return message.placeholderLabel === '您已加入此群组' ||
+      message.placeholderLabel === '您已加入此频道' ||
+      message.systemType === 'messageChatJoinByLink' ||
+      message.systemType === 'messageChatJoinByRequest';
+  }
+
+  private clientJoinNoticeEntry(): MessageEntry {
+    if (this.clientJoinNoticeEntryCache !== null) {
+      return this.clientJoinNoticeEntryCache;
+    }
+    const content: TdObject = this.clientJoinNoticeIsChannel
+      ? { '@type': 'messageCustomServiceAction', 'text': '您已加入此频道' }
+      : { '@type': 'messageChatJoinByLink' };
+    const raw: TdObject = {
+      '@type': 'message',
+      // The row is page-local and memberIds is cleared below. A negative id
+      // also makes accidental lookup/action matching impossible.
+      'id': -1,
+      'chat_id': this.chatId,
+      'date': this.clientJoinNoticeDate,
+      'is_outgoing': true,
+      'content': content
+    };
+    this.clientJoinNoticeEntryCache = buildMessageEntry(raw, getUserStore());
+    return this.clientJoinNoticeEntryCache;
+  }
+
+  private groupsWithClientJoinNotice(list: MessageEntry[]): AlbumGroup[] {
+    if (this.clientJoinNoticeVisible &&
+      list.some((message: MessageEntry): boolean => this.isRealClientJoinNotice(message))) {
+      // Replace the local row atomically when TDLib eventually supplies the
+      // canonical service message, avoiding a one-frame duplicate.
+      this.clientJoinNoticeVisible = false;
+      this.clientJoinNoticeEntryCache = null;
+    }
+    if (!this.clientJoinNoticeVisible) {
+      return collapseAlbums(list);
+    }
+    const displayList: MessageEntry[] = list.slice();
+    displayList.push(this.clientJoinNoticeEntry());
+    const groups: AlbumGroup[] = collapseAlbums(displayList);
+    if (groups.length > 0) {
+      const notice: AlbumGroup = groups[groups.length - 1];
+      if (notice.head.id === -1) {
+        notice.memberIds = [];
+        notice.key = `client_join_${this.chatId}_${this.clientJoinNoticeDate}`;
+      }
+    }
+    return groups;
+  }
+
+  private showClientJoinNotice(isChannel: boolean): void {
+    this.clientJoinNoticeVisible = true;
+    this.clientJoinNoticeIsChannel = isChannel;
+    this.clientJoinNoticeDate = Math.floor(Date.now() / 1000);
+    this.clientJoinNoticeEntryCache = null;
+    const groups: AlbumGroup[] = this.groupsWithClientJoinNotice(this.messages);
+    this.groups = groups;
+    this.visibleGroupCount = groups.length;
+    this.groupsData.update(groups);
+    if (this.didInitialScroll && this.atBottom) {
+      const actionSeq: number = ++this.scrollActionSeq;
+      setTimeout((): void => {
+        if (actionSeq === this.scrollActionSeq) {
+          this.scroller.scrollEdge(Edge.Bottom);
+          this.refreshAtBottom();
+        }
+      }, 0);
+    }
+  }
+
   private captureScrollResume(): void {
     this.resumeScrollPending = false;
     if (!this.didInitialScroll || this.groups.length === 0 ||
@@ -500,6 +640,20 @@ struct ChatPage {
     const params = router.getParams() as Record<string, Object> | undefined;
     this.chatId = params !== undefined ? (params['chatId'] as number) : 0;
     this.threadRootId = params !== undefined ? ((params['threadRootId'] as number | undefined) ?? 0) : 0;
+    // 话题模式（从 ForumTopicsPage 进入）：标题显示话题名而非"评论"。
+    this.topicName = params !== undefined ? ((params['topicName'] as string | undefined) ?? '') : '';
+    this.forumTopicId = params !== undefined
+      ? ((params['forumTopicId'] as number | undefined) ?? 0) : 0;
+    const incomingJoinNotice: boolean = params !== undefined
+      ? ((params['showJoinedNotice'] as boolean | undefined) ?? false) : false;
+    if (incomingJoinNotice && this.clientJoinNoticeRouteChatId !== this.chatId) {
+      this.clientJoinNoticeRouteChatId = this.chatId;
+      this.clientJoinNoticeVisible = true;
+      this.clientJoinNoticeIsChannel = params !== undefined
+        ? ((params['joinedNoticeIsChannel'] as boolean | undefined) ?? false) : false;
+      this.clientJoinNoticeDate = Math.floor(Date.now() / 1000);
+      this.clientJoinNoticeEntryCache = null;
+    }
     getVoicePlayback().setMusicCompletionListener((messageId: number): void => {
       this.onMusicCompleted(messageId);
     });
@@ -542,14 +696,21 @@ struct ChatPage {
     const incomingDraft = params !== undefined ? ((params['draftText'] as string | undefined) ?? '') : '';
     if (incomingDraft !== '') {
       this.draft = incomingDraft;
+    } else {
+      this.restoreServerDraft();
     }
     const incomingQuery = params !== undefined ? ((params['searchQuery'] as string | undefined) ?? '') : '';
     if (incomingQuery !== '') {
       this.searchMode = true;
       this.searchQuery = incomingQuery;
       this.searchAnchorId = jumpTo !== undefined ? jumpTo : 0;
+    } else if (params !== undefined && ((params['startSearch'] as boolean | undefined) ?? false)) {
+      // Profile-page 搜索 button: open the chat with an empty, focused search.
+      this.searchMode = true;
     }
     this.refreshHeader();
+    this.unsubChatAction = getTdClient().onUpdate('updateChatAction',
+      (u: TdObject): void => this.onChatAction(u));
     this.unsubChat = getChatStore().subscribe((list: ChatEntry[]) => {
       this.refreshHeader();
       if (this.showForwardSheet) {
@@ -664,7 +825,8 @@ struct ChatPage {
     this.liveStateRefreshTimer = setInterval((): void => {
       this.refreshVideoChat();
     }, 2000);
-    const store = new MessageStore(getTdClient(), getUserStore(), this.chatId, this.threadRootId);
+    const store = new MessageStore(
+      getTdClient(), getUserStore(), this.chatId, this.threadRootId, 30, this.forumTopicId);
     this.store = store;
     if (!scrollResumeWaiting || this.groups.length === 0) {
       this.messageLoadState = 'loading';
@@ -677,6 +839,13 @@ struct ChatPage {
         this.messageLoadState = historyState;
         this.messageLoadError = store.getInitialHistoryError();
       }
+      // Do not turn an openChat real-time update into the first positioned
+      // timeline. MessageStore normally withholds these partial snapshots, and
+      // this page-side guard also protects cached-page resume and future data
+      // sources that may publish while their initial history is still loading.
+      if (historyState === 'loading') {
+        return;
+      }
       // subscribe() immediately publishes the new store's empty snapshot.
       // During cached-page resume, keep the old viewport on screen until the
       // around/latest request returns instead of flashing a blank conversation.
@@ -686,7 +855,7 @@ struct ChatPage {
       }
       const notifyKind: string = store.getCurrentNotifyKind();
       const maxId: number = list.length > 0 ? list[list.length - 1].id : 0;
-      const groups: AlbumGroup[] = collapseAlbums(list);
+      const groups: AlbumGroup[] = this.groupsWithClientJoinNotice(list);
       let prependAnchorId: number = 0;
       let prependAnchorY: number = 0;
       if (this.didInitialScroll && this.groups.length > 0 && groups.length > this.groups.length) {
@@ -709,9 +878,13 @@ struct ChatPage {
         list.findIndex((m: MessageEntry): boolean => m.id === this.viewerMsgId) < 0) {
         this.closeViewer();
       }
-      this.groupsData.update(groups);
+      const updateKind: string = this.groupsData.update(groups);
       this.settlePendingMusic(list);
-      if (prependAnchorId > 0) {
+      // Incremental ops (the normal prepend) keep the viewport anchored via
+      // maintainVisibleContentPosition; forcing scrollToIndex on top of that
+      // cancelled the user's fling mid-scroll — the load-more stutter. Only a
+      // RELOAD rebuild loses the anchor and needs the manual restore.
+      if (prependAnchorId > 0 && updateKind === 'reload') {
         this.restorePrependAnchor(groups, prependAnchorId, prependAnchorY);
       }
       let positionHandled: boolean = false;
@@ -751,6 +924,15 @@ struct ChatPage {
       // scroll state; otherwise every incoming bubble is rendered like a private
       // chat and its sender-avatar column is omitted.
       this.isGroup = this.store !== null ? this.store.getIsGroup() : false;
+      const liveMediaIds: number[] = store.consumeLiveIncomingMediaIds();
+      const autoScope: string = this.isChannel ? 'channel' : (this.isGroup ? 'group' : 'private');
+      if (autosaveEnabled(autoScope)) {
+        for (const mediaId of liveMediaIds) {
+          if (this.autoSavePendingIds.indexOf(mediaId) < 0) {
+            this.autoSavePendingIds.push(mediaId);
+          }
+        }
+      }
       // Private peer resolved: probe once for commands. The centralized loader
       // also serves '/' autocomplete, so fast typing cannot start a competing
       // request that overwrites a newer result.
@@ -865,6 +1047,7 @@ struct ChatPage {
           }
         }
       }
+      this.processAutomaticGallerySave(list);
       // A document queued for "save as" finished downloading — open the picker.
       if (this.pendingFileOpenId !== 0) {
         const openEntry: MessageEntry | undefined =
@@ -924,7 +1107,7 @@ struct ChatPage {
     this.unsubHeaderTitle = store.subscribeHeaderTitle((t: string) => {
       // Fallback header for chats not yet in ChatStore (e.g. opened by t.me link).
       if (t !== '') {
-        if (this.threadRootId === 0) {
+        if (this.threadRootId === 0 && this.forumTopicId === 0) {
           this.title = t;
         }
         this.initials = computeInitials(t);
@@ -997,7 +1180,32 @@ struct ChatPage {
     }
   }
 
+  onPageShow(): void {
+    // The chat page is cached underneath the live viewer. A successful
+    // pushUrl can therefore leave the entry button in its transient busy
+    // state when this page becomes visible again. Treat page visibility as
+    // the end of navigation and re-confirm the current call state.
+    this.liveDialogOpening = false;
+    this.liveNavigationBusy = false;
+    if (this.chatId > 0) {
+      this.refreshVideoChat();
+    }
+  }
+
   aboutToDisappear(): void {
+    if (this.unsubChatAction !== null) {
+      this.unsubChatAction();
+      this.unsubChatAction = null;
+    }
+    if (this.typingTimer !== -1) {
+      clearInterval(this.typingTimer);
+      this.typingTimer = -1;
+    }
+    // Sync the composer draft to the account (other devices see it). While an
+    // edit is in progress the real draft is the stashed pre-edit text.
+    this.store?.saveDraft(
+      this.editingId !== 0 ? this.draftBeforeEdit : this.draft, this.replyToId
+    );
     if (this.viewerVideoLandscape) {
       this.viewerVideoLandscape = false;
       setMediaViewerOrientation(getContext(this) as common.UIAbilityContext, false);
@@ -1053,6 +1261,8 @@ struct ChatPage {
     this.pendingFileSaveId = 0;
     this.fileOpenInFlightId = 0;
     this.pendingMusicPlayId = 0;
+    this.autoSavePendingIds = [];
+    this.autoSaveInFlight = false;
     getVoicePlayback().setMusicCompletionListener(null);
     getVoicePlayback().stop();
     if (this.unsubMsg !== null) { this.unsubMsg(); this.unsubMsg = null; }
@@ -1270,8 +1480,22 @@ struct ChatPage {
       return;
     }
     const isRtmp: boolean = this.liveCallIsRtmp;
-    const params: Record<string, Object> = { 'groupCallId': groupCallId, 'chatId': this.chatId };
+    const params: Record<string, Object> = {
+      'groupCallId': groupCallId,
+      'chatId': this.chatId,
+      'initialTitle': this.title,
+      'initialParticipantCount': this.liveParticipantCount
+    };
     this.liveNavigationBusy = true;
+    // Returning to the live stream that is already floating must hand the
+    // existing Session back to the viewer. Closing it here would briefly leave
+    // the call and force the page to join again.
+    if (floatingLiveWindow.isShowing(groupCallId, isRtmp)) {
+      floatingLiveWindow.restoreFullPage().finally((): void => {
+        this.liveNavigationBusy = false;
+      });
+      return;
+    }
     floatingLiveWindow.prepareForOpeningFullPage().finally((): void => {
       if (groupCallId !== this.liveGroupCallId || !this.liveCallIsActive) {
         this.liveNavigationBusy = false;
@@ -1282,6 +1506,10 @@ struct ChatPage {
         url: isRtmp
           ? 'pages/chat/RtmpLiveStreamViewerPage' : 'pages/chat/LiveStreamViewerPage',
         params: params
+      }).then((): void => {
+        // Busy only represents the route transition. Joining/recovery status
+        // belongs to the viewer and must not leak into the chat banner.
+        this.liveNavigationBusy = false;
       }).catch((error: Error): void => {
         this.liveNavigationBusy = false;
         console.error(`ChatPage.enterLiveStream failed: ${error.message}`);
@@ -1860,10 +2088,12 @@ struct ChatPage {
     this.subtitle = '';
     this.avatarPath = '';
     this.initials = '?';
-    this.title = this.threadRootId > 0 ? '评论' : '';
+    this.title = this.forumTopicId > 0
+      ? (this.topicName !== '' ? this.topicName : '话题')
+      : (this.threadRootId > 0 ? (this.topicName !== '' ? this.topicName : '评论') : '');
     this.isMuted = false;
     if (cached !== undefined) {
-      if (this.threadRootId === 0) {
+      if (this.threadRootId === 0 && this.forumTopicId === 0) {
         this.title = cached.title;
       }
       this.initials = cached.initials;
@@ -1900,7 +2130,7 @@ struct ChatPage {
     }
     const resolvedTitle = (chat['title'] as string | undefined) ?? '';
     if (resolvedTitle !== '') {
-      if (this.threadRootId === 0) {
+      if (this.threadRootId === 0 && this.forumTopicId === 0) {
         this.title = resolvedTitle;
       }
       this.initials = computeInitials(resolvedTitle);
@@ -1926,6 +2156,7 @@ struct ChatPage {
       this.headerIdentityResolved = this.headerPeerUserId > 0;
       this.isGroup = false;
       this.isChannel = false;
+      this.refreshBotMiniApp(this.headerPeerUserId);
     } else if (typeName === 'chatTypeBasicGroup') {
       this.headerKind = 'group';
       this.headerIdentityResolved = true;
@@ -2025,7 +2256,7 @@ struct ChatPage {
     }
     const e: ChatEntry | undefined = getChatStore().entryOf(this.chatId);
     if (e !== undefined) {
-      if (this.threadRootId === 0) {
+      if (this.threadRootId === 0 && this.forumTopicId === 0) {
         this.title = e.title;
       }
       // Don't clobber a MessageStore-resolved avatar (channels/folders) with an empty one.
@@ -2246,6 +2477,9 @@ struct ChatPage {
   }
 
   private refreshChatBackground(): void {
+    // Reset the theme bubble tint; the theme path below re-derives it in the
+    // same tick when this chat still carries a theme.
+    this.themeBubbleOutColor = '';
     const cached = getChatStore().entryOf(this.chatId);
     if (cached?.background !== null && cached?.background !== undefined) {
       this.applyChatBackground(cached.background);
@@ -2349,26 +2583,27 @@ struct ChatPage {
   // than directly on Chat.background. Resolve the settings matching the
   // currently active light/dark resource mode.
   private resolveThemeBackground(themeName: string, seq: number): void {
-    const request: TdRequest = { '@type': 'getChatThemes' };
-    getTdClient().send(request).then((result: TdObject): void => {
-      if (seq !== this.chatBackgroundResolveSeq) {
-        return;
-      }
-      const themes = (result['chat_themes'] as TdObject[] | undefined) ?? [];
-      const theme = themes.find((item: TdObject): boolean =>
-        ((item['name'] as string | undefined) ?? '') === themeName
-      );
-      if (theme === undefined) {
-        this.applyChatBackground(null);
-        return;
-      }
-      const settingsName = this.darkResourceMode() ? 'dark_settings' : 'light_settings';
-      const settings = this.objectOrNull(theme[settingsName]);
-      this.applyChatBackground(settings !== null
-        ? this.objectOrNull(settings['background']) : null);
-    }).catch((error: TdError): void => {
-      console.error(`ChatPage getChatThemes failed: ${error.message}`);
-    });
+    // TDLib has no getChatThemes request — the list arrives once per connection
+    // via updateChatThemes and is cached by ChatThemeStore.
+    if (seq !== this.chatBackgroundResolveSeq) {
+      return;
+    }
+    const themes = getChatThemeStore().chatThemes();
+    const theme = themes.find((item: TdObject): boolean =>
+      ((item['name'] as string | undefined) ?? '') === themeName
+    );
+    if (theme === undefined) {
+      this.themeBubbleOutColor = '';
+      this.applyChatBackground(null);
+      return;
+    }
+    const settingsName = this.darkResourceMode() ? 'dark_settings' : 'light_settings';
+    const settings = this.objectOrNull(theme[settingsName]);
+    const bubbleColors = fillColorsOf(settings !== null
+      ? this.objectOrNull(settings['outgoing_message_fill']) : null);
+    this.themeBubbleOutColor = bubbleColors.length > 0 ? bubbleColors[0] : '';
+    this.applyChatBackground(settings !== null
+      ? this.objectOrNull(settings['background']) : null);
   }
 
   private backgroundGradientStops(): Array<[ResourceColor, number]> {
@@ -2466,6 +2701,14 @@ struct ChatPage {
       next = isMember ? 'writable' : 'joinable';
     } else if (type === 'chatMemberStatusBanned') {
       next = 'blocked';
+    } else if (this.isChannel && type === 'chatMemberStatusMember') {
+      // Broadcast-channel subscribers can never post — only the creator and
+      // admins with posting rights get the composer.
+      next = 'readonly';
+    } else if (this.isChannel && type === 'chatMemberStatusAdministrator') {
+      const rights = status?.['rights'] as TdObject | undefined;
+      next = ((rights?.['can_post_messages'] as boolean | undefined) ?? false)
+        ? 'writable' : 'readonly';
     }
     this.membershipState = next;
     if (next === 'writable') {
@@ -2499,6 +2742,7 @@ struct ChatPage {
       // updateSupergroup/updateBasicGroup normally arrives first; setting this
       // eagerly keeps the UI responsive even if that update is delayed.
       this.membershipState = 'writable';
+      this.showClientJoinNotice(this.isChannel);
       this.refreshMembership();
     }).catch((e: TdError): void => {
       this.joiningChat = false;
@@ -2514,15 +2758,21 @@ struct ChatPage {
     if (this.store === null || end < 0 || end >= this.groups.length) {
       return;
     }
-    const g: AlbumGroup = this.groups[end];
     let maxId: number = 0;
-    for (const id of g.memberIds) {
-      if (id > maxId) {
-        maxId = id;
+    // A client-only service row has no member ids. Walk back to the newest
+    // visible real row so its presence can't prevent the actual tail from
+    // being marked read.
+    for (let groupIndex: number = end; groupIndex >= 0 && maxId === 0; groupIndex--) {
+      const g: AlbumGroup = this.groups[groupIndex];
+      for (const id of g.memberIds) {
+        if (id > maxId) {
+          maxId = id;
+        }
       }
     }
     if (maxId > 0) {
       this.store.markViewed(maxId);
+      getChatStore().markReadLocally(this.chatId, maxId);
     }
   }
 
@@ -2578,6 +2828,16 @@ struct ChatPage {
       }
       return;
     }
+    const folderInvite = chatFolderInviteLinkOf(url);
+    if (folderInvite !== '') {
+      openChatFolderInviteLink(folderInvite);
+      return;
+    }
+    const stickerSet = stickerSetLinkOf(url);
+    if (stickerSet !== null) {
+      openStickerSetLink(stickerSet);
+      return;
+    }
     // Private invite link: preview → confirm → join in-app.
     const invite = inviteLinkOf(url);
     if (invite !== '') {
@@ -2591,12 +2851,12 @@ struct ChatPage {
     }
     const bareName = bareUsernameOf(url);
     if (bareName !== '') {
-      this.openByUsername(bareName, url);
+      openTelegramLink(getContext(this) as common.UIAbilityContext, url, true);
       return;
     }
     const tgUrl = normalizeTelegramLink(url);
     if (tgUrl === '') {
-      openUrl(getContext(this) as common.UIAbilityContext, url);
+      openTelegramLink(getContext(this) as common.UIAbilityContext, url, true);
       return;
     }
     const req: TdRequest = { '@type': 'getMessageLinkInfo' };
@@ -2604,7 +2864,7 @@ struct ChatPage {
     getTdClient().send(req).then((info: TdObject) => {
       const chatId = info['chat_id'] as number | undefined;
       if (chatId === undefined || chatId === 0) {
-        openUrl(getContext(this) as common.UIAbilityContext, url);
+        openTelegramLink(getContext(this) as common.UIAbilityContext, url, true);
         return;
       }
       const msg = info['message'] as TdObject | undefined;
@@ -2641,7 +2901,7 @@ struct ChatPage {
       router.pushUrl({ url: 'pages/chat/ChatPage', params: params });
     }).catch((e: TdError) => {
       console.error(`ChatPage.getMessageLinkInfo failed: ${e.message}`);
-      openUrl(getContext(this) as common.UIAbilityContext, url);
+      openTelegramLink(getContext(this) as common.UIAbilityContext, url, true);
     });
   }
 
@@ -2667,10 +2927,10 @@ struct ChatPage {
         router.pushUrl({ url: 'pages/chat/ChatPage', params: params });
         return;
       }
-      openUrl(getContext(this) as common.UIAbilityContext, original);
+      openWebUrl(getContext(this) as common.UIAbilityContext, original);
     }).catch((e: TdError) => {
       console.error(`ChatPage.searchPublicChat(${name}) failed: ${e.message}`);
-      openUrl(getContext(this) as common.UIAbilityContext, original);
+      openWebUrl(getContext(this) as common.UIAbilityContext, original);
     });
   }
 
@@ -3556,7 +3816,7 @@ struct ChatPage {
       const text = (answer['text'] as string | undefined) ?? '';
       const showAlert = (answer['show_alert'] as boolean | undefined) ?? false;
       if (url.trim() !== '') {
-        openUrl(getContext(this) as common.UIAbilityContext, url, (): void => {
+        openWebUrl(getContext(this) as common.UIAbilityContext, url, (): void => {
           promptAction.showToast({ message: '无法打开互动内容', duration: 1800 });
         });
       }
@@ -3675,7 +3935,7 @@ struct ChatPage {
             return;
           }
           if (verificationUrl !== '') {
-            openUrl(getContext(this) as common.UIAbilityContext, verificationUrl, (): void => {
+            openWebUrl(getContext(this) as common.UIAbilityContext, verificationUrl, (): void => {
               promptAction.showToast({ message: '无法打开支付验证页', duration: 1800 });
             });
             return;
@@ -3791,6 +4051,214 @@ struct ChatPage {
       return;
     }
     this.mentionItems = [];
+    this.refreshInlineQuery(v);
+    this.refreshStickerSuggestions(v);
+  }
+
+  // Bots can expose a Mini App on their menu button — surface it as a composer
+  // icon that opens the app in the in-app browser.
+  private refreshBotMiniApp(userId: number): void {
+    this.botMiniAppUrlValue = '';
+    if (userId <= 0) { return; }
+    botMiniAppUrl(userId).then((url: string): void => {
+      if (this.headerPeerUserId === userId) { this.botMiniAppUrlValue = url; }
+    }).catch((): void => {});
+  }
+
+  private openBotMiniApp(): void {
+    const url = this.botMiniAppUrlValue;
+    if (url === '' || this.headerPeerUserId <= 0) { return; }
+    openMiniApp(this.chatId, this.headerPeerUserId, url).then((resolved: string): void => {
+      if (resolved === '') {
+        promptAction.showToast({ message: '无法打开 Mini App', duration: 1600 });
+        return;
+      }
+      openWebUrl(getContext(this) as common.UIAbilityContext, resolved);
+    }).catch((e: TdError): void => {
+      console.error(`ChatPage.openBotMiniApp failed: ${e.message}`);
+      promptAction.showToast({ message: '无法打开 Mini App', duration: 1600 });
+    });
+  }
+
+  // "@bot query" in the composer runs an inline query and shows the bot's
+  // results above the input bar (tap one to send it).
+  private refreshInlineQuery(v: string): void {
+    const match = v.match(/^@([A-Za-z0-9_]{3,32})\s+(.*)$/);
+    if (match === null) {
+      if (this.inlineResults.length > 0) {
+        this.inlineResults = [];
+        this.inlineQueryId = '';
+      }
+      return;
+    }
+    const username = match[1];
+    const query = match[2];
+    const seq = ++this.inlineSeq;
+    if (this.inlineTimer !== -1) { clearTimeout(this.inlineTimer); }
+    this.inlineTimer = setTimeout((): void => {
+      this.inlineTimer = -1;
+      const req: TdRequest = { '@type': 'searchPublicChat' };
+      req['username'] = username;
+      getTdClient().send(req, 10000).then((chat: TdObject): Promise<InlineQueryPage> => {
+        const type = chat['type'] as TdObject | undefined;
+        const botId = type !== undefined ? ((type['user_id'] as number | undefined) ?? 0) : 0;
+        if (botId === 0) { return Promise.reject(new TdError(404, 'not a bot')); }
+        return getInlineResults(botId, this.chatId, query);
+      }).then((page: InlineQueryPage): void => {
+        if (seq !== this.inlineSeq) { return; }
+        this.inlineQueryId = page.queryId;
+        this.inlineResults = page.rows.slice(0, 24);
+        for (const row of this.inlineResults) { this.downloadInlineThumb(row, seq); }
+      }).catch((): void => {
+        if (seq !== this.inlineSeq) { return; }
+        this.inlineResults = [];
+        this.inlineQueryId = '';
+      });
+    }, 320);
+  }
+
+  private downloadInlineThumb(row: InlineResultRow, seq: number): void {
+    if (row.thumbFileId === 0) { return; }
+    const req: TdRequest = { '@type': 'downloadFile' };
+    req['file_id'] = row.thumbFileId;
+    req['priority'] = 2;
+    req['synchronous'] = true;
+    getTdClient().send(req, 15000).then((file: TdObject): void => {
+      if (seq !== this.inlineSeq) { return; }
+      const local = file['local'] as TdObject | undefined;
+      const path = local !== undefined ? ((local['path'] as string | undefined) ?? '') : '';
+      if (path === '') { return; }
+      this.inlineResults = this.inlineResults.map(
+        (it: InlineResultRow): InlineResultRow => it.resultId === row.resultId
+          ? {
+            resultId: it.resultId, title: it.title, description: it.description,
+            thumbFileId: it.thumbFileId, thumbPath: path, kind: it.kind
+          } : it);
+    }).catch((): void => {});
+  }
+
+  private pickInlineResult(row: InlineResultRow): void {
+    if (this.inlineQueryId === '') { return; }
+    const replyId = this.replyToId;
+    sendInlineResult(this.chatId, this.inlineQueryId, row.resultId, replyId).then((): void => {
+      this.draft = '';
+      this.inlineResults = [];
+      this.inlineQueryId = '';
+      this.clearReply();
+      this.atBottom = true;
+    }).catch((e: TdError): void => {
+      console.error(`ChatPage.sendInlineResult failed: ${e.message}`);
+      promptAction.showToast({ message: '发送内联结果失败', duration: 1600 });
+    });
+  }
+
+  @Builder
+  inlineResultsBar() {
+    Scroll() {
+      Row({ space: 8 }) {
+        ForEach(this.inlineResults, (row: InlineResultRow) => {
+          Column({ space: 3 }) {
+            Stack({ alignContent: Alignment.Center }) {
+              if (row.thumbPath !== '') {
+                Image(`file://${row.thumbPath}`).width(56).height(56)
+                  .objectFit(ImageFit.Cover).borderRadius(8);
+              } else {
+                SymbolGlyph($r('sys.symbol.doc')).fontSize(22)
+                  .fontColor([COLOR_TEXT_SECONDARY]);
+              }
+            }.width(58).height(58)
+            .backgroundColor($r('app.color.surface_alt')).borderRadius(8);
+            if (row.title !== '') {
+              Text(row.title).fontSize(10).fontColor(COLOR_TEXT_SECONDARY)
+                .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+                .constraintSize({ maxWidth: 62 });
+            }
+          }
+          .onClick((): void => this.pickInlineResult(row));
+        }, (row: InlineResultRow): string => `ir_${row.resultId}`);
+      }.padding({ left: 10, right: 10, top: 6, bottom: 6 });
+    }
+    .scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
+    .width('100%').height(88)
+    .backgroundColor($r('app.color.surface'))
+    .border({ width: { top: 0.7 }, color: $r('app.color.divider') });
+  }
+
+  // Typing a bare emoji offers matching stickers above the composer, as the
+  // official clients do.
+  private refreshStickerSuggestions(v: string): void {
+    const text = v.trim();
+    // Only a short pure-emoji draft qualifies (no letters/digits/spaces).
+    const isEmojiOnly = text.length > 0 && text.length <= 8 &&
+      !/[A-Za-z0-9\s]/.test(text);
+    if (!isEmojiOnly) {
+      if (this.stickerSuggestions.length > 0) { this.stickerSuggestions = []; }
+      return;
+    }
+    const seq = ++this.stickerSuggestSeq;
+    getStickersForEmoji(text).then((raw: TdObject[]): void => {
+      if (seq !== this.stickerSuggestSeq) { return; }
+      const items: StickerSuggestion[] = [];
+      for (const st of raw.slice(0, 12)) {
+        const file = st['sticker'] as TdObject | undefined;
+        const fileId = file !== undefined ? ((file['id'] as number | undefined) ?? 0) : 0;
+        const thumb = st['thumbnail'] as TdObject | undefined;
+        const thumbFile = thumb !== undefined ? (thumb['file'] as TdObject | undefined) : undefined;
+        const thumbId = thumbFile !== undefined ? ((thumbFile['id'] as number | undefined) ?? 0) : 0;
+        if (fileId === 0) { continue; }
+        items.push({ fileId, thumbId, thumbPath: '' });
+      }
+      this.stickerSuggestions = items;
+      for (const item of items) { this.downloadSuggestionThumb(item, seq); }
+    }).catch((): void => {});
+  }
+
+  private downloadSuggestionThumb(item: StickerSuggestion, seq: number): void {
+    if (item.thumbId === 0) { return; }
+    const req: TdRequest = { '@type': 'downloadFile' };
+    req['file_id'] = item.thumbId;
+    req['priority'] = 2;
+    req['synchronous'] = true;
+    getTdClient().send(req, 15000).then((file: TdObject): void => {
+      if (seq !== this.stickerSuggestSeq) { return; }
+      const local = file['local'] as TdObject | undefined;
+      const path = local !== undefined ? ((local['path'] as string | undefined) ?? '') : '';
+      if (path === '') { return; }
+      this.stickerSuggestions = this.stickerSuggestions.map(
+        (row: StickerSuggestion): StickerSuggestion => row.fileId === item.fileId
+          ? { fileId: row.fileId, thumbId: row.thumbId, thumbPath: path } : row);
+    }).catch((): void => {});
+  }
+
+  private sendSuggestedSticker(fileId: number): void {
+    this.store?.sendSticker(fileId, 512, 512);
+    rememberRecentSticker(fileId);
+    this.draft = '';
+    this.stickerSuggestions = [];
+    this.stickerSuggestSeq++;
+  }
+
+  @Builder
+  stickerSuggestionBar() {
+    Scroll() {
+      Row({ space: 8 }) {
+        ForEach(this.stickerSuggestions, (row: StickerSuggestion) => {
+          Stack({ alignContent: Alignment.Center }) {
+            if (row.thumbPath !== '') {
+              Image(`file://${row.thumbPath}`).width(56).height(56).objectFit(ImageFit.Contain);
+            } else {
+              LoadingProgress().width(20).height(20).color(COLOR_TEXT_SECONDARY);
+            }
+          }
+          .width(62).height(62)
+          .onClick((): void => this.sendSuggestedSticker(row.fileId));
+        }, (row: StickerSuggestion): string => `sg_${row.fileId}`);
+      }.padding({ left: 10, right: 10 });
+    }
+    .scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
+    .width('100%').height(70)
+    .backgroundColor($r('app.color.surface'))
+    .border({ width: { top: 0.7 }, color: $r('app.color.divider') });
   }
 
   private refreshCommands(): void {
@@ -3928,6 +4396,48 @@ struct ChatPage {
     } else {
       promptAction.showToast({ message: '图片不可用', duration: 1800 });
     }
+  }
+
+  private processAutomaticGallerySave(list: MessageEntry[]): void {
+    if (this.autoSaveInFlight || this.autoSavePendingIds.length === 0) { return; }
+    let target: MessageEntry | undefined = undefined;
+    let path: string = '';
+    let video: boolean = false;
+    for (const messageId of this.autoSavePendingIds) {
+      const entry = list.find((item: MessageEntry): boolean => item.id === messageId);
+      if (entry === undefined || entry.isOutgoing ||
+        (entry.contentType !== 'photo' && entry.contentType !== 'video')) {
+        this.autoSavePendingIds = this.autoSavePendingIds.filter((id: number): boolean => id !== messageId);
+        continue;
+      }
+      if (entry.contentType === 'video') {
+        if (entry.videoFailed) {
+          this.autoSavePendingIds = this.autoSavePendingIds.filter((id: number): boolean => id !== messageId);
+          continue;
+        }
+        if (entry.videoPath !== '') { target = entry; path = entry.videoPath; video = true; break; }
+      } else {
+        if (entry.photoFullFailed) {
+          this.autoSavePendingIds = this.autoSavePendingIds.filter((id: number): boolean => id !== messageId);
+          continue;
+        }
+        if (entry.photoFullPath !== '') { target = entry; path = entry.photoFullPath; break; }
+        if (entry.photoFullFileId === 0 && entry.photoPath !== '') {
+          target = entry; path = entry.photoPath; break;
+        }
+      }
+    }
+    if (target === undefined || path === '') { return; }
+    const id = target.id;
+    this.autoSavePendingIds = this.autoSavePendingIds.filter((value: number): boolean => value !== id);
+    this.autoSaveInFlight = true;
+    saveMediaToGallery(getContext(this) as common.UIAbilityContext, path, video).then((): void => {
+      this.autoSaveInFlight = false;
+      this.processAutomaticGallerySave(this.messages);
+    }).catch((): void => {
+      this.autoSaveInFlight = false;
+      this.processAutomaticGallerySave(this.messages);
+    });
   }
 
   private openDownloadedFile(message: MessageEntry): void {
@@ -4210,6 +4720,11 @@ struct ChatPage {
       this.headerMenuRow(this.isMuted ? 'sys.symbol.bell' : 'sys.symbol.bell_slash',
         this.headerMuteUpdating ? '正在更新通知' : (this.isMuted ? '取消静音' : '静音'),
         false, () => { this.toggleChatMute(); });
+      Divider().color($r('app.color.divider')).strokeWidth(0.7);
+      Divider().color($r('app.color.divider')).strokeWidth(0.7);
+      this.headerMenuRow('sys.symbol.clock', '自动删除消息', false, () => { this.chooseAutoDelete(); });
+      Divider().color($r('app.color.divider')).strokeWidth(0.7);
+      this.headerMenuRow('sys.symbol.calendar', '定时消息', false, () => { this.openScheduledSheet(); });
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
       this.headerMenuRow('sys.symbol.xmark_circle', '清空聊天记录', false, () => { this.confirmClearHistory(); });
       if (this.isGroup && this.membershipState === 'writable') {
@@ -4523,6 +5038,35 @@ struct ChatPage {
   }
 
   // Paperclip → 照片或视频: system photo picker, send each as photo/video.
+  // Replace the media of an already-sent photo/video message, keeping its
+  // caption (editMessageMedia).
+  private replaceMedia(messageId: number): void {
+    const msg = this.findMsg(messageId);
+    const store = this.store;
+    if (msg === null || store === null || this.mediaPickerOpen) { return; }
+    this.mediaPickerOpen = true;
+    const photoPicker = new photoAccessHelper.PhotoViewPicker();
+    const opts = new photoAccessHelper.PhotoSelectOptions();
+    opts.MIMEType = photoAccessHelper.PhotoViewMIMETypes.IMAGE_VIDEO_TYPE;
+    opts.maxSelectNumber = 1;
+    photoPicker.select(opts).then((res: photoAccessHelper.PhotoSelectResult): void => {
+      this.mediaPickerOpen = false;
+      if (res.photoUris.length === 0) { return; }
+      const path = this.copyUriToCache(res.photoUris[0]);
+      if (path === '') {
+        promptAction.showToast({ message: '无法读取所选文件', duration: 1600 });
+        return;
+      }
+      const isVideo = path.toLowerCase().endsWith('.mp4') || path.toLowerCase().endsWith('.mov');
+      store.editMediaAsync(messageId, path, isVideo, msg.text).then((): void => {
+        promptAction.showToast({ message: '媒体已替换', duration: 1500 });
+      }).catch((e: TdError): void => {
+        console.error(`ChatPage.replaceMedia failed: ${e.message}`);
+        promptAction.showToast({ message: '替换失败，原消息未改动', duration: 1700 });
+      });
+    }).catch((): void => { this.mediaPickerOpen = false; });
+  }
+
   private pickAndSendMedia(): void {
     if (this.mediaPickerOpen || this.composerSending || this.store === null) {
       return;
@@ -4667,6 +5211,268 @@ struct ChatPage {
     return `${m}:${`${s}`.padStart(2, '0')}`;
   }
 
+  // --- 定时消息管理 ---
+
+  private openScheduledSheet(): void {
+    this.headerMenuShow = false;
+    this.showScheduledSheet = true;
+    this.loadScheduled();
+  }
+
+  private loadScheduled(): void {
+    this.scheduledLoadState = 'loading';
+    const req: TdRequest = { '@type': 'getChatScheduledMessages' };
+    req['chat_id'] = this.chatId;
+    getTdClient().send(req).then((res: TdObject): void => {
+      const messages: TdObject[] = (res['messages'] as TdObject[] | undefined) ?? [];
+      const ids: number[] = [];
+      const previews: string[] = [];
+      const timeLabels: string[] = [];
+      for (const message of messages) {
+        const id: number = (message['id'] as number | undefined) ?? 0;
+        if (id === 0) {
+          continue;
+        }
+        ids.push(id);
+        previews.push(formatPreview(message));
+        const scheduling = message['scheduling_state'] as TdObject | undefined;
+        const schedulingType: string = scheduling !== undefined
+          ? ((scheduling['@type'] as string | undefined) ?? '') : '';
+        if (schedulingType === 'messageSchedulingStateSendWhenOnline') {
+          timeLabels.push('对方上线时发送');
+        } else {
+          const sendDate: number = scheduling !== undefined
+            ? ((scheduling['send_date'] as number | undefined) ?? 0) : 0;
+          const at = new Date(sendDate * 1000);
+          const two = (n: number): string => (n < 10 ? `0${n}` : `${n}`);
+          timeLabels.push(sendDate > 0
+            ? `${at.getMonth() + 1}月${at.getDate()}日 ${two(at.getHours())}:${two(at.getMinutes())}`
+            : '');
+        }
+      }
+      this.scheduledIds = ids;
+      this.scheduledPreviews = previews;
+      this.scheduledTimeLabels = timeLabels;
+      this.scheduledLoadState = 'ready';
+    }).catch((e: TdError): void => {
+      console.error(`ChatPage.loadScheduled failed: ${e.message}`);
+      this.scheduledLoadState = 'error';
+    });
+  }
+
+  // 立即发送：不带 scheduling_state 的 editMessageSchedulingState。
+  private sendScheduledNow(messageId: number): void {
+    const req: TdRequest = { '@type': 'editMessageSchedulingState' };
+    req['chat_id'] = this.chatId;
+    req['message_id'] = messageId;
+    getTdClient().send(req).then((): void => {
+      this.loadScheduled();
+    }).catch((e: TdError): void => {
+      console.error(`ChatPage.sendScheduledNow failed: ${e.message}`);
+      promptAction.showToast({ message: '发送失败，请稍后重试', duration: 1700 });
+    });
+  }
+
+  private deleteScheduled(messageId: number): void {
+    const req: TdRequest = { '@type': 'deleteMessages' };
+    req['chat_id'] = this.chatId;
+    req['message_ids'] = [messageId];
+    req['revoke'] = true;
+    getTdClient().send(req).then((): void => {
+      this.loadScheduled();
+    }).catch((e: TdError): void => {
+      console.error(`ChatPage.deleteScheduled failed: ${e.message}`);
+      promptAction.showToast({ message: '删除失败，请稍后重试', duration: 1700 });
+    });
+  }
+
+  @Builder
+  scheduledSheet() {
+    Column() {
+      Column().layoutWeight(1).onClick((): void => {
+        this.showScheduledSheet = false;
+      });
+      Column({ space: 10 }) {
+        Row().width(40).height(4).borderRadius(2).backgroundColor('#D0D0D0');
+        Text('定时消息').fontSize(17).fontWeight(FontWeight.Medium)
+          .fontColor(COLOR_TEXT_PRIMARY);
+        if (this.scheduledLoadState === 'loading') {
+          LoadingProgress().width(28).height(28).margin({ top: 24, bottom: 24 });
+        } else if (this.scheduledLoadState === 'error') {
+          Text('定时消息加载失败').fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
+            .margin({ top: 24, bottom: 24 });
+        } else if (this.scheduledIds.length === 0) {
+          Text('没有待发送的定时消息').fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
+            .margin({ top: 24, bottom: 24 });
+        } else {
+          List({ space: 6 }) {
+            ForEach(this.scheduledIds, (id: number, itemIndex: number) => {
+              ListItem() {
+                Row({ space: 10 }) {
+                  Column({ space: 3 }) {
+                    Text(this.scheduledPreviews[itemIndex] ?? '')
+                      .fontSize(14).fontColor(COLOR_TEXT_PRIMARY)
+                      .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
+                    Text(this.scheduledTimeLabels[itemIndex] ?? '')
+                      .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+                  }
+                  .alignItems(HorizontalAlign.Start).layoutWeight(1);
+                  Button('立即发送').fontSize(12).height(30)
+                    .onClick((): void => this.sendScheduledNow(id));
+                  Row() {
+                    SymbolGlyph($r('sys.symbol.trash')).fontSize(17)
+                      .fontColor(['#E5484D']);
+                  }
+                  .width(34).height(34).borderRadius(17)
+                  .justifyContent(FlexAlign.Center)
+                  .onClick((): void => this.deleteScheduled(id));
+                }
+                .width('100%').padding({ top: 6, bottom: 6 });
+              }
+            }, (id: number): string => `scheduled_${id}`);
+          }
+          .constraintSize({ maxHeight: 320 });
+        }
+      }
+      .width('100%')
+      .padding({ left: 16, right: 16, top: 10, bottom: 24 })
+      .backgroundColor($r('app.color.surface'))
+      .borderRadius({ topLeft: 16, topRight: 16 });
+    }
+    .width('100%').height('100%')
+    .backgroundColor('#66000000');
+  }
+
+  private attachMenuItems(): MenuElement[] {
+    const items: MenuElement[] = [
+      { value: '照片或视频', action: (): void => {
+        this.setEmojiPanel(false);
+        this.pickAndSendMedia();
+      } } as MenuElement,
+      { value: '文件', action: (): void => {
+        this.setEmojiPanel(false);
+        this.pickAndSendFile();
+      } } as MenuElement,
+      { value: '音乐', action: (): void => {
+        this.setEmojiPanel(false);
+        this.pickAndSendAudio();
+      } } as MenuElement,
+      { value: '位置', action: (): void => {
+        this.setEmojiPanel(false);
+        this.sendCurrentLocation();
+      } } as MenuElement,
+      { value: '联系人', action: (): void => {
+        this.setEmojiPanel(false);
+        this.openContactPicker();
+      } } as MenuElement
+    ];
+    // 投票仅群/频道可发（Telegram 限制私聊不能发投票）。
+    if (this.isGroup || this.isChannel) {
+      items.push({ value: '投票', action: (): void => {
+        this.setEmojiPanel(false);
+        this.openPollComposer();
+      } } as MenuElement);
+    }
+    items.push({ value: '骰子', action: (): void => {
+      this.setEmojiPanel(false);
+      this.showDiceMenu();
+    } } as MenuElement);
+    return items;
+  }
+
+  private openPollComposer(): void {
+    this.showPollSheet = true;
+  }
+
+  private openContactPicker(): void {
+    this.showContactSheet = true;
+  }
+
+  // 音乐：文件选择器按音频后缀过滤，复制沙箱后按音频消息发送。
+  private pickAndSendAudio(): void {
+    const docPicker = new picker.DocumentViewPicker(getContext(this) as common.UIAbilityContext);
+    const opts = new picker.DocumentSelectOptions();
+    opts.maxSelectNumber = 1;
+    opts.fileSuffixFilters = ['.mp3', '.m4a', '.flac', '.ogg', '.wav', '.aac'];
+    docPicker.select(opts).then((uris: string[]) => {
+      if (uris.length === 0) {
+        return;
+      }
+      try {
+        const uri = uris[0];
+        const name = decodeURIComponent(uri.substring(uri.lastIndexOf('/') + 1));
+        const dest = `${(getContext(this) as common.UIAbilityContext).cacheDir}/send_${Date.now()}_${name}`;
+        const src = fs.openSync(uri, fs.OpenMode.READ_ONLY);
+        fs.copyFileSync(src.fd, dest);
+        fs.closeSync(src);
+        if (this.store !== null) {
+          this.atBottom = true;
+          this.store.sendAudio(dest, this.draft.trim());
+          this.draft = '';
+        }
+      } catch (e) {
+        console.error(`ChatPage.pickAndSendAudio copy failed: ${e}`);
+        promptAction.showToast({ message: '音频读取失败', duration: 2000 });
+      }
+    }).catch((e: Object) => {
+      console.error(`ChatPage.pickAndSendAudio select failed: ${JSON.stringify(e)}`);
+    });
+  }
+
+  // 位置：申请定位权限 → 取当前坐标 → 发送。无地图选点（Map Kit 需 AGC 凭据）。
+  private sendCurrentLocation(): void {
+    const context = getContext(this) as common.UIAbilityContext;
+    const permissions: Permissions[] =
+      ['ohos.permission.APPROXIMATELY_LOCATION', 'ohos.permission.LOCATION'];
+    abilityAccessCtrl.createAtManager().requestPermissionsFromUser(context, permissions)
+      .then((result): void => {
+        const granted: boolean = result.authResults.length > 0 && result.authResults[0] === 0;
+        if (!granted) {
+          promptAction.showToast({ message: '需要定位权限才能发送位置', duration: 1800 });
+          return;
+        }
+        promptAction.showToast({ message: '正在获取位置…', duration: 1200 });
+        const request: geoLocationManager.SingleLocationRequest = {
+          locatingPriority: geoLocationManager.LocatingPriority.PRIORITY_LOCATING_SPEED,
+          locatingTimeoutMs: 10000
+        };
+        geoLocationManager.getCurrentLocation(request)
+          .then((location: geoLocationManager.Location): void => {
+            if (this.store !== null) {
+              this.atBottom = true;
+              this.store.sendLocation(location.latitude, location.longitude);
+            }
+          })
+          .catch((e: BusinessError): void => {
+            console.error(`ChatPage.sendCurrentLocation failed: ${e.message}`);
+            promptAction.showToast({ message: '定位失败，请确认已开启定位服务', duration: 2000 });
+          });
+      })
+      .catch((e: BusinessError): void => {
+        console.error(`ChatPage location permission failed: ${e.message}`);
+      });
+  }
+
+  // 骰子：系统动作菜单六选一（正好是 showActionMenu 的按钮上限）。
+  // 🎰 老虎机由 DiceBubble 叠 5 层 TGS 渲染。
+  private showDiceMenu(): void {
+    const emojis: string[] = ['🎲', '🎯', '🏀', '⚽', '🎳', '🎰'];
+    promptAction.showActionMenu({
+      title: '掷一个',
+      buttons: [
+        { text: '🎲 骰子', color: '#007AFF' }, { text: '🎯 飞镖', color: '#007AFF' },
+        { text: '🏀 篮球', color: '#007AFF' }, { text: '⚽ 足球', color: '#007AFF' },
+        { text: '🎳 保龄球', color: '#007AFF' }, { text: '🎰 老虎机', color: '#007AFF' }
+      ]
+    }).then((result): void => {
+      const index: number = result.index;
+      if (index >= 0 && index < emojis.length && this.store !== null) {
+        this.atBottom = true;
+        this.store.sendDice(emojis[index]);
+      }
+    }).catch((): void => {});
+  }
+
   // Paperclip: pick a document, copy it into the app sandbox (TDLib can't read
   // picker URIs), then send it as a document message.
   private pickAndSendFile(): void {
@@ -4699,6 +5505,10 @@ struct ChatPage {
   }
 
   private doSend(): void {
+    if (this.editingId !== 0) {
+      this.commitEdit();
+      return;
+    }
     const draftSnapshot: string = this.draft;
     const text: string = draftSnapshot.trim();
     const store: MessageStore | null = this.store;
@@ -4994,7 +5804,331 @@ struct ChatPage {
       return;
     }
     this.reactionTargetId = messageId;
+    this.sheetReactions = REACTION_EMOJIS;
     this.showReactionSheet = true;
+    this.loadAvailableReactions(messageId);
+  }
+
+  // Channels/groups can restrict which reactions are allowed; ask TDLib for
+  // the real list so the sheet never offers an emoji the server would reject.
+  private loadAvailableReactions(messageId: number): void {
+    const req: TdRequest = { '@type': 'getMessageAvailableReactions' };
+    req['chat_id'] = this.chatId;
+    req['message_id'] = messageId;
+    req['row_size'] = 8;
+    getTdClient().send(req, 10000).then((result: TdObject): void => {
+      if (this.reactionTargetId !== messageId || !this.showReactionSheet) { return; }
+      const emojis: string[] = [];
+      const buckets: string[] = ['top_reactions', 'recent_reactions', 'popular_reactions'];
+      for (const bucket of buckets) {
+        for (const item of (result[bucket] as TdObject[] | undefined) ?? []) {
+          const type = item['type'] as TdObject | undefined;
+          if (type !== undefined && type['@type'] === 'reactionTypeEmoji') {
+            const emoji = (type['emoji'] as string | undefined) ?? '';
+            if (emoji !== '' && emojis.indexOf(emoji) < 0) { emojis.push(emoji); }
+          }
+        }
+      }
+      if (emojis.length > 0) { this.sheetReactions = emojis; }
+    }).catch((e: TdError): void => {
+      console.error(`ChatPage.availableReactions failed: ${e.message}`);
+    });
+  }
+
+  private stopPoll(messageId: number): void {
+    promptAction.showDialog({
+      title: '结束投票',
+      message: '结束后不能再投票，结果将保留。',
+      buttons: [
+        { text: '取消', color: '#8E8E93' },
+        { text: '结束', color: '#E5484D' }
+      ]
+    }).then((result): void => {
+      if (result.index !== 1) { return; }
+      this.store?.stopPollAsync(messageId).then((): void => {
+        promptAction.showToast({ message: '投票已结束', duration: 1500 });
+      }).catch((e: TdError): void => {
+        console.error(`ChatPage.stopPoll failed: ${e.message}`);
+        promptAction.showToast({ message: '结束投票失败', duration: 1600 });
+      });
+    }).catch((): void => {});
+  }
+
+  // Public polls only: list who picked each option.
+  private showPollVoters(messageId: number): void {
+    const msg = this.findMsg(messageId);
+    const store = this.store;
+    if (msg === null || store === null) { return; }
+    const lines: string[] = [];
+    const tasks: Promise<void>[] = [];
+    msg.pollOptions.forEach((option: PollOptionInfo, index: number): void => {
+      tasks.push(store.pollVotersAsync(messageId, index).then((result: TdObject): void => {
+        const senders = (result['senders'] as TdObject[] | undefined) ?? [];
+        const names: string[] = [];
+        for (const sender of senders) {
+          if (sender['@type'] === 'messageSenderUser') {
+            const uid = (sender['user_id'] as number | undefined) ?? 0;
+            const name = getUserStore().displayName(uid);
+            if (name === '') { getUserStore().ensure(uid); }
+            names.push(name !== '' ? name : `用户 ${uid}`);
+          }
+        }
+        if (names.length > 0) {
+          lines.push(`${option.text}：${names.join('、')}`);
+        }
+      }).catch((): void => {}));
+    });
+    Promise.all(tasks).then((): void => {
+      promptAction.showDialog({
+        title: '投票人',
+        message: lines.length > 0 ? lines.join('\n\n') : '暂无公开的投票记录',
+        buttons: [{ text: '关闭', color: '#3390EC' }]
+      }).catch((): void => {});
+    }).catch((): void => {});
+  }
+
+  private setDefaultReaction(emoji: string): void {
+    const rt: TdObject = { '@type': 'reactionTypeEmoji' };
+    rt['emoji'] = emoji;
+    const req: TdRequest = { '@type': 'setDefaultReactionType' };
+    req['reaction_type'] = rt;
+    getTdClient().send(req).then((): void => {
+      promptAction.showToast({ message: `已将 ${emoji} 设为默认回应`, duration: 1600 });
+    }).catch((e: TdError): void => {
+      console.error(`ChatPage.setDefaultReaction failed: ${e.message}`);
+      promptAction.showToast({ message: '设置默认回应失败', duration: 1600 });
+    });
+  }
+
+  // Chat-level auto-delete timer (阅后即焚).
+  private chooseAutoDelete(): void {
+    const labels: string[] = ['关闭', '1 天', '1 周', '1 个月'];
+    const seconds: number[] = [0, 86400, 604800, 2678400];
+    promptAction.showActionMenu({
+      title: '消息自动删除',
+      buttons: labels.map((text: string): promptAction.Button =>
+        ({ text, color: '#3390EC' } as promptAction.Button)) as
+        [promptAction.Button, promptAction.Button?, promptAction.Button?,
+          promptAction.Button?, promptAction.Button?, promptAction.Button?]
+    }).then((chosen): void => {
+      const value = seconds[chosen.index];
+      if (value === undefined) { return; }
+      this.store?.setAutoDeleteAsync(value).then((): void => {
+        promptAction.showToast({
+          message: value === 0 ? '已关闭自动删除' : `新消息将在${labels[chosen.index]}后删除`,
+          duration: 1800
+        });
+      }).catch((e: TdError): void => {
+        console.error(`ChatPage.autoDelete failed: ${e.message}`);
+        promptAction.showToast({ message: '设置失败，可能没有权限', duration: 1700 });
+      });
+    }).catch((): void => {});
+  }
+
+  // Long-press the send button: schedule or send silently.
+  private showSendOptions(): void {
+    if (this.draft.trim() === '' || this.editingId !== 0) { return; }
+    const labels: string[] = ['静音发送', '1 小时后发送', '明天早上 9 点发送'];
+    promptAction.showActionMenu({
+      title: '发送选项',
+      buttons: labels.map((text: string): promptAction.Button =>
+        ({ text, color: '#3390EC' } as promptAction.Button)) as
+        [promptAction.Button, promptAction.Button?, promptAction.Button?,
+          promptAction.Button?, promptAction.Button?, promptAction.Button?]
+    }).then((chosen): void => {
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      let sendDate = 0;
+      let silent = false;
+      if (chosen.index === 0) {
+        silent = true;
+      } else if (chosen.index === 1) {
+        sendDate = nowSeconds + 3600;
+      } else if (chosen.index === 2) {
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        tomorrow.setHours(9, 0, 0, 0);
+        sendDate = Math.floor(tomorrow.getTime() / 1000);
+      } else {
+        return;
+      }
+      const text = this.draft.trim();
+      const replyId = this.replyToId;
+      this.store?.sendScheduledAsync(text, replyId, sendDate, silent).then((): void => {
+        this.draft = '';
+        this.clearReply();
+        promptAction.showToast({
+          message: sendDate > 0 ? '已安排定时发送' : '已静音发送', duration: 1600
+        });
+      }).catch((e: TdError): void => {
+        console.error(`ChatPage.sendScheduled failed: ${e.message}`);
+        promptAction.showToast({ message: '发送失败', duration: 1600 });
+      });
+    }).catch((): void => {});
+  }
+
+  private togglePinMessage(messageId: number, unpin: boolean): void {
+    const store = this.store;
+    if (store === null) { return; }
+    const task: Promise<void> = unpin
+      ? store.unpinAsync(messageId) : store.pinAsync(messageId);
+    task.then((): void => {
+      promptAction.showToast({ message: unpin ? '已取消置顶' : '已置顶', duration: 1400 });
+    }).catch((e: TdError): void => {
+      console.error(`ChatPage.togglePin failed: ${e.message}`);
+      promptAction.showToast({
+        message: e.message.indexOf('not enough rights') >= 0 || e.message.indexOf('ADMIN') >= 0
+          ? '没有置顶权限' : (unpin ? '取消置顶失败' : '置顶失败'),
+        duration: 1700
+      });
+    });
+  }
+
+  // Live "typing…" from peers (updateChatAction). Entries expire after 6s —
+  // TDLib sends chatActionCancel, but a dropped cancel must not stick forever.
+  private onChatAction(update: TdObject): void {
+    if (((update['chat_id'] as number | undefined) ?? 0) !== this.chatId) { return; }
+    const sender = update['sender_id'] as TdObject | undefined;
+    if (sender === undefined || sender['@type'] !== 'messageSenderUser') { return; }
+    const uid = (sender['user_id'] as number | undefined) ?? 0;
+    if (uid <= 0) { return; }
+    const action = update['action'] as TdObject | undefined;
+    const actionType = action !== undefined ? ((action['@type'] as string | undefined) ?? '') : '';
+    if (actionType === 'chatActionCancel') {
+      this.typingSenders.delete(uid);
+    } else {
+      this.typingSenders.set(uid, Date.now() + 6000);
+      getUserStore().ensure(uid);
+    }
+    this.rebuildTypingLabel();
+    if (this.typingTimer === -1 && this.typingSenders.size > 0) {
+      this.typingTimer = setInterval((): void => {
+        const now = Date.now();
+        let changed = false;
+        for (const key of Array.from(this.typingSenders.keys())) {
+          if ((this.typingSenders.get(key) ?? 0) < now) {
+            this.typingSenders.delete(key);
+            changed = true;
+          }
+        }
+        if (changed) { this.rebuildTypingLabel(); }
+        if (this.typingSenders.size === 0 && this.typingTimer !== -1) {
+          clearInterval(this.typingTimer);
+          this.typingTimer = -1;
+        }
+      }, 1500);
+    }
+  }
+
+  private rebuildTypingLabel(): void {
+    const ids = Array.from(this.typingSenders.keys());
+    if (ids.length === 0) {
+      this.typingLabel = '';
+      return;
+    }
+    if (this.headerKind === 'private' || this.headerKind === 'secret') {
+      this.typingLabel = '正在输入…';
+      return;
+    }
+    if (ids.length > 1) {
+      this.typingLabel = `${ids.length} 人正在输入…`;
+      return;
+    }
+    const name = getUserStore().displayName(ids[0]);
+    this.typingLabel = `${name !== '' ? name.split(' ')[0] : '有人'}正在输入…`;
+  }
+
+  // Pick up the draft synced from other devices (chat.draft_message). Only
+  // fills an empty composer — never overwrites what the user is typing.
+  private restoreServerDraft(): void {
+    const req: TdRequest = { '@type': 'getChat' };
+    req['chat_id'] = this.chatId;
+    getTdClient().send(req).then((chat: TdObject): void => {
+      if (this.draft !== '') { return; }
+      const draft = chat['draft_message'] as TdObject | undefined;
+      const content = draft !== undefined
+        ? (draft['input_message_text'] as TdObject | undefined) : undefined;
+      const ft = content !== undefined ? (content['text'] as TdObject | undefined) : undefined;
+      const text = ft !== undefined ? ((ft['text'] as string | undefined) ?? '') : '';
+      if (text !== '') { this.draft = text; }
+    }).catch((): void => {});
+  }
+
+  // Translate a message's text/caption into the system language and show the
+  // result in place (dialog). TDLib needs an explicit ISO 639-1 target code.
+  private translateMessage(messageId: number): void {
+    let target = 'zh';
+    try {
+      const lang = i18n.System.getSystemLanguage();
+      if (lang.length >= 2) { target = lang.split('-')[0]; }
+    } catch (_e) { /* keep zh */ }
+    const req: TdRequest = { '@type': 'translateMessageText' };
+    req['chat_id'] = this.chatId;
+    req['message_id'] = messageId;
+    req['to_language_code'] = target;
+    getTdClient().send(req, 20000).then((result: TdObject): void => {
+      const text = (result['text'] as string | undefined) ?? '';
+      if (text === '') {
+        promptAction.showToast({ message: '没有可翻译的内容', duration: 1600 });
+        return;
+      }
+      promptAction.showDialog({
+        title: '翻译',
+        message: text,
+        buttons: [
+          { text: '复制', color: '#3390EC' },
+          { text: '关闭', color: '#8E8E93' }
+        ]
+      }).then((chosen): void => {
+        if (chosen.index === 0) {
+          const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text);
+          pasteboard.getSystemPasteboard().setData(data).then((): void => {
+            promptAction.showToast({ message: '已复制', duration: 1300 });
+          }).catch((): void => {});
+        }
+      }).catch((): void => {});
+    }).catch((e: TdError): void => {
+      console.error(`ChatPage.translate failed: ${e.message}`);
+      promptAction.showToast({ message: '翻译失败，请稍后重试', duration: 1700 });
+    });
+  }
+
+  // Long-press on a reaction chip: who reacted with it.
+  private showReactors(messageId: number, emoji: string): void {
+    const req: TdRequest = { '@type': 'getMessageAddedReactions' };
+    req['chat_id'] = this.chatId;
+    req['message_id'] = messageId;
+    const rt: TdObject = { '@type': 'reactionTypeEmoji' };
+    rt['emoji'] = emoji;
+    req['reaction_type'] = rt;
+    req['offset'] = '';
+    req['limit'] = 50;
+    getTdClient().send(req, 10000).then((result: TdObject): void => {
+      const rows = (result['reactions'] as TdObject[] | undefined) ?? [];
+      const total = (result['total_count'] as number | undefined) ?? rows.length;
+      const names: string[] = [];
+      for (const row of rows) {
+        const sender = row['sender_id'] as TdObject | undefined;
+        if (sender === undefined) { continue; }
+        if (sender['@type'] === 'messageSenderUser') {
+          const uid = (sender['user_id'] as number | undefined) ?? 0;
+          const name = getUserStore().displayName(uid);
+          if (name === '') { getUserStore().ensure(uid); }
+          names.push(name !== '' ? name : `用户 ${uid}`);
+        } else {
+          const cid = (sender['chat_id'] as number | undefined) ?? 0;
+          const entry = getChatStore().entryOf(cid);
+          names.push(entry !== undefined ? entry.title : '匿名身份');
+        }
+      }
+      promptAction.showDialog({
+        title: `${emoji} 共 ${total} 人`,
+        message: names.length > 0 ? names.join('\n') : '暂无详情',
+        buttons: [{ text: '关闭', color: '#3390EC' }]
+      }).catch((): void => {});
+    }).catch((e: TdError): void => {
+      console.error(`ChatPage.showReactors failed: ${e.message}`);
+      promptAction.showToast({ message: '无法获取回应详情', duration: 1600 });
+    });
   }
 
   private closeReactionSheet(): void {
@@ -5714,6 +6848,86 @@ struct ChatPage {
       .animation({ duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180), curve: Curve.EaseOut }));
   }
 
+  private startEdit(messageId: number): void {
+    const msg = this.store?.getMessages().find(
+      (m: MessageEntry): boolean => m.id === messageId);
+    const captionTypes: string[] = ['photo', 'video', 'file', 'audio', 'voice'];
+    if (msg === undefined || !msg.isOutgoing ||
+      (msg.contentType !== 'text' && captionTypes.indexOf(msg.contentType) < 0)) {
+      return;
+    }
+    if (this.editingId === 0) {
+      this.draftBeforeEdit = this.draft;
+    }
+    this.editingId = messageId;
+    this.editingKind = msg.contentType === 'text' ? 'text' : 'caption';
+    this.editingPreview = msg.text !== '' ? msg.text
+      : (this.editingKind === 'caption' ? '（无说明文字）' : '');
+    this.draft = msg.text;
+  }
+
+  private cancelEdit(): void {
+    if (this.editingId === 0) { return; }
+    this.editingId = 0;
+    this.editingPreview = '';
+    this.draft = this.draftBeforeEdit;
+    this.draftBeforeEdit = '';
+  }
+
+  private commitEdit(): void {
+    const store = this.store;
+    const editId = this.editingId;
+    const text = this.draft.trim();
+    // Captions may be cleared (empty); message text may not.
+    if (store === null || editId === 0 || this.composerSending ||
+      (text === '' && this.editingKind === 'text')) {
+      return;
+    }
+    this.composerSending = true;
+    const task: Promise<void> = this.editingKind === 'caption'
+      ? store.editCaptionAsync(editId, text) : store.editTextAsync(editId, text);
+    task.then((): void => {
+      this.composerSending = false;
+      if (this.editingId === editId) {
+        this.editingId = 0;
+        this.editingPreview = '';
+        this.draft = this.draftBeforeEdit;
+        this.draftBeforeEdit = '';
+      }
+    }).catch((e: TdError): void => {
+      this.composerSending = false;
+      console.error(`ChatPage.commitEdit failed: ${e.message}`);
+      promptAction.showToast({
+        message: e.message.indexOf('MESSAGE_NOT_MODIFIED') >= 0
+          ? '内容没有变化' : '编辑失败，原消息未改动',
+        duration: 1800
+      });
+    });
+  }
+
+  // Edit strip above the input bar: pencil accent + original excerpt + ✕.
+  @Builder
+  editPreview() {
+    Row({ space: 10 }) {
+      Row().width(3).height(34).borderRadius(2).backgroundColor(COLOR_PRIMARY);
+      Column({ space: 1 }) {
+        Text(this.editingKind === 'caption' ? '编辑说明文字' : '编辑消息')
+          .fontSize(13).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium);
+        Text(this.editingPreview).fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
+          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
+      }
+      .alignItems(HorizontalAlign.Start).layoutWeight(1);
+      Row() {
+        SymbolGlyph($r('sys.symbol.xmark')).fontSize(16).fontColor([COLOR_TEXT_SECONDARY]);
+      }
+      .width(32).height(32).borderRadius(16)
+      .justifyContent(FlexAlign.Center)
+      .onClick(() => { this.cancelEdit(); });
+    }
+    .width('100%').height(44).padding({ left: 12, right: 8 })
+    .backgroundColor($r('app.color.surface'));
+  }
+
   // Reply preview strip above the input bar (Telegram style): accent bar, sender
   // name, message excerpt, and an ✕ to cancel.
   @Builder
@@ -5769,7 +6983,7 @@ struct ChatPage {
         .width('100%').padding({ left: 6, right: 6 });
         Scroll() {
           Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
-            ForEach(REACTION_EMOJIS, (e: string) => {
+            ForEach(this.sheetReactions, (e: string) => {
               Row() {
                 Text(e).fontSize(27);
               }
@@ -5936,6 +7150,11 @@ struct ChatPage {
   }
 
   private composerPlaceholder(): string {
+    // Live typing state borrows the composer's gray placeholder — costs no
+    // space and can never cover a message.
+    if (this.typingLabel !== '') {
+      return this.typingLabel;
+    }
     if (this.replyKbVisible() && this.replyKeyboard !== null &&
       this.replyKeyboard.placeholder.trim() !== '') {
       return this.replyKeyboard.placeholder;
@@ -6020,6 +7239,11 @@ struct ChatPage {
       } else if (this.membershipState === 'blocked') {
         Text('你无法加入此聊天')
           .fontSize(16).fontColor(COLOR_TEXT_SECONDARY).fontWeight(FontWeight.Medium);
+      } else if (this.membershipState === 'readonly') {
+        SymbolGlyph($r(this.isMuted ? 'sys.symbol.bell' : 'sys.symbol.bell_slash'))
+          .fontSize(17).fontColor([COLOR_PRIMARY]);
+        Text(this.isMuted ? '取消静音' : '静音')
+          .fontSize(16).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium);
       } else {
         if (this.joiningChat) {
           LoadingProgress()
@@ -6036,8 +7260,15 @@ struct ChatPage {
     .alignItems(VerticalAlign.Center)
     .backgroundColor($r('app.color.surface'))
     .border({ width: { top: 0.7 }, color: $r('app.color.divider') })
-    .enabled(this.membershipState === 'joinable' && !this.joiningChat)
-    .onClick(() => { this.joinCurrentChat(); })
+    .enabled((this.membershipState === 'joinable' && !this.joiningChat) ||
+      this.membershipState === 'readonly')
+    .onClick(() => {
+      if (this.membershipState === 'readonly') {
+        this.toggleChatMute();
+      } else {
+        this.joinCurrentChat();
+      }
+    })
     .onAreaChange((_old: Area, area: Area) => { this.inputBarH = area.height as number; });
   }
 
@@ -6114,6 +7345,9 @@ struct ChatPage {
             .onChange((v: string) => {
               this.draft = v;
               this.updateSuggestions(v);
+              if (v.trim() !== '' && this.editingId === 0) {
+                this.store?.notifyTyping();
+              }
             })
             // 聊天设置 → 回车键发送: the IME's action key becomes 发送 and submits;
             // otherwise TextArea keeps the ordinary newline action.
@@ -6159,19 +7393,16 @@ struct ChatPage {
             .accessibilityText(this.replyKbCollapsed ? '打开 Bot 键盘' : '切换到文字输入')
             .onClick(() => { this.toggleReplyKeyboard(); });
           }
+          if (this.botMiniAppUrlValue !== '') {
+            SymbolGlyph($r('sys.symbol.square_grid_2x2'))
+              .fontSize(22).fontColor([COLOR_PRIMARY])
+              .accessibilityText('打开 Mini App')
+              .onClick((): void => { this.openBotMiniApp(); });
+          }
           SymbolGlyph($r('sys.symbol.paperclip'))
             .fontSize(22)
             .fontColor([COLOR_TEXT_SECONDARY])
-            .bindMenu([
-              { value: '照片或视频', action: (): void => {
-                this.setEmojiPanel(false);
-                this.pickAndSendMedia();
-              } } as MenuElement,
-              { value: '文件', action: (): void => {
-                this.setEmojiPanel(false);
-                this.pickAndSendFile();
-              } } as MenuElement
-            ]);
+            .bindMenu(this.attachMenuItems());
           // Mic ↔ send swap: outgoing icon shrinks/fades while the incoming one
           // scales in (the send button adds a small un-rotate flourish).
           Stack() {
@@ -6213,7 +7444,9 @@ struct ChatPage {
                 .combine(TransitionEffect.scale({ x: 0.3, y: 0.3 }))
                 .combine(TransitionEffect.rotate({ angle: -45 }))
                 .animation({ duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 200), curve: Curve.EaseOut }))
-              .onClick(() => { this.doSend(); });
+              .onClick(() => { this.doSend(); })
+              // Long-press: schedule / silent send.
+              .gesture(LongPressGesture().onAction(() => { this.showSendOptions(); }));
             }
           }.width(40).height(40);
         }
@@ -6278,7 +7511,9 @@ struct ChatPage {
         this.membershipBar();
       } else {
         Column() {
-          if (this.replyToId !== 0) {
+          if (this.editingId !== 0) {
+            this.editPreview();
+          } else if (this.replyToId !== 0) {
             this.replyPreview();
           }
           this.inputBar();
@@ -6966,6 +8201,7 @@ struct ChatPage {
               }
               Column() {
               MessageBubble({ msg: g.head, nowSec: this.nowSec, isGroup: this.isGroup, isChannel: this.isChannel,
+                themeBubbleOut: this.themeBubbleOutColor,
                 showUnreadDivider: this.firstUnreadId !== 0 &&
                   g.memberIds.indexOf(this.firstUnreadId) >= 0,
                 dateLabel: g.dateLabel,
@@ -6990,9 +8226,21 @@ struct ChatPage {
                   router.pushUrl({ url: 'pages/profile/ProfilePage', params: params });
                 },
                 onReplyTap: (id: number): void => { this.onReplyTap(id); },
+                onEditMsg: (id: number): void => { this.startEdit(id); },
+                onShowReactors: (id: number, emoji: string): void => {
+                  this.showReactors(id, emoji);
+                },
+                onTranslateMsg: (id: number): void => { this.translateMessage(id); },
+                onPinMsg: (id: number, unpin: boolean): void => { this.togglePinMessage(id, unpin); },
+                onStopPoll: (id: number): void => { this.stopPoll(id); },
+                onReplaceMedia: (id: number): void => { this.replaceMedia(id); },
+                onPollVoters: (id: number): void => { this.showPollVoters(id); },
+                onSetDefaultReaction: (emoji: string): void => { this.setDefaultReaction(emoji); },
+                isPinnedMsg: (this.store?.getPinnedIds() ?? []).indexOf(g.head.id) >= 0,
                 onFileTap: (id: number): void => { this.onFileTap(id); },
                 onFileSave: (id: number): void => { this.onFileSave(id); },
                 onStickerRetry: (id: number): void => { this.store?.retrySticker(id); },
+                onLinkPreviewRetry: (id: number): void => { this.store?.retryLinkPreviewPhoto(id); },
                 onContactOpen: (userId: number, phone: string, vcard: string): void => {
                   this.openSharedContact(userId, phone, vcard);
                 },
@@ -7094,6 +8342,9 @@ struct ChatPage {
         }
         .width('100%').height('100%')
         .contentEndOffset(this.bottomChromeH + 8)
+        // Pre-build a few offscreen rows so a fling doesn't pay the full
+        // MessageBubble construction cost inside the visible frame.
+        .cachedCount(4)
         // Keep the visible messages pinned in place when an older page is
         // prepended above — without this, the List stays index-anchored and
         // visibly jumps to the top of the newly loaded page.
@@ -7205,6 +8456,16 @@ struct ChatPage {
             (this.mentionItems.length > 0 || this.commandPanelActive())) {
             this.suggestionPanel();
           }
+          if (this.membershipState === 'writable' && !this.showEmojiPanel &&
+            this.mentionItems.length === 0 && !this.commandPanelActive() &&
+            this.inlineResults.length > 0) {
+            this.inlineResultsBar();
+          }
+          if (this.membershipState === 'writable' && !this.showEmojiPanel &&
+            this.mentionItems.length === 0 && !this.commandPanelActive() &&
+            this.inlineResults.length === 0 && this.stickerSuggestions.length > 0) {
+            this.stickerSuggestionBar();
+          }
           this.bottomDock();
         }
         .width('100%').height('100%')
@@ -7296,6 +8557,39 @@ struct ChatPage {
       }
       if (this.showForwardSheet) {
         this.forwardSheet();
+      }
+      if (this.showScheduledSheet) {
+        this.scheduledSheet();
+      }
+      if (this.showPollSheet) {
+        PollComposeSheet({
+          onSubmit: (question: string, options: string[], isAnonymous: boolean,
+            isQuiz: boolean, correctOptionId: number): void => {
+            this.showPollSheet = false;
+            if (this.store !== null) {
+              this.atBottom = true;
+              this.store.sendPoll(question, options, isAnonymous, isQuiz, correctOptionId);
+            }
+          },
+          onClose: (): void => {
+            this.showPollSheet = false;
+          }
+        });
+      }
+      if (this.showContactSheet) {
+        ContactPickerSheet({
+          onPick: (contact: PickedContact): void => {
+            this.showContactSheet = false;
+            if (this.store !== null) {
+              this.atBottom = true;
+              this.store.sendContact(
+                contact.phone, contact.firstName, contact.lastName, contact.userId);
+            }
+          },
+          onClose: (): void => {
+            this.showContactSheet = false;
+          }
+        });
       }
       // The latest-message FAB belongs to the chat layer. Keeping it visible
       // while the media panel is open puts it above (and blocks) the GIF tab.

@@ -17,6 +17,10 @@
       "value": "发送语音消息和直播发言需要使用麦克风"
     },
     {
+      "name": "location_permission_reason",
+      "value": "发送位置消息需要获取当前定位"
+    },
+    {
       "name": "camera_permission_reason",
       "value": "视频直播需要使用摄像头"
     }

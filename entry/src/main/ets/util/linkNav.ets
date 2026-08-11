@@ -87,6 +87,82 @@ export function inviteLinkOf(url: string): string {
   return '';
 }
 
+function telegramPathParts(url: string): string[] {
+  const raw = url.trim();
+  let rest = raw;
+  const scheme = rest.indexOf('://');
+  if (scheme >= 0) {
+    rest = rest.substring(scheme + 3);
+  }
+  const slash = rest.indexOf('/');
+  const host = (slash >= 0 ? rest.substring(0, slash) : rest).toLowerCase();
+  if (host !== 't.me' && host !== 'telegram.me' && host !== 'telegram.dog') {
+    return [];
+  }
+  if (slash < 0) {
+    return [];
+  }
+  const clean = rest.substring(slash + 1).split('?')[0].split('#')[0];
+  return clean.split('/').filter((part: string): boolean => part.length > 0);
+}
+
+function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch (_e) {
+    return value;
+  }
+}
+
+function validResourceToken(value: string): boolean {
+  if (value.length === 0 || value.length > 160) {
+    return false;
+  }
+  return value.indexOf('/') < 0 && value.indexOf('?') < 0 && value.indexOf('#') < 0;
+}
+
+// Shared chat-folder invite: https://t.me/addlist/<slug> or
+// tg://addlist?slug=<slug>. Returns the canonical URL expected by TDLib.
+export function chatFolderInviteLinkOf(url: string): string {
+  const raw = url.trim();
+  if (raw.startsWith('tg://addlist?')) {
+    const slug = safeDecode(queryParamOf(raw.substring(raw.indexOf('?') + 1), 'slug'));
+    return validResourceToken(slug) ? `https://t.me/addlist/${slug}` : '';
+  }
+  const parts = telegramPathParts(raw);
+  if (parts.length !== 2 || parts[0].toLowerCase() !== 'addlist') {
+    return '';
+  }
+  const slug = safeDecode(parts[1]);
+  return validResourceToken(slug) ? `https://t.me/addlist/${slug}` : '';
+}
+
+export interface StickerSetLink {
+  name: string;
+  expectCustomEmoji: boolean;
+}
+
+// Sticker/custom-emoji set: t.me/addstickers/<name>, t.me/addemoji/<name>,
+// plus their tg://addstickers?set= and tg://addemoji?set= equivalents.
+export function stickerSetLinkOf(url: string): StickerSetLink | null {
+  const raw = url.trim();
+  if (raw.startsWith('tg://addstickers?') || raw.startsWith('tg://addemoji?')) {
+    const expectCustomEmoji = raw.startsWith('tg://addemoji?');
+    const name = safeDecode(queryParamOf(raw.substring(raw.indexOf('?') + 1), 'set'));
+    return validResourceToken(name) ? { name, expectCustomEmoji } : null;
+  }
+  const parts = telegramPathParts(raw);
+  if (parts.length !== 2) {
+    return null;
+  }
+  const action = parts[0].toLowerCase();
+  if (action !== 'addstickers' && action !== 'addemoji') {
+    return null;
+  }
+  const name = safeDecode(parts[1]);
+  return validResourceToken(name) ? { name, expectCustomEmoji: action === 'addemoji' } : null;
+}
+
 // A chat link that carries an action in its query string:
 // t.me/<bot>?start=<payload>  → open the bot chat and auto-send /start <payload>
 // t.me/<name>?text=<draft>    → open the chat with a prefilled draft

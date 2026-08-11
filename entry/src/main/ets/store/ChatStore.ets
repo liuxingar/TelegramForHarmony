@@ -7,6 +7,11 @@ import { formatPreview } from '../util/formatPreview';
 
 const PAGE_LIMIT: number = 30;
 const MAIN: string = 'main';
+// TDLib update bursts (e.g. read-inbox advancing while the user scrolls a chat)
+// arrive many times per frame. Rebuilding and re-sorting every subscribed list
+// per update stalls the UI thread, so notifications are coalesced into one
+// flush per window.
+const NOTIFY_COALESCE_MS: number = 80;
 
 interface Sub {
   listKey: string;
@@ -24,16 +29,22 @@ export class ChatStore {
   private initializedLists: Set<string> = new Set();
   private exhaustedLists: Set<string> = new Set();
   private groupCallChats: Map<number, number> = new Map();
+  private chatSupergroupIds: Map<number, number> = new Map();
+  private forumSupergroupIds: Set<number> = new Set();
   private groupCallLoading: Set<number> = new Set();
   private defaultBackgroundLight: TdObject | null = null;
   private defaultBackgroundDark: TdObject | null = null;
   private defaultBackgroundLightKnown: boolean = false;
   private defaultBackgroundDarkKnown: boolean = false;
+  private notifyTimer: number = -1;
+  private dirtyAllLists: boolean = false;
+  private dirtyChatIds: Set<number> = new Set();
 
   constructor(client: TdClient, users: UserStore) {
     this.client = client;
     this.users = users;
     client.onUpdate('updateNewChat', (u: TdObject) => this.onNewChat(u));
+    client.onUpdate('updateSupergroup', (u: TdObject) => this.onSupergroup(u));
     client.onUpdate('updateChatPosition', (u: TdObject) => this.onPosition(u));
     client.onUpdate('updateChatLastMessage', (u: TdObject) => this.onLastMessage(u));
     client.onUpdate('updateChatReadInbox', (u: TdObject) => this.onReadInbox(u));
@@ -71,6 +82,28 @@ export class ChatStore {
 
   // Every cached chat across all lists (main/archive/folders). Used to request
   // avatars regardless of which list a chat was surfaced through.
+  private onSupergroup(update: TdObject): void {
+    const supergroup = update['supergroup'] as TdObject | undefined;
+    if (supergroup === undefined) {
+      return;
+    }
+    const id: number = (supergroup['id'] as number | undefined) ?? 0;
+    if (id <= 0) {
+      return;
+    }
+    if ((supergroup['is_forum'] as boolean | undefined) ?? false) {
+      this.forumSupergroupIds.add(id);
+    } else {
+      this.forumSupergroupIds.delete(id);
+    }
+  }
+
+  // 话题群（forum supergroup）：打开时应进入话题列表而非普通消息流。
+  isForum(chatId: number): boolean {
+    const supergroupId = this.chatSupergroupIds.get(chatId);
+    return supergroupId !== undefined && this.forumSupergroupIds.has(supergroupId);
+  }
+
   allEntries(): ChatEntry[] {
     return Array.from(this.chats.values());
   }
@@ -117,6 +150,10 @@ export class ChatStore {
     return b !== undefined && b.size > 0;
   }
 
+  isListExhausted(listKey: string): boolean {
+    return this.exhaustedLists.has(listKey);
+  }
+
   // Count of unmuted chats with unread messages in a list, computed from loaded
   // chats. Used for folder tab badges (TDLib's updateUnreadChatCount is emitted
   // only for the main and archive lists, not for chat folders).
@@ -142,6 +179,24 @@ export class ChatStore {
 
   entryOf(chatId: number): ChatEntry | undefined {
     return this.chats.get(chatId);
+  }
+
+  // Remove the badge immediately once the UI has actually shown the newest
+  // message. TDLib remains authoritative and will still send
+  // updateChatReadInbox; this only bridges its delay (and the local join-service
+  // edge case where that update can otherwise stay at unread_count = 1).
+  markReadLocally(chatId: number, readThroughId: number): void {
+    const entry = this.chats.get(chatId);
+    if (entry === undefined || readThroughId <= 0 || entry.lastMessageId <= 0 ||
+      readThroughId < entry.lastMessageId ||
+      (entry.unreadCount === 0 && !entry.isMarkedUnread)) {
+      return;
+    }
+    const next = cloneEntry(entry);
+    next.unreadCount = 0;
+    next.isMarkedUnread = false;
+    this.chats.set(chatId, next);
+    this.notify(chatId);
   }
 
   defaultBackground(forDarkTheme: boolean): TdObject | null {
@@ -193,8 +248,8 @@ export class ChatStore {
     });
   }
 
-  async loadMore(listKey: string = MAIN): Promise<void> {
-    await this.load(listKey);
+  async loadMore(listKey: string = MAIN): Promise<boolean> {
+    return await this.load(listKey);
   }
 
   setAvatarPath(chatId: number, path: string): void {
@@ -205,7 +260,7 @@ export class ChatStore {
     const c = cloneEntry(e);
     c.avatarPath = path;
     this.chats.set(chatId, c);
-    this.notify();
+    this.notify(chatId);
   }
 
   private setPosition(listKey: string, id: number, order: string, isPinned: boolean): void {
@@ -319,7 +374,7 @@ export class ChatStore {
     next.isLive = isLive;
     next.isRtmpLive = isRtmpLive;
     this.chats.set(chatId, next);
-    this.notify();
+    this.notify(chatId);
   }
 
   private onNewChat(update: TdObject): void {
@@ -328,6 +383,14 @@ export class ChatStore {
       return;
     }
     const id = chat['id'] as number;
+    // 话题群识别需要 chatId → supergroupId 映射（is_forum 在 supergroup 上）。
+    const chatType = chat['type'] as TdObject | undefined;
+    if (chatType !== undefined && (chatType['@type'] as string | undefined) === 'chatTypeSupergroup') {
+      const supergroupId: number = (chatType['supergroup_id'] as number | undefined) ?? 0;
+      if (supergroupId > 0) {
+        this.chatSupergroupIds.set(id, supergroupId);
+      }
+    }
     const previous = this.chats.get(id);
     const previousGroupCallId = previous?.liveGroupCallId ?? 0;
     const title = (chat['title'] as string | undefined) ?? '';
@@ -341,7 +404,10 @@ export class ChatStore {
       revision: previous !== undefined ? previous.revision + 1 : 0,
       title,
       isMuted: isMutedFrom(chat['notification_settings'] as TdObject | undefined),
-      unreadCount: (chat['unread_count'] as number | undefined) ?? 0,
+      unreadCount: ChatStore.effectiveUnread(
+        (chat['unread_count'] as number | undefined) ?? 0,
+        (chat['last_read_inbox_message_id'] as number | undefined) ?? 0,
+        lastMsg !== undefined ? ((lastMsg['id'] as number | undefined) ?? 0) : 0),
       lastMessageText: formatPreview(lastMsg ?? null),
       lastMessageDate: lastMsg !== undefined ? ((lastMsg['date'] as number | undefined) ?? 0) : 0,
       lastMessageId: lastMsg !== undefined ? ((lastMsg['id'] as number | undefined) ?? 0) : 0,
@@ -393,8 +459,10 @@ export class ChatStore {
     const positions = update['positions'] as TdObject[] | undefined;
     if (positions !== undefined) {
       this.applyPositions(id, positions);
+      this.notify();
+    } else {
+      this.notify(id);
     }
-    this.notify();
   }
 
   private onReadInbox(update: TdObject): void {
@@ -404,9 +472,12 @@ export class ChatStore {
       return;
     }
     const c = cloneEntry(e);
-    c.unreadCount = (update['unread_count'] as number | undefined) ?? 0;
+    c.unreadCount = ChatStore.effectiveUnread(
+      (update['unread_count'] as number | undefined) ?? 0,
+      (update['last_read_inbox_message_id'] as number | undefined) ?? 0,
+      e.lastMessageId);
     this.chats.set(id, c);
-    this.notify();
+    this.notify(id);
   }
 
   private onTitle(update: TdObject): void {
@@ -420,7 +491,7 @@ export class ChatStore {
     c.title = title;
     c.initials = computeInitials(title);
     this.chats.set(id, c);
-    this.notify();
+    this.notify(id);
   }
 
   private onPhoto(update: TdObject): void {
@@ -433,7 +504,7 @@ export class ChatStore {
     c.photoFileId = this.smallPhotoId(update['photo'] as TdObject | undefined);
     c.avatarPath = '';
     this.chats.set(id, c);
-    this.notify();
+    this.notify(id);
   }
 
   private onNotify(update: TdObject): void {
@@ -445,7 +516,7 @@ export class ChatStore {
     const c = cloneEntry(e);
     c.isMuted = isMutedFrom(update['notification_settings'] as TdObject | undefined);
     this.chats.set(id, c);
-    this.notify();
+    this.notify(id);
   }
 
   private onMarkedUnread(update: TdObject): void {
@@ -457,7 +528,7 @@ export class ChatStore {
     const c = cloneEntry(e);
     c.isMarkedUnread = (update['is_marked_as_unread'] as boolean | undefined) ?? false;
     this.chats.set(id, c);
-    this.notify();
+    this.notify(id);
   }
 
   private onBackground(update: TdObject): void {
@@ -473,7 +544,7 @@ export class ChatStore {
     const c = cloneEntry(e);
     c.background = background;
     this.chats.set(id, c);
-    this.notify();
+    this.notify(id);
   }
 
   private onTheme(update: TdObject): void {
@@ -489,7 +560,7 @@ export class ChatStore {
     const c = cloneEntry(e);
     c.themeName = themeName;
     this.chats.set(id, c);
-    this.notify();
+    this.notify(id);
   }
 
   private onDefaultBackground(update: TdObject): void {
@@ -517,7 +588,7 @@ export class ChatStore {
     const c = cloneEntry(e);
     c.autoDeleteTime = (update['message_auto_delete_time'] as number | undefined) ?? 0;
     this.chats.set(id, c);
-    this.notify();
+    this.notify(id);
   }
 
   private onVideoChat(update: TdObject): void {
@@ -534,7 +605,7 @@ export class ChatStore {
     next.isRtmpLive = false;
     this.chats.set(chatId, next);
     this.rememberGroupCall(chatId, previousId, groupCallId);
-    this.notify();
+    this.notify(chatId);
   }
 
   private onGroupCall(update: TdObject): void {
@@ -542,12 +613,62 @@ export class ChatStore {
     if (groupCall !== undefined) { this.applyGroupCall(groupCall); }
   }
 
-  private notify(): void {
+  // Phantom-unread recovery: Telegram can leave unread_count stuck (commonly 1)
+  // when the counted message was deleted before this session ever saw it (e.g.
+  // a bot removing "user joined" notifications). The state is self-inconsistent
+  // — the read watermark already covers the chat's newest message — and
+  // viewMessages cannot clear it because nothing viewable is left. Trust what
+  // the watermark proves over the raw counter.
+  private static effectiveUnread(unread: number, lastReadInboxId: number,
+    lastMessageId: number): number {
+    return unread > 0 && lastMessageId > 0 && lastReadInboxId >= lastMessageId ? 0 : unread;
+  }
+
+  // Mark lists dirty and schedule one coalesced flush. A field-only change
+  // passes its chat id so only lists actually containing that chat rebuild;
+  // membership/order changes (positions) omit it and dirty every list.
+  private notify(chatId?: number): void {
+    if (chatId === undefined) {
+      this.dirtyAllLists = true;
+    } else {
+      this.dirtyChatIds.add(chatId);
+    }
+    if (this.notifyTimer !== -1) {
+      return;
+    }
+    // Trailing throttle, deliberately NOT re-armed by further updates: a
+    // continuous update storm still flushes every window instead of starving.
+    this.notifyTimer = setTimeout((): void => {
+      this.notifyTimer = -1;
+      this.flushNotify();
+    }, NOTIFY_COALESCE_MS);
+  }
+
+  private flushNotify(): void {
+    const all = this.dirtyAllLists;
+    const dirty = this.dirtyChatIds;
+    this.dirtyAllLists = false;
+    this.dirtyChatIds = new Set();
     for (const s of this.subs) {
-      s.listener(this.getChats(s.listKey));
+      if (all || this.listContainsAny(s.listKey, dirty)) {
+        s.listener(this.getChats(s.listKey));
+      }
     }
     for (const listener of this.changeListeners) {
       listener();
     }
+  }
+
+  private listContainsAny(listKey: string, ids: Set<number>): boolean {
+    const bucket = this.positions.get(listKey);
+    if (bucket === undefined) {
+      return false;
+    }
+    for (const id of ids) {
+      if (bucket.has(id)) {
+        return true;
+      }
+    }
+    return false;
   }
 }

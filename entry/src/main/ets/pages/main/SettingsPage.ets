@@ -46,8 +46,16 @@ const SETTING_GROUPS: SettingGroup[] = [
         page: 'pages/main/AccountEditPage' },
       { icon: 'sys.symbol.message_fill', bg: '#FF9500', title: '聊天设置',
         subtitle: '字号、圆角、夜间模式与动画效果', page: 'pages/main/ChatSettingsPage' },
+      { icon: 'sys.symbol.paintpalette', bg: '#FF2D55', title: '强调色',
+        subtitle: '名字颜色与资料页配色', page: 'pages/main/AccentColorPage' },
+      { icon: 'sys.symbol.face_smiling', bg: '#AF52DE', title: '贴纸包',
+        subtitle: '管理、排序与归档贴纸包', page: 'pages/main/StickerSetsPage' },
+      { icon: 'sys.symbol.star', bg: '#FFCC00', title: '表情状态',
+        subtitle: '名字旁的动态表情（Premium）', page: 'pages/main/EmojiStatusPage' },
       { icon: 'sys.symbol.folder_fill', bg: '#34AADC', title: '聊天文件夹',
-        subtitle: '将聊天分类到文件夹中', page: 'pages/main/ChatFoldersPage' }
+        subtitle: '将聊天分类到文件夹中', page: 'pages/main/ChatFoldersPage' },
+      { icon: 'sys.symbol.bell_fill', bg: '#FF3B30', title: '通知',
+        subtitle: '私聊、群组与频道的默认通知', page: 'pages/main/NotificationSettingsPage' }
     ]
   },
   {
@@ -63,9 +71,13 @@ const SETTING_GROUPS: SettingGroup[] = [
     title: '存储与性能',
     items: [
       { icon: 'sys.symbol.data_proportion', bg: '#007AFF', title: '数据与存储',
-        subtitle: '存储占用、流量与代理', page: 'pages/main/DataStoragePage' },
+        subtitle: '存储占用与流量', page: 'pages/main/DataStoragePage' },
+      { icon: 'sys.symbol.link', bg: '#5856D6', title: '代理',
+        subtitle: '网络代理设置', page: 'pages/main/ProxyPage' },
       { icon: 'sys.symbol.battery_100percent', bg: '#FF9500', title: '省电',
-        subtitle: '低电量时降低功耗', page: 'pages/main/PowerUsagePage' }
+        subtitle: '低电量时降低功耗', page: 'pages/main/PowerUsagePage' },
+      { icon: 'sys.symbol.play_fill', bg: '#30B0C7', title: '后台播放',
+        subtitle: '音乐、语音、视频与直播的后台续播', page: 'pages/main/BackgroundPlaybackPage' }
     ]
   }
 ];

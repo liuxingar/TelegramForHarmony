@@ -8,6 +8,48 @@ function textMsg(t: string): TdObject {
   const m: TdObject = { '@type': 'message' }; m['content'] = c;
   return m;
 }
+
+function linkPreviewTextMsg(previewType: TdObject, url: string = 'https://example.com/a'): TdObject {
+  const ft: TdObject = { '@type': 'formattedText' };
+  ft['text'] = url;
+  const description: TdObject = { '@type': 'formattedText' };
+  description['text'] = 'Preview description';
+  const preview: TdObject = { '@type': 'linkPreview' };
+  preview['url'] = url;
+  preview['site_name'] = 'Example';
+  preview['title'] = 'Preview title';
+  preview['description'] = description;
+  preview['type'] = previewType;
+  const content: TdObject = { '@type': 'messageText' };
+  content['text'] = ft;
+  content['link_preview'] = preview;
+  const message: TdObject = { '@type': 'message' };
+  message['content'] = content;
+  return message;
+}
+
+function previewPhoto(ids: number[], downloadedIndex: number = -1): TdObject {
+  const sizes: TdObject[] = [];
+  for (let index: number = 0; index < ids.length; index++) {
+    const file: TdObject = { '@type': 'file' };
+    file['id'] = ids[index];
+    file['size'] = 1000;
+    const local: TdObject = { '@type': 'localFile' };
+    local['is_downloading_completed'] = index === downloadedIndex;
+    local['is_downloading_active'] = false;
+    local['path'] = index === downloadedIndex ? `/data/preview_${ids[index]}.jpg` : '';
+    local['downloaded_size'] = index === downloadedIndex ? 1000 : 0;
+    file['local'] = local;
+    const size: TdObject = { '@type': 'photoSize' };
+    size['photo'] = file;
+    size['width'] = 160 * (index + 1);
+    size['height'] = 90 * (index + 1);
+    sizes.push(size);
+  }
+  const photo: TdObject = { '@type': 'photo' };
+  photo['sizes'] = sizes;
+  return photo;
+}
 function photoMsg(fileId: number): TdObject {
   const file: TdObject = { '@type': 'file' }; file['id'] = fileId;
   const size: TdObject = { '@type': 'photoSize' }; size['photo'] = file;
@@ -394,6 +436,45 @@ export default function formatMsgContentTest() {
       const r = formatMsgContent(textMsg('hi'));
       expect(r.contentType).assertEqual('text');
       expect(r.text).assertEqual('hi');
+    });
+    it('link_preview_uses_fast_inline_photo_and_restores_local_state', 0, (): void => {
+      const type: TdObject = { '@type': 'linkPreviewTypeArticle' };
+      type['photo'] = previewPhoto([101, 102, 103], 1);
+      const result = formatMsgContent(linkPreviewTextMsg(type));
+      expect(result.linkPreviewType).assertEqual('linkPreviewTypeArticle');
+      expect(result.linkPhotoFileId).assertEqual(102);
+      expect(result.linkPhotoWidth).assertEqual(320);
+      expect(result.linkPhotoHeight).assertEqual(180);
+      expect(result.linkPhotoLocalPath).assertEqual('/data/preview_102.jpg');
+      expect(result.linkPhotoInitialProgress).assertEqual(100);
+    });
+    it('channel_link_preview_accepts_chat_photo_shape', 0, (): void => {
+      const small: TdObject = { '@type': 'file' };
+      small['id'] = 201;
+      const chatPhoto: TdObject = { '@type': 'chatPhoto' };
+      chatPhoto['small'] = small;
+      const type: TdObject = { '@type': 'linkPreviewTypeChat' };
+      type['photo'] = chatPhoto;
+      const result = formatMsgContent(linkPreviewTextMsg(type, 'https://t.me/mose_channel'));
+      expect(result.linkPreviewType).assertEqual('linkPreviewTypeChat');
+      expect(result.linkPhotoFileId).assertEqual(201);
+      expect(result.linkUrl).assertEqual('https://t.me/mose_channel');
+    });
+    it('video_link_preview_uses_embedded_thumbnail', 0, (): void => {
+      const file: TdObject = { '@type': 'file' };
+      file['id'] = 301;
+      const thumbnail: TdObject = { '@type': 'thumbnail' };
+      thumbnail['file'] = file;
+      thumbnail['width'] = 640;
+      thumbnail['height'] = 360;
+      const video: TdObject = { '@type': 'video' };
+      video['thumbnail'] = thumbnail;
+      const type: TdObject = { '@type': 'linkPreviewTypeVideo' };
+      type['video'] = video;
+      const result = formatMsgContent(linkPreviewTextMsg(type));
+      expect(result.linkPhotoFileId).assertEqual(301);
+      expect(result.linkPhotoWidth).assertEqual(640);
+      expect(result.linkPhotoHeight).assertEqual(360);
     });
     it('photo', 0, () => {
       const r = formatMsgContent(photoMsg(42));

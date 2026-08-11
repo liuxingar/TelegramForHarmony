@@ -133,6 +133,13 @@ export default function messageEntryTest() {
       const leave = buildMessageEntry(serviceMsg(31, 7, leaveContent), usersOf());
       expect(leave.placeholderLabel).assertEqual('Ann 退出了群组');
     });
+    it('own_join_notice_uses_client_copy', 0, () => {
+      const content: TdObject = { '@type': 'messageChatJoinByLink' };
+      const join = buildMessageEntry(serviceMsg(311, 7, content, true), usersOf());
+      expect(join.contentType).assertEqual('system');
+      expect(join.placeholderLabel).assertEqual('您已加入此群组');
+      expect(join.systemType).assertEqual('messageChatJoinByLink');
+    });
     it('member_invite_includes_resolved_names', 0, () => {
       const content: TdObject = { '@type': 'messageChatAddMembers' };
       content['member_user_ids'] = [8];

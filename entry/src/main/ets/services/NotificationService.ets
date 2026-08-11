@@ -39,9 +39,15 @@ export class NotificationService {
     this.chats = chats;
     this.publisher = publisher;
     this.isForeground = isForeground;
-    this.enableTdNotifications();
     this.unsubs.push(client.onUpdate('updateNotificationGroup',
       (u: TdObject) => this.onNotificationGroup(u)));
+  }
+
+  // 启用 TDLib 通知管理器。必须在 td_init 完成（Auth Ready）后调用 ——
+  // 构造时 td 还没初始化，setOption 会 "tdSend before tdInit" 失败，
+  // 之后 TDLib 就不推 updateNotificationGroup。
+  enable(): void {
+    this.enableTdNotifications();
   }
 
   attachCallSession(session: CallSession): void {
@@ -71,7 +77,9 @@ export class NotificationService {
     const req: TdRequest = { '@type': 'setOption' };
     req['name'] = name;
     req['value'] = optionValue;
-    this.client.send(req).catch((e: TdError): void => {
+    this.client.send(req).then((): void => {
+      console.info(`[NotifDiag] setOption(${name}=${value}) ok`);
+    }).catch((e: TdError): void => {
       console.error(`NotificationService.setOption(${name}) failed: ${e.message}`);
     });
   }
@@ -79,6 +87,9 @@ export class NotificationService {
   private onNotificationGroup(u: TdObject): void {
     const groupId: number = (u['notification_group_id'] as number | undefined) ?? 0;
     const chatId: number = (u['chat_id'] as number | undefined) ?? 0;
+    const addedCount: number = ((u['added_notifications'] as TdObject[] | undefined) ?? []).length;
+    console.info(`[NotifDiag] updateNotificationGroup chat=${chatId} added=${addedCount} ` +
+      `foreground=${this.isForeground()}`);
     const removed: number[] = (u['removed_notification_ids'] as number[] | undefined) ?? [];
     for (const id of removed) {
       this.publisher.cancel(id);

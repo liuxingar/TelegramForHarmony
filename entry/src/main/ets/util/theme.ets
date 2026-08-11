@@ -1,7 +1,17 @@
 // Shared palette and dimensions for the UI. Colors resolve through the
 // resource system (resources/base|dark/element/color.json), so the whole app
 // follows the system light/dark mode automatically.
-export const COLOR_PRIMARY: ResourceColor = $r('app.color.primary');
+// Mutable on purpose: the profile accent color drives the app primary. ES
+// module live bindings propagate reassignment to every importer; components
+// built after applyAccentPrimary() pick the new value, already-mounted pages
+// refresh when they rebuild (re-enter). COLOR_TAB_SELECTED follows it.
+export let COLOR_PRIMARY: ResourceColor = $r('app.color.primary');
+
+export function applyAccentPrimary(hex: string): void {
+  const next: ResourceColor = hex !== '' ? hex : $r('app.color.primary');
+  COLOR_PRIMARY = next;
+  COLOR_TAB_SELECTED = next;
+}
 export const COLOR_TEXT_PRIMARY: ResourceColor = $r('app.color.text_primary');
 export const COLOR_TEXT_SECONDARY: ResourceColor = $r('app.color.text_secondary');
 export const COLOR_MUTED_BADGE: ResourceColor = $r('app.color.badge_bg');
@@ -10,7 +20,7 @@ export const ROW_PAD_H: number = 14;
 export const ROW_PAD_V: number = 8;
 // Avatar placeholder palette — identical in both modes (like official clients).
 export const AVATAR_PALETTE: string[] = ['#E17076', '#7BC862', '#65AADD', '#EE7AAE', '#6EC9CB', '#EFA92E', '#FAA774', '#A695E7'];
-export const COLOR_TAB_SELECTED: ResourceColor = $r('app.color.primary');
+export let COLOR_TAB_SELECTED: ResourceColor = $r('app.color.primary');
 export const COLOR_TAB_UNSELECTED: ResourceColor = $r('app.color.text_secondary');
 export const COLOR_BADGE_BG: ResourceColor = $r('app.color.badge_bg');
 export const COLOR_TAB_PILL_BG: ResourceColor = $r('app.color.tab_pill_bg');

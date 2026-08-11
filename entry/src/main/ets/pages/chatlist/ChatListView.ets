@@ -10,6 +10,9 @@ export struct ChatListView {
   @Prop listKey: string;
   // Folder tabs sit behind MainScreen's floating dock; ArchivePage does not.
   @Prop reserveDockSpace: boolean = true;
+  // Floating frosted folder bar overlays the list top — start content below
+  // it while still letting rows scroll (blurred) underneath.
+  @Prop reserveFolderBarSpace: boolean = false;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   // Rebuilding rows while a row's context menu is open would close it.
   @StorageProp(CHAT_MENU_OPEN) @Watch('onMenuToggle') menuOpen: boolean = false;
@@ -17,10 +20,25 @@ export struct ChatListView {
   @State loading: boolean = true;
   @State loadFailed: boolean = false;
   @State paging: boolean = false;
+  @State pagingFailed: boolean = false;
   private updateGate: ChatListFreeze = new ChatListFreeze();
   private unsubscribe: (() => void) | null = null;
+  private active: boolean = false;
+
+  @Styles
+  actionNormalStyle() {
+    .opacity(1)
+    .scale({ x: 1, y: 1 })
+  }
+
+  @Styles
+  actionPressedStyle() {
+    .opacity(0.72)
+    .scale({ x: 0.96, y: 0.96 })
+  }
 
   aboutToAppear(): void {
+    this.active = true;
     const store = getChatStore();
     this.unsubscribe = store.subscribe((list: ChatEntry[]) => {
       const next = this.updateGate.accept(list);
@@ -34,7 +52,14 @@ export struct ChatListView {
   private loadInitial(): void {
     this.loading = true;
     this.loadFailed = false;
-    getChatStore().ensureLoaded(this.listKey).then((success: boolean): void => {
+    const store = getChatStore();
+    store.ensureLoaded(this.listKey).then((success: boolean): void => {
+      if (!this.active) { return; }
+      // TDLib normally emits the positions before resolving loadChats. Read
+      // the bucket once here as well so the empty state can't flash while the
+      // coalesced store notification is still waiting for the next frame.
+      const next = this.updateGate.accept(store.getChats(this.listKey));
+      if (next !== null) { this.applyChats(next); }
       this.loading = false;
       this.loadFailed = !success;
     });
@@ -59,12 +84,16 @@ export struct ChatListView {
   }
 
   private loadMore(): void {
-    if (this.paging) {
+    const store = getChatStore();
+    if (this.paging || store.isListExhausted(this.listKey)) {
       return;
     }
     this.paging = true;
-    getChatStore().loadMore(this.listKey).then((): void => {
+    this.pagingFailed = false;
+    store.loadMore(this.listKey).then((success: boolean): void => {
+      if (!this.active) { return; }
       this.paging = false;
+      this.pagingFailed = !success;
     });
   }
 
@@ -83,6 +112,7 @@ export struct ChatListView {
   }
 
   aboutToDisappear(): void {
+    this.active = false;
     if (this.unsubscribe !== null) {
       this.unsubscribe();
       this.unsubscribe = null;
@@ -93,23 +123,49 @@ export struct ChatListView {
   emptyState() {
     Column({ space: 10 }) {
       if (this.loading) {
-        LoadingProgress().width(28).height(28).color(COLOR_PRIMARY);
-        Text('正在加载聊天…').fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
+        Stack({ alignContent: Alignment.Center }) {
+          Circle({ width: 58, height: 58 }).fill($r('app.color.surface_alt'));
+          LoadingProgress().width(28).height(28).color(COLOR_PRIMARY);
+        }
+        Text(this.listKey === 'archive' ? '正在同步归档…' : '正在加载聊天…')
+          .fontSize(15).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+        Text('已有内容会在同步后自动出现')
+          .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+      } else if (this.loadFailed) {
+        Row() {
+          SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+            .fontSize(28).fontColor([COLOR_PRIMARY]);
+        }
+        .width(58).height(58).borderRadius(29)
+        .backgroundColor($r('app.color.surface_alt'))
+        .justifyContent(FlexAlign.Center);
+        Text(this.listKey === 'archive' ? '归档加载失败' : '聊天加载失败')
+          .fontSize(17).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+        Text('请检查网络后重试，已有聊天不会受到影响')
+          .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center);
+        Row({ space: 6 }) {
+          SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(14).fontColor([Color.White]);
+          Text('重新加载').fontSize(14).fontWeight(FontWeight.Medium).fontColor(Color.White);
+        }
+        .height(38).padding({ left: 15, right: 16 }).borderRadius(19)
+        .backgroundColor(COLOR_PRIMARY)
+        .stateStyles({ normal: this.actionNormalStyle, pressed: this.actionPressedStyle })
+        .onClick((): void => this.loadInitial());
       } else {
         Row() {
-          SymbolGlyph($r('sys.symbol.message')).fontSize(27).fontColor([COLOR_TEXT_SECONDARY]);
+          SymbolGlyph(this.listKey === 'archive'
+            ? $r('sys.symbol.archivebox') : $r('sys.symbol.message'))
+            .fontSize(27).fontColor([COLOR_TEXT_SECONDARY]);
         }
         .width(56).height(56).borderRadius(28)
         .backgroundColor($r('app.color.surface_alt'))
         .justifyContent(FlexAlign.Center);
-        Text(this.listKey === 'archive' ? '暂无归档聊天' : '这个文件夹还没有聊天')
+        Text(this.listKey === 'archive' ? '暂无已归档聊天' : '这个文件夹还没有聊天')
           .fontSize(17).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-        if (this.loadFailed) {
-          Text('加载失败，点击重试')
-            .fontSize(14).fontColor(COLOR_PRIMARY)
-            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-            .onClick((): void => { this.loadInitial(); });
-        } else if (this.listKey !== 'archive') {
+        if (this.listKey === 'archive') {
+          Text('长按首页中的聊天，选择“归档”后会显示在这里')
+            .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center);
+        } else {
           Text('可以从聊天的长按菜单中添加')
             .fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
         }
@@ -129,16 +185,46 @@ export struct ChatListView {
       this.emptyState();
     } else {
       List() {
+        if (this.loadFailed) {
+          ListItem() {
+            Row({ space: 7 }) {
+              SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+                .fontSize(14).fontColor([COLOR_PRIMARY]);
+              Text('归档同步失败，当前显示的是本地内容')
+                .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).layoutWeight(1);
+              Text('重试').fontSize(12).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY);
+            }
+            .height(40).padding({ left: 14, right: 14 })
+            .backgroundColor($r('app.color.surface_alt'))
+            .onClick((): void => this.loadInitial());
+          }
+        }
         ForEach(this.chats, (item: ChatEntry) => {
           ListItem() {
             ChatRow({ chat: item, listKey: this.listKey });
           }
+          .transition(
+            TransitionEffect.OPACITY.combine(TransitionEffect.translate({ x: 12 })).animation({
+              duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+              curve: Curve.EaseOut
+            })
+          )
         }, (item: ChatEntry) => this.rowKey(item));
         if (this.paging) {
           ListItem() {
             Row() {
               LoadingProgress().width(22).height(22).color(COLOR_PRIMARY);
             }.width('100%').height(44).justifyContent(FlexAlign.Center);
+          }
+        } else if (this.pagingFailed) {
+          ListItem() {
+            Row({ space: 6 }) {
+              SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(13).fontColor([COLOR_PRIMARY]);
+              Text('加载更多失败，点击重试').fontSize(12).fontColor(COLOR_PRIMARY);
+            }
+            .width('100%').height(44).justifyContent(FlexAlign.Center)
+            .stateStyles({ normal: this.actionNormalStyle, pressed: this.actionPressedStyle })
+            .onClick((): void => this.loadMore());
           }
         }
       }
@@ -151,6 +237,7 @@ export struct ChatListView {
       .enableScrollInteraction(!this.menuOpen)
       .scrollBar(BarState.Off)
       .contentEndOffset(this.endInset())
+      .contentStartOffset(this.reserveFolderBarSpace ? 54 : 0)
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
       .onReachEnd(() => { this.loadMore(); });
     }

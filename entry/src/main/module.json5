@@ -16,6 +16,9 @@
         "name": "ohos.permission.INTERNET"
       },
       {
+        "name": "ohos.permission.GET_NETWORK_INFO"
+      },
+      {
         "name": "ohos.permission.KEEP_BACKGROUND_RUNNING"
       },
       {
@@ -33,6 +36,22 @@
           "abilities": ["EntryAbility"],
           "when": "inuse"
         }
+      },
+      {
+        "name": "ohos.permission.APPROXIMATELY_LOCATION",
+        "reason": "$string:location_permission_reason",
+        "usedScene": {
+          "abilities": ["EntryAbility"],
+          "when": "inuse"
+        }
+      },
+      {
+        "name": "ohos.permission.LOCATION",
+        "reason": "$string:location_permission_reason",
+        "usedScene": {
+          "abilities": ["EntryAbility"],
+          "when": "inuse"
+        }
       }
     ],
     "abilities": [
@@ -46,7 +65,8 @@
         "startWindowBackground": "$color:start_window_background",
         "backgroundModes": [
           "audioPlayback",
-          "audioRecording"
+          "audioRecording",
+          "voip"
         ],
         "exported": true,
         "skills": [
@@ -90,6 +110,12 @@
             "resource": "$profile:backup_config"
           }
         ],
+      },
+      {
+        "name": "MessageSyncWorkAbility",
+        "srcEntry": "./ets/workability/MessageSyncWorkAbility.ets",
+        "type": "workScheduler",
+        "exported": false
       }
     ]
   }

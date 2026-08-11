@@ -327,8 +327,31 @@ function trimBlockText(text: string): string {
     .replace(/[ \t]*[\r\n]+[ \t]*$/, '');
 }
 
+interface ParseCacheEntry {
+  text: string;
+  segments: RichSegment[];
+}
+
+// Parse results keyed by the entities array's identity: a TDLib formattedText
+// owns its entities array, so one array only ever pairs with one text (the
+// text equality check covers shared empty-array constants). The bubble build
+// path re-parses on every render otherwise, which shows up as scroll jank.
+// WeakMap keeps a cache entry alive exactly as long as its message does.
+const parseCache: WeakMap<TdObject[], ParseCacheEntry> = new WeakMap();
+
 // Parse a TDLib formattedText (text + entities) into renderable segments.
+// Results are memoized; callers must treat the returned segments as read-only.
 export function parseFormattedText(text: string, entities: TdObject[]): RichSegment[] {
+  const hit = parseCache.get(entities);
+  if (hit !== undefined && hit.text === text) {
+    return hit.segments;
+  }
+  const segments = parseFormattedTextUncached(text, entities);
+  parseCache.set(entities, { text, segments });
+  return segments;
+}
+
+function parseFormattedTextUncached(text: string, entities: TdObject[]): RichSegment[] {
   const ents = readEntities(text, entities);
   const blocks: Ent[] = [];
   for (const e of ents) {

@@ -1,0 +1,380 @@
+import { router, promptAction } from '@kit.ArkUI';
+import { getTdClient } from '../../tdkit/Globals';
+import { TdError, TdObject, TdRequest } from '../../tdkit/TdTypes';
+import { PrivacyValue, getPrivacy, setPrivacy } from '../../store/PrivacyApi';
+import { PrivacyExceptionsParams } from './PrivacyRulePage';
+import { AvatarView } from '../chatlist/AvatarView';
+import {
+  COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE,
+  COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
+} from '../../util/theme';
+
+const CARD_RADIUS: number = 16;
+
+interface ExceptionUser {
+  id: number;
+  name: string;
+  username: string;
+  initials: string;
+  avatarPath: string;
+}
+
+function idsFor(rules: TdObject[], type: string): number[] {
+  for (const rule of rules) {
+    if (rule['@type'] === type) { return (rule['user_ids'] as number[] | undefined) ?? []; }
+  }
+  return [];
+}
+
+function chatCountFor(rules: TdObject[], type: string): number {
+  for (const rule of rules) {
+    if (rule['@type'] === type) {
+      return ((rule['chat_ids'] as number[] | undefined) ?? []).length;
+    }
+  }
+  return 0;
+}
+
+function replaceUserRule(rules: TdObject[], type: string, ids: number[]): TdObject[] {
+  const next: TdObject[] = [];
+  let inserted = false;
+  for (const rule of rules) {
+    if (rule['@type'] === type) {
+      if (!inserted && ids.length > 0) {
+        next.push({ '@type': type, 'user_ids': ids } as TdObject);
+        inserted = true;
+      }
+    } else {
+      next.push(rule);
+    }
+  }
+  if (!inserted && ids.length > 0) {
+    const item = { '@type': type, 'user_ids': ids } as TdObject;
+    if (type === 'userPrivacySettingRuleAllowUsers') { next.unshift(item); }
+    else { next.push(item); }
+  }
+  return next;
+}
+
+@Entry
+@Component
+struct PrivacyExceptionsPage {
+  @StorageProp('topSafeHeight') topSafe: number = 0;
+  @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
+  @State setting: string = '';
+  @State title: string = '';
+  @State loadState: string = 'loading';
+  @State allowUsers: ExceptionUser[] = [];
+  @State restrictUsers: ExceptionUser[] = [];
+  @State allowChatCount: number = 0;
+  @State restrictChatCount: number = 0;
+  @State sheetOpen: boolean = false;
+  @State sheetMode: string = 'allow';
+  @State candidates: ExceptionUser[] = [];
+  @State candidateState: string = 'loading';
+  @State query: string = '';
+  @State draftIds: number[] = [];
+  @State saving: boolean = false;
+  private base: string = '';
+  private preserved: TdObject[] = [];
+  private allowUserIds: number[] = [];
+  private restrictUserIds: number[] = [];
+  private active: boolean = false;
+  private sequence: number = 0;
+
+  aboutToAppear(): void {
+    this.active = true;
+    const params = router.getParams() as PrivacyExceptionsParams | undefined;
+    if (params === undefined || params.setting === undefined || params.setting === '') {
+      router.back();
+      return;
+    }
+    this.setting = params.setting;
+    this.title = params.title;
+    this.load();
+  }
+
+  aboutToDisappear(): void {
+    this.active = false;
+    this.sequence++;
+  }
+
+  private userFromObject(user: TdObject): ExceptionUser {
+    const id = (user['id'] as number | undefined) ?? 0;
+    const first = (user['first_name'] as string | undefined) ?? '';
+    const last = (user['last_name'] as string | undefined) ?? '';
+    const name = `${first}${last !== '' ? ` ${last}` : ''}`.trim();
+    const usernames = user['usernames'] as TdObject | undefined;
+    const active = usernames !== undefined
+      ? ((usernames['active_usernames'] as string[] | undefined) ?? []) : [];
+    const photo = user['profile_photo'] as TdObject | undefined;
+    const small = photo !== undefined ? photo['small'] as TdObject | undefined : undefined;
+    const local = small !== undefined ? small['local'] as TdObject | undefined : undefined;
+    const path = local !== undefined ? ((local['path'] as string | undefined) ?? '') : '';
+    return {
+      id,
+      name: name !== '' ? name : '已删除账户',
+      username: active.length > 0 ? `@${active[0]}` : '',
+      initials: name !== '' ? name.substring(0, 1).toUpperCase() : '?',
+      avatarPath: path
+    };
+  }
+
+  private resolveUsers(ids: number[]): Promise<ExceptionUser[]> {
+    const client = getTdClient();
+    return Promise.all(ids.map((id: number): Promise<ExceptionUser | null> => {
+      const request: TdRequest = { '@type': 'getUser' };
+      request['user_id'] = id;
+      return client.send(request).then((user: TdObject): ExceptionUser => this.userFromObject(user))
+        .catch((): null => null);
+    })).then((items: Array<ExceptionUser | null>): ExceptionUser[] => {
+      const rows: ExceptionUser[] = [];
+      for (const item of items) { if (item !== null) { rows.push(item); } }
+      return rows;
+    });
+  }
+
+  private load(): void {
+    const sequence = ++this.sequence;
+    this.loadState = 'loading';
+    getPrivacy(this.setting).then((value: PrivacyValue): Promise<ExceptionUser[][]> => {
+      if (!this.active || sequence !== this.sequence) { return Promise.resolve([]); }
+      this.base = value.base;
+      this.preserved = value.extra;
+      this.allowUserIds = idsFor(value.extra, 'userPrivacySettingRuleAllowUsers');
+      this.restrictUserIds = idsFor(value.extra, 'userPrivacySettingRuleRestrictUsers');
+      this.allowChatCount = chatCountFor(value.extra, 'userPrivacySettingRuleAllowChatMembers');
+      this.restrictChatCount = chatCountFor(value.extra, 'userPrivacySettingRuleRestrictChatMembers');
+      return Promise.all([
+        this.resolveUsers(this.allowUserIds),
+        this.resolveUsers(this.restrictUserIds)
+      ]);
+    }).then((rows: ExceptionUser[][]): void => {
+      if (!this.active || sequence !== this.sequence || rows.length !== 2) { return; }
+      this.allowUsers = rows[0];
+      this.restrictUsers = rows[1];
+      this.loadState = 'ready';
+    }).catch((error: TdError): void => {
+      if (!this.active || sequence !== this.sequence) { return; }
+      console.error(`PrivacyExceptionsPage.load failed: ${error.message}`);
+      this.loadState = 'error';
+    });
+  }
+
+  private openPicker(mode: string): void {
+    if (this.saving || this.loadState !== 'ready') { return; }
+    this.sheetMode = mode;
+    this.query = '';
+    this.draftIds = (mode === 'allow' ? this.allowUserIds : this.restrictUserIds).slice();
+    this.sheetOpen = true;
+    this.loadCandidates();
+  }
+
+  private loadCandidates(): void {
+    const sequence = ++this.sequence;
+    this.candidateState = 'loading';
+    const request: TdRequest = { '@type': 'getContacts' };
+    getTdClient().send(request).then((result: TdObject): Promise<ExceptionUser[]> => {
+      const ids = (result['user_ids'] as number[] | undefined) ?? [];
+      return this.resolveUsers(ids);
+    }).then((rows: ExceptionUser[]): void => {
+      if (!this.active || sequence !== this.sequence) { return; }
+      const merged = rows.slice();
+      for (const existing of [...this.allowUsers, ...this.restrictUsers]) {
+        if (merged.findIndex((item: ExceptionUser): boolean => item.id === existing.id) < 0) {
+          merged.push(existing);
+        }
+      }
+      this.candidates = merged;
+      this.candidateState = merged.length > 0 ? 'ready' : 'empty';
+    }).catch((error: TdError): void => {
+      if (!this.active || sequence !== this.sequence) { return; }
+      console.error(`PrivacyExceptionsPage.contacts failed: ${error.message}`);
+      this.candidateState = 'error';
+    });
+  }
+
+  private filteredCandidates(): ExceptionUser[] {
+    const query = this.query.trim().toLowerCase();
+    if (query === '') { return this.candidates; }
+    return this.candidates.filter((user: ExceptionUser): boolean =>
+      user.name.toLowerCase().indexOf(query) >= 0 || user.username.toLowerCase().indexOf(query) >= 0);
+  }
+
+  private toggleDraft(id: number): void {
+    if (this.draftIds.indexOf(id) >= 0) {
+      this.draftIds = this.draftIds.filter((value: number): boolean => value !== id);
+    } else {
+      this.draftIds = [...this.draftIds, id];
+    }
+  }
+
+  private saveDraft(): void {
+    if (this.saving) { return; }
+    const allowIds = this.sheetMode === 'allow'
+      ? this.draftIds.slice()
+      : this.allowUserIds
+        .filter((id: number): boolean => this.draftIds.indexOf(id) < 0);
+    const restrictIds = this.sheetMode === 'restrict'
+      ? this.draftIds.slice()
+      : this.restrictUserIds
+        .filter((id: number): boolean => this.draftIds.indexOf(id) < 0);
+    let next = replaceUserRule(this.preserved, 'userPrivacySettingRuleAllowUsers', allowIds);
+    next = replaceUserRule(next, 'userPrivacySettingRuleRestrictUsers', restrictIds);
+    this.saving = true;
+    setPrivacy(this.setting, this.base, next).then((): void => {
+      if (!this.active) { return; }
+      this.preserved = next;
+      this.allowUserIds = allowIds;
+      this.restrictUserIds = restrictIds;
+      this.sheetOpen = false;
+      this.saving = false;
+      this.load();
+    }).catch((error: TdError): void => {
+      console.error(`PrivacyExceptionsPage.save failed: ${error.message}`);
+      if (!this.active) { return; }
+      this.saving = false;
+      promptAction.showToast({ message: '例外名单保存失败', duration: 1800 });
+    });
+  }
+
+  @Builder
+  header() {
+    Row({ space: 8 }) {
+      Button() {
+        SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(24).fontColor([COLOR_TEXT_PRIMARY]);
+      }.width(40).height(40).borderRadius(20).backgroundColor(Color.Transparent)
+      .onClick((): void => { router.back(); });
+      Text(`${this.title} · 例外`).fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
+        .layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
+    }
+    .width('100%').height(52).padding({ left: 8, right: 14 }).alignItems(VerticalAlign.Center);
+  }
+
+  @Builder
+  exceptionRow(user: ExceptionUser) {
+    Row({ space: 12 }) {
+      AvatarView({ avatarPath: user.avatarPath, initials: user.initials, colorSeed: user.id, avatarSize: 42 });
+      Column({ space: 2 }) {
+        Text(user.name).fontSize(16).fontColor(COLOR_TEXT_PRIMARY).maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis });
+        if (user.username !== '') { Text(user.username).fontSize(12).fontColor(COLOR_TEXT_SECONDARY); }
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+    }
+    .width('100%').constraintSize({ minHeight: 56 }).padding({ left: 12, right: 14 });
+  }
+
+  @Builder
+  exceptionCard(title: string, mode: string, rows: ExceptionUser[], chatCount: number) {
+    Column() {
+      Row() {
+        Text(title).fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY).layoutWeight(1);
+        Button('编辑').fontSize(13).fontColor(COLOR_PRIMARY).backgroundColor(Color.Transparent)
+          .height(36).onClick((): void => { this.openPicker(mode); });
+      }.width('100%').height(46).padding({ left: 16, right: 8 });
+      if (rows.length === 0 && chatCount === 0) {
+        Text('尚未添加例外').fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
+          .width('100%').padding({ left: 16, right: 16, top: 10, bottom: 18 });
+      } else {
+        ForEach(rows, (user: ExceptionUser, index: number) => {
+          if (index > 0) { Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 66 }); }
+          this.exceptionRow(user);
+        }, (user: ExceptionUser): string => `${mode}_${user.id}`);
+        if (chatCount > 0) {
+          Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 16 });
+          Text(`${chatCount} 个群组例外已由服务器保留`)
+            .fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
+            .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 12 });
+        }
+      }
+    }
+    .width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS).padding({ bottom: 4 });
+  }
+
+  @Builder
+  pickerSheet() {
+    Column({ space: 10 }) {
+      Row() {
+        Column({ space: 2 }) {
+          Text(this.sheetMode === 'allow' ? '始终允许' : '永不允许')
+            .fontSize(21).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
+          Text('从联系人中选择；保存时自动避免相互冲突')
+            .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+        }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+        Button(this.saving ? '保存中…' : '完成').fontSize(15).fontColor(COLOR_PRIMARY)
+          .backgroundColor(Color.Transparent).enabled(!this.saving)
+          .onClick((): void => { this.saveDraft(); });
+      }.width('100%').height(52).alignItems(VerticalAlign.Center);
+      TextInput({ text: this.query, placeholder: '搜索联系人' })
+        .height(44).fontSize(15).backgroundColor($r('app.color.surface_alt')).borderRadius(12)
+        .padding({ left: 13, right: 13 }).onChange((value: string): void => { this.query = value; });
+      if (this.candidateState === 'loading') {
+        Column() { LoadingProgress().width(30).height(30).color(COLOR_PRIMARY); }
+          .layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
+      } else if (this.candidateState === 'error') {
+        Column({ space: 10 }) {
+          Text('联系人加载失败').fontSize(15).fontColor(COLOR_TEXT_PRIMARY);
+          Button('重试').onClick((): void => { this.loadCandidates(); });
+        }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
+      } else if (this.filteredCandidates().length === 0) {
+        Column({ space: 6 }) {
+          Text('没有可选联系人').fontSize(15).fontColor(COLOR_TEXT_PRIMARY);
+          Text('可以先在联系人页添加用户。').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+        }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
+      } else {
+        List() {
+          ForEach(this.filteredCandidates(), (user: ExceptionUser) => {
+            ListItem() {
+              Row({ space: 12 }) {
+                AvatarView({ avatarPath: user.avatarPath, initials: user.initials, colorSeed: user.id, avatarSize: 42 });
+                Column({ space: 2 }) {
+                  Text(user.name).fontSize(16).fontColor(COLOR_TEXT_PRIMARY).maxLines(1);
+                  if (user.username !== '') { Text(user.username).fontSize(12).fontColor(COLOR_TEXT_SECONDARY); }
+                }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+                SymbolGlyph($r(this.draftIds.indexOf(user.id) >= 0
+                  ? 'sys.symbol.checkmark_circle_fill' : 'sys.symbol.circle'))
+                  .fontSize(23).fontColor([this.draftIds.indexOf(user.id) >= 0 ? COLOR_PRIMARY : COLOR_TEXT_SECONDARY]);
+              }
+              .width('100%').height(58).padding({ left: 6, right: 8 })
+              .onClick((): void => { this.toggleDraft(user.id); });
+            }
+          }, (user: ExceptionUser): string => `candidate_${user.id}_${this.draftIds.indexOf(user.id) >= 0}`);
+        }.layoutWeight(1).width('100%').scrollBar(BarState.Off);
+      }
+    }
+    .width('100%').height('100%').padding({ left: 16, right: 16, top: 4, bottom: this.bottomSafe + 8 });
+  }
+
+  build() {
+    Column() {
+      this.header();
+      if (this.loadState === 'loading') {
+        Column() { LoadingProgress().width(34).height(34).color(COLOR_PRIMARY); }
+          .layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
+      } else if (this.loadState === 'error') {
+        Column({ space: 10 }) {
+          Text('例外名单加载失败').fontSize(17).fontColor(COLOR_TEXT_PRIMARY);
+          Button('重新加载').onClick((): void => { this.load(); });
+        }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
+      } else {
+        Scroll() {
+          Column({ space: 12 }) {
+            this.exceptionCard('始终允许', 'allow', this.allowUsers, this.allowChatCount);
+            this.exceptionCard('永不允许', 'restrict', this.restrictUsers, this.restrictChatCount);
+            Text('群组例外会完整保留；当前页面可编辑用户例外，避免因修改总规则意外清空服务器配置。')
+              .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).lineHeight(18)
+              .width('100%').padding({ left: 16, right: 16 });
+          }.width('100%').padding({ left: 12, right: 12, top: 6, bottom: this.bottomSafe + 24 });
+        }.layoutWeight(1).width('100%').scrollBar(BarState.Off);
+      }
+    }
+    .width('100%').height('100%').backgroundColor(COLOR_PAGE_BG)
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .padding({ top: this.topSafe })
+    .bindSheet($$this.sheetOpen, this.pickerSheet(), {
+      height: SheetSize.LARGE,
+      backgroundColor: COLOR_SURFACE,
+      dragBar: true
+    });
+  }
+}

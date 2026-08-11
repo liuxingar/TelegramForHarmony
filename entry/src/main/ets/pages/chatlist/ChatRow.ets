@@ -1,6 +1,6 @@
 import { router, promptAction, SymbolGlyphModifier } from '@kit.ArkUI';
 import { ChatEntry } from '../../store/ChatEntry';
-import { FolderInfo } from '../../store/FolderStore';
+import { FOLDER_TAGS_ENABLED, FolderInfo } from '../../store/FolderStore';
 import {
   MUTE_OPTIONS, MuteOption, togglePin, setMute, markAsRead, markUnread,
   setArchived, setInFolder, clearHistory, leaveOrDeleteChat, leaveLabel
@@ -14,6 +14,7 @@ import { CHAT_LIST_NOW, CHAT_MENU_OPEN } from './ChatListFreeze';
 import { AvatarView } from './AvatarView';
 import { formatTime } from '../../util/formatTime';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY, COLOR_MUTED_BADGE, ROW_PAD_H, ROW_PAD_V } from '../../util/theme';
+import { folderColor } from '../../util/FolderVisuals';
 
 @Component
 export struct ChatRow {
@@ -26,6 +27,7 @@ export struct ChatRow {
   @StorageProp(KEY_THREE_LINES) threeLines: boolean = false;
   @StorageProp(KEY_POWER_ACTIVE) powerSaving: boolean = false;
   @StorageProp(KEY_POWER_PARTICLES) particlesEnabled: boolean = true;
+  @StorageProp(FOLDER_TAGS_ENABLED) folderTagsEnabled: boolean = false;
   @State livePulseExpanded: boolean = false;
   @State contextMenuShown: boolean = false;
   private livePulseTimer: number = -1;
@@ -63,6 +65,12 @@ export struct ChatRow {
 
   private folders(): FolderInfo[] {
     return getFolderStore().getFolders();
+  }
+
+  private matchingFolders(): FolderInfo[] {
+    if (!this.folderTagsEnabled) { return []; }
+    return this.folders().filter((folder: FolderInfo): boolean =>
+      getChatStore().isInFolder(folder.id, this.chat.id));
   }
 
   private isPinned(): boolean {
@@ -204,7 +212,7 @@ export struct ChatRow {
             .onClick(() => {
               setInFolder(f.id, this.chat.id, !getChatStore().isInFolder(f.id, this.chat.id));
             });
-        }, (f: FolderInfo) => `${f.id}_${f.title}`);
+        }, (f: FolderInfo) => `${f.id}`);
       }
     }
   }
@@ -288,6 +296,21 @@ export struct ChatRow {
           if (this.chat.isMuted) {
             SymbolGlyph($r('sys.symbol.bell_slash')).fontSize(13).fontColor([COLOR_TEXT_SECONDARY]).margin({ left: 4 }).flexShrink(0);
           }
+          if (this.matchingFolders().length > 0) {
+            Text(this.matchingFolders()[0].title)
+              .fontSize(9).fontWeight(FontWeight.Medium)
+              .fontColor(folderColor(this.matchingFolders()[0].colorId))
+              .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+              .constraintSize({ maxWidth: 58 })
+              .padding({ left: 5, right: 5, top: 2, bottom: 2 })
+              .margin({ left: 5 })
+              .backgroundColor(`${folderColor(this.matchingFolders()[0].colorId)}18`)
+              .borderRadius(7).flexShrink(0);
+            if (this.matchingFolders().length > 1) {
+              Text(`+${this.matchingFolders().length - 1}`).fontSize(9)
+                .fontColor(COLOR_TEXT_SECONDARY).margin({ left: 3 }).flexShrink(0);
+            }
+          }
         }.width('100%');
         Row() {
           if (this.chat.lastSenderName !== '') {
@@ -340,6 +363,14 @@ export struct ChatRow {
     .onClick(() => {
       if (this.pressConsumedByMenu || this.contextMenuShown) {
         this.pressConsumedByMenu = false;
+        return;
+      }
+      // 话题群进话题列表，普通聊天进消息流。
+      if (getChatStore().isForum(this.chat.id)) {
+        const forumParams: Record<string, Object> = {
+          'chatId': this.chat.id, 'title': this.chat.title
+        };
+        router.pushUrl({ url: 'pages/chat/ForumTopicsPage', params: forumParams });
         return;
       }
       const params: Record<string, Object> = { 'chatId': this.chat.id };

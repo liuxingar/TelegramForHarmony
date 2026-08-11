@@ -23,6 +23,12 @@ export interface MsgContent {
   linkDescriptionEntities: TdObject[];
   linkPhotoFileId: number;
   linkUrl: string;
+  linkPreviewType?: string;
+  linkPhotoWidth?: number;
+  linkPhotoHeight?: number;
+  linkPhotoLocalPath?: string;
+  linkPhotoInitialProgress?: number;
+  linkPhotoInitialActive?: boolean;
   videoDuration: number; // seconds, 0 for non-video content
   videoFileId: number;   // full-resolution video file id, 0 for non-video content
   videoFileSize: number; // bytes, 0 when unknown/non-video
@@ -81,6 +87,8 @@ export interface MsgContent {
   diceValue?: number;
   diceSuccessFrame?: number;
   diceHasFinalState?: boolean;
+  diceLayerFileIds?: number[];
+  diceLayerPaths?: string[];
   gameId?: string;
   gameShortName?: string;
   gameTitle?: string;
@@ -143,19 +151,143 @@ function localFileState(file: TdObject | undefined): LocalFileState {
   };
 }
 
-// Types whose LinkPreviewType variant carries a `photo` field (see td_api.tl).
-const LINK_PREVIEW_PHOTO_TYPES: string[] = ['linkPreviewTypeArticle', 'linkPreviewTypePhoto', 'linkPreviewTypeApp', 'linkPreviewTypeWebApp'];
-
 interface LinkPreviewInfo {
   siteName: string;
   title: string;
   description: string;
   descriptionEntities: TdObject[];
   photoFileId: number;
+  photoWidth: number;
+  photoHeight: number;
+  photoPath: string;
+  photoProgress: number;
+  photoActive: boolean;
+  typeName: string;
   url: string;
 }
 
-const EMPTY_LINK_PREVIEW: LinkPreviewInfo = { siteName: '', title: '', description: '', descriptionEntities: [], photoFileId: 0, url: '' };
+interface LinkPreviewImage {
+  fileId: number;
+  width: number;
+  height: number;
+  path: string;
+  progress: number;
+  active: boolean;
+}
+
+const EMPTY_LINK_PREVIEW_IMAGE: LinkPreviewImage = {
+  fileId: 0, width: 0, height: 0, path: '', progress: 0, active: false
+};
+
+const EMPTY_LINK_PREVIEW: LinkPreviewInfo = {
+  siteName: '', title: '', description: '', descriptionEntities: [],
+  photoFileId: 0, photoWidth: 0, photoHeight: 0,
+  photoPath: '', photoProgress: 0, photoActive: false,
+  typeName: '', url: ''
+};
+
+function previewImageFromFile(file: TdObject | undefined, width: number = 0,
+    height: number = 0): LinkPreviewImage {
+  if (file === undefined) {
+    return EMPTY_LINK_PREVIEW_IMAGE;
+  }
+  const fileId: number = (file['id'] as number | undefined) ?? 0;
+  if (fileId === 0) {
+    return EMPTY_LINK_PREVIEW_IMAGE;
+  }
+  const local: LocalFileState = localFileState(file);
+  return {
+    fileId, width, height,
+    path: local.path, progress: local.progress, active: local.active
+  };
+}
+
+// Preview cards should use a compact thumbnail instead of the largest photo.
+// Besides faster initial display, this avoids competing with the message-media
+// viewer for bandwidth when a history page contains several rich links.
+function previewImageFromPhoto(photo: TdObject | undefined): LinkPreviewImage {
+  if (photo === undefined) {
+    return EMPTY_LINK_PREVIEW_IMAGE;
+  }
+  const sizes: TdObject[] = (photo['sizes'] as TdObject[] | undefined) ?? [];
+  if (sizes.length > 0) {
+    const size: TdObject = sizes[Math.min(1, sizes.length - 1)];
+    return previewImageFromFile(
+      size['photo'] as TdObject | undefined,
+      (size['width'] as number | undefined) ?? 0,
+      (size['height'] as number | undefined) ?? 0
+    );
+  }
+  // linkPreviewTypeChat/User can carry chatPhoto rather than photo. The small
+  // avatar is exactly the right source for an inline card.
+  const small: TdObject | undefined = photo['small'] as TdObject | undefined;
+  if (small !== undefined) {
+    return previewImageFromFile(small);
+  }
+  return previewImageFromFile(photo['big'] as TdObject | undefined);
+}
+
+function previewImageFromThumbnail(thumbnail: TdObject | undefined): LinkPreviewImage {
+  if (thumbnail === undefined) {
+    return EMPTY_LINK_PREVIEW_IMAGE;
+  }
+  return previewImageFromFile(
+    thumbnail['file'] as TdObject | undefined,
+    (thumbnail['width'] as number | undefined) ?? 0,
+    (thumbnail['height'] as number | undefined) ?? 0
+  );
+}
+
+function previewImageFromMedia(media: TdObject | undefined): LinkPreviewImage {
+  if (media === undefined) {
+    return EMPTY_LINK_PREVIEW_IMAGE;
+  }
+  let image: LinkPreviewImage = previewImageFromPhoto(media['photo'] as TdObject | undefined);
+  if (image.fileId !== 0) {
+    return image;
+  }
+  image = previewImageFromThumbnail(media['thumbnail'] as TdObject | undefined);
+  if (image.fileId !== 0) {
+    return image;
+  }
+  image = previewImageFromThumbnail(media['album_cover_thumbnail'] as TdObject | undefined);
+  if (image.fileId !== 0) {
+    return image;
+  }
+  const nested: TdObject | undefined = media['media'] as TdObject | undefined;
+  return nested !== undefined ? previewImageFromMedia(nested) : EMPTY_LINK_PREVIEW_IMAGE;
+}
+
+function previewImageOfType(previewType: TdObject | undefined): LinkPreviewImage {
+  if (previewType === undefined) {
+    return EMPTY_LINK_PREVIEW_IMAGE;
+  }
+  let image: LinkPreviewImage = previewImageFromPhoto(previewType['photo'] as TdObject | undefined);
+  if (image.fileId !== 0) {
+    return image;
+  }
+  const mediaKeys: string[] = [
+    'video', 'animation', 'audio', 'document', 'sticker', 'video_note', 'voice_note'
+  ];
+  for (const key of mediaKeys) {
+    image = previewImageFromMedia(previewType[key] as TdObject | undefined);
+    if (image.fileId !== 0) {
+      return image;
+    }
+  }
+  image = previewImageFromThumbnail(previewType['thumbnail'] as TdObject | undefined);
+  if (image.fileId !== 0) {
+    return image;
+  }
+  const albumMedia: TdObject[] = (previewType['media'] as TdObject[] | undefined) ?? [];
+  for (const item of albumMedia) {
+    image = previewImageFromMedia(item);
+    if (image.fileId !== 0) {
+      return image;
+    }
+  }
+  return EMPTY_LINK_PREVIEW_IMAGE;
+}
 
 // A URL/message-link preview attached to a text message (TDLib messageText.link_preview).
 function parseLinkPreview(content: TdObject): LinkPreviewInfo {
@@ -166,16 +298,19 @@ function parseLinkPreview(content: TdObject): LinkPreviewInfo {
   const descFt = lp['description'] as TdObject | undefined;
   const lpType = lp['type'] as TdObject | undefined;
   const typeName = lpType !== undefined ? ((lpType['@type'] as string | undefined) ?? '') : '';
-  let photoFileId = 0;
-  if (lpType !== undefined && LINK_PREVIEW_PHOTO_TYPES.indexOf(typeName) >= 0) {
-    photoFileId = largestPhotoSize(lpType['photo'] as TdObject | undefined).fileId;
-  }
+  const image: LinkPreviewImage = previewImageOfType(lpType);
   return {
     siteName: (lp['site_name'] as string | undefined) ?? '',
     title: (lp['title'] as string | undefined) ?? '',
     description: descFt !== undefined ? ((descFt['text'] as string | undefined) ?? '') : '',
     descriptionEntities: textEntities(descFt),
-    photoFileId,
+    photoFileId: image.fileId,
+    photoWidth: image.width,
+    photoHeight: image.height,
+    photoPath: image.path,
+    photoProgress: image.progress,
+    photoActive: image.active,
+    typeName,
     url: (lp['url'] as string | undefined) ?? ''
   };
 }
@@ -380,6 +515,10 @@ export function formatMsgContent(message: TdObject): MsgContent {
       contentType: 'text', text, photoFileId: 0, photoWidth: 0, photoHeight: 0, placeholderLabel: '', entities: textEntities(ft),
       linkSiteName: lp.siteName, linkTitle: lp.title, linkDescription: lp.description,
       linkDescriptionEntities: lp.descriptionEntities, linkPhotoFileId: lp.photoFileId, linkUrl: lp.url,
+      linkPreviewType: lp.typeName,
+      linkPhotoWidth: lp.photoWidth, linkPhotoHeight: lp.photoHeight,
+      linkPhotoLocalPath: lp.photoPath, linkPhotoInitialProgress: lp.photoProgress,
+      linkPhotoInitialActive: lp.photoActive,
       videoDuration: 0, videoFileId: 0, videoFileSize: 0, videoMimeType: '', videoFileName: '', photoFullFileId: 0
     };
   }
@@ -870,6 +1009,52 @@ export function formatMsgContent(message: TdObject): MsgContent {
   if (type === 'messageDice') {
     const emoji = (content!['emoji'] as string | undefined) ?? '';
     const value = Math.max(0, (content!['value'] as number | undefined) ?? 0);
+    // final_state 是官方 TGS 动画（播完定格在结果上）——走既有贴纸下载/
+    // 渲染管线；未生成结果前退回 initial_state（滚动中动画）。
+    const pickDiceSticker = (state: TdObject | undefined): TdObject | undefined => {
+      if (state === undefined ||
+        ((state['@type'] as string | undefined) ?? '') !== 'diceStickersRegular') {
+        return undefined;
+      }
+      return state['sticker'] as TdObject | undefined;
+    };
+    const diceSticker = pickDiceSticker(content!['final_state'] as TdObject | undefined) ??
+      pickDiceSticker(content!['initial_state'] as TdObject | undefined);
+    const diceStickerFile = diceSticker !== undefined
+      ? diceSticker['sticker'] as TdObject | undefined : undefined;
+    const diceStickerFileId: number = diceStickerFile !== undefined
+      ? ((diceStickerFile['id'] as number | undefined) ?? 0) : 0;
+    const diceLocal: LocalFileState = localFileState(diceStickerFile);
+    // 🎰 老虎机（diceStickersSlotMachine）：5 层 TGS。渲染 z 序 =
+    // 背景 → 左/中/右转轮 → 拉杆（拉杆最上层）。
+    const pickSlotLayers = (state: TdObject | undefined): TdObject[] => {
+      if (state === undefined ||
+        ((state['@type'] as string | undefined) ?? '') !== 'diceStickersSlotMachine') {
+        return [];
+      }
+      const fields: string[] = ['background', 'left_reel', 'center_reel', 'right_reel', 'lever'];
+      const layers: TdObject[] = [];
+      for (const field of fields) {
+        const layer = state[field] as TdObject | undefined;
+        if (layer !== undefined) {
+          layers.push(layer);
+        }
+      }
+      return layers.length === fields.length ? layers : [];
+    };
+    const slotLayers = ((): TdObject[] => {
+      const fromFinal = pickSlotLayers(content!['final_state'] as TdObject | undefined);
+      return fromFinal.length > 0
+        ? fromFinal : pickSlotLayers(content!['initial_state'] as TdObject | undefined);
+    })();
+    const diceLayerFileIds: number[] = [];
+    const diceLayerPaths: string[] = [];
+    for (const layer of slotLayers) {
+      const layerFile = layer['sticker'] as TdObject | undefined;
+      diceLayerFileIds.push(layerFile !== undefined
+        ? ((layerFile['id'] as number | undefined) ?? 0) : 0);
+      diceLayerPaths.push(localFileState(layerFile).path);
+    }
     return {
       contentType: 'dice', text: '', photoFileId: 0, photoWidth: 0, photoHeight: 0,
       placeholderLabel: '', entities: [],
@@ -877,6 +1062,11 @@ export function formatMsgContent(message: TdObject): MsgContent {
       linkPhotoFileId: 0, linkUrl: '',
       videoDuration: 0, videoFileId: 0, videoFileSize: 0, videoMimeType: '',
       videoFileName: '', photoFullFileId: 0,
+      stickerFileId: diceStickerFileId,
+      stickerFormat: 'tgs',
+      stickerLocalPath: diceLocal.path,
+      diceLayerFileIds: diceLayerFileIds,
+      diceLayerPaths: diceLayerPaths,
       diceEmoji: emoji !== '' ? emoji : '🎲',
       diceValue: value,
       diceSuccessFrame: Math.max(0,

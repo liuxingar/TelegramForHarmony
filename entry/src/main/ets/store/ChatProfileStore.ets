@@ -85,6 +85,7 @@ export class ChatProfileStore {
   isChannel: boolean = false;
   isMuted: boolean = false;
   canManageVideoChats: boolean = false;
+  canManageChat: boolean = false; // creator or admin with usable admin rights
   liveGroupCallId: number = 0;
   membershipState: string = 'checking'; // checking | writable | joinable | blocked
   joinByRequest: boolean = false;
@@ -705,15 +706,24 @@ export class ChatProfileStore {
     }
     if (type === 'chatMemberStatusCreator') {
       this.canManageVideoChats = true;
+      this.canManageChat = true;
       return;
     }
     if (type === 'chatMemberStatusAdministrator') {
       const rights = status?.['rights'] as TdObject | undefined;
       this.canManageVideoChats =
         (rights?.['can_manage_video_chats'] as boolean | undefined) ?? false;
+      // Any of these rights makes at least part of the admin page usable.
+      this.canManageChat =
+        ((rights?.['can_manage_chat'] as boolean | undefined) ?? false) ||
+        ((rights?.['can_change_info'] as boolean | undefined) ?? false) ||
+        ((rights?.['can_restrict_members'] as boolean | undefined) ?? false) ||
+        ((rights?.['can_invite_users'] as boolean | undefined) ?? false) ||
+        ((rights?.['can_promote_members'] as boolean | undefined) ?? false);
       return;
     }
     this.canManageVideoChats = false;
+    this.canManageChat = false;
   }
 
   private applySupergroup(supergroup: TdObject): void {

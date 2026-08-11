@@ -1,5 +1,5 @@
 import { common } from '@kit.AbilityKit';
-import { promptAction } from '@kit.ArkUI';
+import { promptAction, router } from '@kit.ArkUI';
 import { AuthStage } from '../tdkit/AuthService';
 import {
   canReturnToPreviousTdAccount, getAuthService, returnToPreviousTdAccount
@@ -10,6 +10,7 @@ import { PasswordPage } from './login/PasswordPage';
 import { MainScreen } from './main/MainScreen';
 import { handleIncomingLink } from '../util/deepLink';
 import { COLOR_TEXT_PRIMARY } from '../util/theme';
+import { refreshNetworkState } from '../services/NetworkStateService';
 
 @Entry
 @Preview
@@ -23,6 +24,8 @@ struct Index {
   // Set by EntryAbility when the app is opened via a tg:// deep link. Held here
   // until auth is Ready (routing needs a logged-in session + a live router).
   @StorageLink('pendingDeepLink') @Watch('onDeepLink') pendingDeepLink: string = '';
+  // 点击本地通知进入的目标会话（EntryAbility 写入，登录就绪后路由）。
+  @StorageLink('pendingNotifyChatId') @Watch('onNotifyChat') pendingNotifyChatId: number = 0;
   private offAuth: (() => void) | null = null;
 
   aboutToAppear(): void {
@@ -38,6 +41,9 @@ struct Index {
 
   private onTdSessionEpoch(): void {
     this.bindAuthService();
+    // Account switching replaces the TDLib client while the Ability can stay in
+    // foreground. Republish the current bearer to the new client immediately.
+    refreshNetworkState(true);
   }
 
   private bindAuthService(): void {
@@ -50,12 +56,29 @@ struct Index {
       this.stage = s;
       // A link that arrived (or waited) through cold start / login flow.
       this.consumeDeepLink();
+      this.consumeNotifyChat();
     });
   }
 
   // Fires when a deep link arrives while the app is already running.
   private onDeepLink(): void {
     this.consumeDeepLink();
+  }
+
+  private onNotifyChat(): void {
+    this.consumeNotifyChat();
+  }
+
+  private consumeNotifyChat(): void {
+    if (this.stage !== AuthStage.Ready || this.pendingNotifyChatId === 0) {
+      return;
+    }
+    const chatId: number = this.pendingNotifyChatId;
+    this.pendingNotifyChatId = 0;
+    const params: Record<string, Object> = { 'chatId': chatId };
+    router.pushUrl({ url: 'pages/chat/ChatPage', params }).catch((error: Error): void => {
+      console.error(`Index.consumeNotifyChat failed: ${error.message}`);
+    });
   }
 
   // Route the pending link only once signed in; otherwise leave it queued for

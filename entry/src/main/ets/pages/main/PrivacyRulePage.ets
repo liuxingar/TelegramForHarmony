@@ -1,17 +1,26 @@
 import { router, promptAction } from '@kit.ArkUI';
-import { TdObject, TdError } from '../../tdkit/TdTypes';
+import { TdError, TdObject } from '../../tdkit/TdTypes';
 import {
-  RULE_EVERYBODY, RULE_CONTACTS, RULE_NOBODY,
+  RULE_CONTACTS, RULE_EVERYBODY, RULE_NOBODY,
   PrivacyValue, getPrivacy, setPrivacy
 } from '../../store/PrivacyApi';
-import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import {
+  COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE,
+  COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
+} from '../../util/theme';
 
-const CARD_RADIUS: number = 14;
+const CARD_RADIUS: number = 16;
 
 export interface PrivacyRuleParams {
-  setting: string; // a UserPrivacySetting @type
+  setting: string;
   title: string;
   hint: string;
+  allowNobody: boolean;
+}
+
+export interface PrivacyExceptionsParams {
+  setting: string;
+  title: string;
 }
 
 interface RuleOption {
@@ -19,15 +28,12 @@ interface RuleOption {
   value: string;
 }
 
-const OPTIONS: RuleOption[] = [
+const ALL_OPTIONS: RuleOption[] = [
   { label: '所有人', value: RULE_EVERYBODY },
   { label: '我的联系人', value: RULE_CONTACTS },
   { label: '没有人', value: RULE_NOBODY }
 ];
 
-// Who may see / do this one thing. The exception rules TDLib already holds for
-// the setting are read here and written back untouched — this page only ever
-// changes the base rule.
 @Entry
 @Component
 struct PrivacyRulePage {
@@ -36,103 +42,198 @@ struct PrivacyRulePage {
   @State setting: string = '';
   @State title: string = '';
   @State hint: string = '';
+  @State allowNobody: boolean = true;
   @State base: string = '';
-  @State exceptions: number = 0;
-  @State loading: boolean = true;
-  private extra: TdObject[] = [];
+  @State allowExceptions: number = 0;
+  @State restrictExceptions: number = 0;
+  @State loadState: string = 'loading';
+  @State saving: boolean = false;
+  @State pressedKey: string = '';
+  private preserved: TdObject[] = [];
+  private active: boolean = false;
+  private sequence: number = 0;
+
+  @Styles
+  optionNormalStyle() {
+    .backgroundColor(Color.Transparent).opacity(1).scale({ x: 1, y: 1 })
+  }
+
+  @Styles
+  optionPressedStyle() {
+    .backgroundColor($r('app.color.surface_alt')).opacity(0.82).scale({ x: 0.992, y: 0.97 })
+  }
 
   aboutToAppear(): void {
-    const p = router.getParams() as PrivacyRuleParams | undefined;
-    if (p === undefined || p.setting === undefined || p.setting === '') {
+    this.active = true;
+    const params = router.getParams() as PrivacyRuleParams | undefined;
+    if (params === undefined || params.setting === undefined || params.setting === '') {
       router.back();
       return;
     }
-    this.setting = p.setting;
-    this.title = p.title;
-    this.hint = p.hint;
-    getPrivacy(this.setting).then((v: PrivacyValue) => {
-      this.base = v.base;
-      this.exceptions = v.exceptions;
-      this.extra = v.extra;
-      this.loading = false;
-    }).catch((e: TdError) => {
-      console.error(`PrivacyRulePage.getPrivacy failed: ${e.message}`);
-      this.loading = false;
-      promptAction.showToast({ message: '读取隐私设置失败', duration: 1500 });
+    this.setting = params.setting;
+    this.title = params.title;
+    this.hint = params.hint;
+    this.allowNobody = params.allowNobody !== false;
+    this.load();
+  }
+
+  aboutToDisappear(): void {
+    this.active = false;
+    this.sequence++;
+    this.saving = false;
+  }
+
+  private load(): void {
+    const sequence = ++this.sequence;
+    this.loadState = 'loading';
+    getPrivacy(this.setting).then((value: PrivacyValue): void => {
+      if (!this.active || sequence !== this.sequence) { return; }
+      this.base = value.base;
+      this.allowExceptions = value.allowExceptions;
+      this.restrictExceptions = value.restrictExceptions;
+      this.preserved = value.extra;
+      this.loadState = 'ready';
+    }).catch((error: TdError): void => {
+      if (!this.active || sequence !== this.sequence) { return; }
+      console.error(`PrivacyRulePage.load failed: ${error.message}`);
+      this.loadState = 'error';
     });
   }
 
+  private options(): RuleOption[] {
+    return this.allowNobody ? ALL_OPTIONS : ALL_OPTIONS.slice(0, 2);
+  }
+
   private pick(value: string): void {
-    if (value === this.base || this.loading) {
-      return;
-    }
+    if (this.loadState !== 'ready' || this.saving || value === this.base) { return; }
+    if (!this.allowNobody && value === RULE_NOBODY) { return; }
     const previous = this.base;
-    this.base = value; // optimistic — the row must respond to the tap at once
-    setPrivacy(this.setting, value, this.extra).catch((e: TdError) => {
-      console.error(`PrivacyRulePage.setPrivacy failed: ${e.message}`);
+    this.base = value;
+    this.saving = true;
+    setPrivacy(this.setting, value, this.preserved).then((): void => {
+      if (!this.active) { return; }
+      this.saving = false;
+    }).catch((error: TdError): void => {
+      console.error(`PrivacyRulePage.setPrivacy failed: ${error.message}`);
+      if (!this.active) { return; }
       this.base = previous;
-      promptAction.showToast({ message: '保存失败，请重试', duration: 1500 });
+      this.saving = false;
+      promptAction.showToast({ message: '保存失败，已恢复原设置', duration: 1800 });
+    });
+  }
+
+  private openExceptions(): void {
+    if (this.loadState !== 'ready' || this.saving) { return; }
+    const params: PrivacyExceptionsParams = { setting: this.setting, title: this.title };
+    router.pushUrl({ url: 'pages/main/PrivacyExceptionsPage', params }).catch((): void => {
+      promptAction.showToast({ message: '例外名单打开失败', duration: 1600 });
     });
   }
 
   @Builder
   header() {
-    Row({ space: 16 }) {
-      SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(26).fontColor([COLOR_TEXT_PRIMARY])
-        .onClick(() => { router.back(); });
+    Row({ space: 8 }) {
+      Button() {
+        SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(24).fontColor([COLOR_TEXT_PRIMARY]);
+      }
+      .width(40).height(40).borderRadius(20).backgroundColor(Color.Transparent)
+      .onClick((): void => { router.back(); });
       Text(this.title).fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
-        .layoutWeight(1);
+        .layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
+      if (this.saving) { LoadingProgress().width(21).height(21).color(COLOR_PRIMARY); }
     }
-    .width('100%').height(48).padding({ left: 16, right: 16 })
-    .alignItems(VerticalAlign.Center);
+    .width('100%').height(52).padding({ left: 8, right: 16 }).alignItems(VerticalAlign.Center);
+  }
+
+  @Builder
+  divider() {
+    Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 16 });
+  }
+
+  @Builder
+  loadError() {
+    Column({ space: 12 }) {
+      SymbolGlyph($r('sys.symbol.exclamationmark_circle')).fontSize(46).fontColor([COLOR_TEXT_SECONDARY]);
+      Text('无法读取这项隐私规则').fontSize(17).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+      Text('页面不会用默认选项覆盖服务器状态。').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+      Button('重新加载').height(42).borderRadius(21).fontColor(Color.White).backgroundColor(COLOR_PRIMARY)
+        .onClick((): void => { this.load(); });
+    }
+    .layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
   }
 
   build() {
     Column() {
       this.header();
-      if (this.loading) {
-        Column() {
-          LoadingProgress().width(36).height(36).color(COLOR_TEXT_SECONDARY);
+      if (this.loadState === 'loading') {
+        Column({ space: 10 }) {
+          LoadingProgress().width(34).height(34).color(COLOR_PRIMARY);
+          Text('正在读取隐私规则…').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
+      } else if (this.loadState === 'error') {
+        this.loadError();
       } else {
         Scroll() {
-          Column() {
+          Column({ space: 12 }) {
             Column() {
-              ForEach(OPTIONS, (opt: RuleOption, idx: number) => {
-                if (idx > 0) {
-                  Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 16 });
-                }
-                Row() {
-                  Text(opt.label).fontSize(16).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
-                  if (this.base === opt.value) {
-                    SymbolGlyph($r('sys.symbol.checkmark')).fontSize(18).fontColor([COLOR_PRIMARY]);
+              Text('谁可以访问').fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
+                .width('100%').padding({ left: 16, top: 13, bottom: 5 });
+              ForEach(this.options(), (option: RuleOption, index: number) => {
+                if (index > 0) { this.divider(); }
+                Row({ space: 10 }) {
+                  Text(option.label).fontSize(16).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
+                  if (this.base === option.value) {
+                    SymbolGlyph($r('sys.symbol.checkmark')).fontSize(19).fontColor([COLOR_PRIMARY]);
                   }
                 }
-                .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 12 })
-                .onClick(() => { this.pick(opt.value); });
-              }, (opt: RuleOption) => opt.value);
+                .width('100%').constraintSize({ minHeight: 50 }).padding({ left: 16, right: 16 })
+                .borderRadius(12).stateStyles({ normal: this.optionNormalStyle, pressed: this.optionPressedStyle })
+                .opacity(this.saving ? 0.72 : 1)
+                .onClick((): void => { this.pick(option.value); });
+              }, (option: RuleOption): string => `${option.value}_${this.base}`);
             }
-            .width('100%').backgroundColor($r('app.color.surface')).borderRadius(CARD_RADIUS);
+            .width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS).padding({ bottom: 5 });
 
-            Text(this.hint).fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
-              .width('100%').padding({ left: 16, right: 16, top: 8 });
+            Text(this.hint).fontSize(12).fontColor(COLOR_TEXT_SECONDARY).lineHeight(18)
+              .width('100%').padding({ left: 16, right: 16 });
 
-            if (this.exceptions > 0) {
-              Text(`已为 ${this.exceptions} 个联系人/群组单独设置了例外，本页只改总规则，例外会原样保留。`)
-                .fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
-                .width('100%').padding({ left: 16, right: 16, top: 8 });
+            Column() {
+              Text('例外').fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
+                .width('100%').padding({ left: 16, top: 13, bottom: 5 });
+              Row({ space: 9 }) {
+                Column({ space: 2 }) {
+                  Text('始终允许').fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
+                  Text('即使总规则不允许，也对这些用户生效').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+                }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+                Text(`${this.allowExceptions}`).fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
+                SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(16).fontColor([COLOR_TEXT_SECONDARY]);
+              }
+              .width('100%').constraintSize({ minHeight: 60 }).padding({ left: 16, right: 14 })
+              .onClick((): void => { this.openExceptions(); });
+              this.divider();
+              Row({ space: 9 }) {
+                Column({ space: 2 }) {
+                  Text('永不允许').fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
+                  Text('即使总规则允许，也对这些用户生效').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+                }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+                Text(`${this.restrictExceptions}`).fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
+                SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(16).fontColor([COLOR_TEXT_SECONDARY]);
+              }
+              .width('100%').constraintSize({ minHeight: 60 }).padding({ left: 16, right: 14 })
+              .onClick((): void => { this.openExceptions(); });
             }
+            .width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS).padding({ bottom: 5 });
+
+            Text('例外规则优先于上方总规则；保存总规则不会删除服务器已有的机器人、Premium、联系人或群组规则。')
+              .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).lineHeight(18)
+              .width('100%').padding({ left: 16, right: 16 });
           }
-          .width('100%')
-          .padding({ left: 12, right: 12, top: 8, bottom: this.bottomSafe + 24 });
+          .width('100%').padding({ left: 12, right: 12, top: 6, bottom: this.bottomSafe + 24 });
         }
-        .layoutWeight(1).width('100%')
-        .align(Alignment.Top)
-        .scrollBar(BarState.Off);
+        .layoutWeight(1).width('100%').align(Alignment.Top).scrollBar(BarState.Off);
       }
     }
-    .width('100%').height('100%')
-    .backgroundColor($r('app.color.page_bg'))
+    .width('100%').height('100%').backgroundColor(COLOR_PAGE_BG)
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .padding({ top: this.topSafe });
   }

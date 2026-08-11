@@ -1,5 +1,5 @@
 import { router, promptAction } from '@kit.ArkUI';
-import { getTdClient } from '../../tdkit/Globals';
+import { getTdClient, getCallSession } from '../../tdkit/Globals';
 import { ProfileStore, CommonGroup, StoryItem, GiftItem, AvailGift } from '../../store/ProfileStore';
 import {
   ChatProfileStore, ProfileContentItem,
@@ -317,6 +317,16 @@ struct ProfilePage {
     router.pushUrl({ url: 'pages/chat/ChatPage', params: params });
   }
 
+  private startCall(isVideo: boolean): void {
+    if (this.userId <= 0) {
+      return;
+    }
+    getCallSession().startCall(this.userId, isVideo);
+    router.pushUrl({ url: 'pages/call/CallPage' }).catch((error: Error): void => {
+      console.error(`ProfilePage.startCall navigation failed: ${error.message}`);
+    });
+  }
+
   private sendMessage(): void {
     // Ensure the private chat exists before navigating into it.
     const req: TdRequest = { '@type': 'createPrivateChat' };
@@ -344,6 +354,66 @@ struct ProfilePage {
   }
 
   private addContact(): void {
+    this.sendAddContact().then(() => {
+      this.isContact = true;
+      promptAction.showToast({ message: '已添加为联系人', duration: 1500 });
+    }).catch((e: TdError) => {
+      // min user：本地没有对方的 access hash（只在群消息里见过对方时的常态），
+      // addContact 按 id 直发会报 400 User not found。电话可见时按 TDLib 推荐
+      // 路径先 searchUserByPhoneNumber 取回完整用户，再重试一次。
+      if (e.code === 400 && this.phone !== '') {
+        const lookup: TdRequest = { '@type': 'searchUserByPhoneNumber' };
+        lookup['phone_number'] = this.phone;
+        getTdClient().send(lookup)
+          .then(() => this.sendAddContact())
+          .then(() => {
+            this.isContact = true;
+            promptAction.showToast({ message: '已添加为联系人', duration: 1500 });
+          })
+          .catch((retryError: TdError) => {
+            console.error(`ProfilePage.addContact retry failed(code=${retryError.code}): ` +
+              `${retryError.message} userId=${this.userId}`);
+            this.importContactFallback();
+          });
+        return;
+      }
+      console.error(`ProfilePage.addContact failed(code=${e.code}): ${e.message} ` +
+        `userId=${this.userId} phone='${this.phone}' name='${this.name}'`);
+      promptAction.showToast({
+        message: e.code === 400 ? '无法添加：对方信息不完整' : '添加失败，请稍后重试',
+        duration: 1700
+      });
+    });
+  }
+
+  // 最后一层回退：按手机号导入通讯录（官方客户端处理分享名片同款路径）。
+  // 服务器能解析该号码时对方直接成为联系人；解析不到（对方隐私限制）则
+  // user_ids 返回 0 —— 平台层面无法添加，只能如实提示。
+  private importContactFallback(): void {
+    const contact: TdObject = { '@type': 'contact' };
+    contact['phone_number'] = this.phone;
+    contact['first_name'] = this.name !== '' ? this.name : '联系人';
+    contact['last_name'] = '';
+    contact['user_id'] = 0;
+    const req: TdRequest = { '@type': 'importContacts' };
+    req['contacts'] = [contact];
+    getTdClient().send(req).then((res: TdObject) => {
+      const userIds: number[] = (res['user_ids'] as number[] | undefined) ?? [];
+      if (userIds.length > 0 && userIds[0] > 0) {
+        this.isContact = true;
+        promptAction.showToast({ message: '已添加为联系人', duration: 1500 });
+        return;
+      }
+      promptAction.showToast({
+        message: '对方隐私设置不允许通过手机号添加', duration: 2000
+      });
+    }).catch((e: TdError) => {
+      console.error(`ProfilePage.importContacts failed(code=${e.code}): ${e.message}`);
+      promptAction.showToast({ message: '添加失败，请稍后重试', duration: 1700 });
+    });
+  }
+
+  private sendAddContact(): Promise<TdObject> {
     const contact: TdObject = { '@type': 'contact' };
     contact['phone_number'] = this.phone;
     contact['first_name'] = this.name !== '' ? this.name : '联系人';
@@ -352,11 +422,7 @@ struct ProfilePage {
     const req: TdRequest = { '@type': 'addContact' };
     req['contact'] = contact;
     req['share_phone_number'] = false;
-    getTdClient().send(req).then(() => {
-      this.isContact = true;
-    }).catch((e: TdError) => {
-      console.error(`ProfilePage.addContact failed: ${e.message}`);
-    });
+    return getTdClient().send(req);
   }
 
   private toggleMute(): void {
@@ -530,7 +596,8 @@ struct ProfilePage {
     Row({ space: 8 }) {
       this.actionButton('sys.symbol.message', '消息', () => { this.sendMessage(); });
       this.actionButton('sys.symbol.bell', '静音', () => { this.toggleMute(); });
-      this.actionButton('sys.symbol.phone', '通话', () => {});
+      this.actionButton('sys.symbol.phone', '通话', () => { this.startCall(false); });
+      this.actionButton('sys.symbol.video', '视频', () => { this.startCall(true); });
       this.actionButton('sys.symbol.gift', '礼物', () => {
         if (this.store !== null) {
           this.store.loadAvailableGifts();
@@ -659,6 +726,54 @@ struct ProfilePage {
     .margin({ left: 12, right: 12, top: 12 });
   }
 
+  private creatingSecretChat: boolean = false;
+
+  // 端到端加密会话：createNewSecretChat 返回新的 secret chat 会话。
+  private startSecretChat(): void {
+    if (this.userId <= 0 || this.creatingSecretChat) {
+      return;
+    }
+    this.creatingSecretChat = true;
+    const req: TdRequest = { '@type': 'createNewSecretChat' };
+    req['user_id'] = this.userId;
+    getTdClient().send(req).then((chat: TdObject): void => {
+      this.creatingSecretChat = false;
+      const chatId: number = (chat['id'] as number | undefined) ?? 0;
+      if (chatId === 0) {
+        promptAction.showToast({ message: '秘密聊天创建失败', duration: 1700 });
+        return;
+      }
+      const params: Record<string, Object> = { 'chatId': chatId };
+      router.pushUrl({ url: 'pages/chat/ChatPage', params }).catch((error: Error): void => {
+        console.error(`ProfilePage.startSecretChat navigation failed: ${error.message}`);
+      });
+    }).catch((e: TdError): void => {
+      this.creatingSecretChat = false;
+      console.error(`ProfilePage.createNewSecretChat failed: ${e.message}`);
+      promptAction.showToast({ message: '秘密聊天创建失败，请稍后重试', duration: 1700 });
+    });
+  }
+
+  @Builder
+  secretChatCard() {
+    Column() {
+      Row({ space: 12 }) {
+        SymbolGlyph($r('sys.symbol.lock_fill'))
+          .fontSize(22)
+          .fontColor(['#31C48D']);
+        Text('发起秘密聊天')
+          .fontSize(15)
+          .fontColor('#31C48D');
+      }
+      .width('100%')
+      .padding(14)
+      .backgroundColor(CARD_BG)
+      .borderRadius(CARD_RADIUS)
+      .onClick((): void => { this.startSecretChat(); });
+    }
+    .margin({ left: 12, right: 12, top: 12 });
+  }
+
   @Builder
   addContactCard() {
     Column() {
@@ -674,6 +789,7 @@ struct ProfilePage {
       .padding(14)
       .backgroundColor(CARD_BG)
       .borderRadius(CARD_RADIUS)
+      .onClick((): void => { this.addContact(); });
     }
     .margin({ left: 12, right: 12, top: 12 });
   }
@@ -1070,6 +1186,7 @@ struct ProfilePage {
           if (!this.isContact) {
             this.addContactCard();
           }
+          this.secretChatCard();
           if (this.visibleProfileTabs().length > 0) {
             Column() {
               this.tabsBar();

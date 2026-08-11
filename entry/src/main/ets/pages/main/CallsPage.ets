@@ -1,168 +1,583 @@
-import { router, promptAction } from '@kit.ArkUI';
-import { getTdClient } from '../../tdkit/Globals';
-import { CallsStore, CallItem } from '../../store/CallsStore';
+import { promptAction, router } from '@kit.ArkUI';
+import { getTdClient, getCallSession } from '../../tdkit/Globals';
+import {
+  CallItem, CallsLoadState, CallsMode, CallsPageState, CallsStore
+} from '../../store/CallsStore';
+import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
+import { callClockLabel, callDayKey, callSectionLabel } from '../../util/CallHistoryPresentation';
 import { AvatarView } from '../chatlist/AvatarView';
-import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import {
+  COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE,
+  COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
+} from '../../util/theme';
 
-const CARD_BG: ResourceColor = $r('app.color.surface');
 const CARD_RADIUS: number = 14;
-const PAGE_BG: ResourceColor = $r('app.color.page_bg');
-const COLOR_MISSED: string = '#E53935';
-const COLOR_ANSWERED: string = '#34C759';
+const COLOR_MISSED: string = '#E64646';
+const COLOR_WARNING: string = '#E68A00';
+const COLOR_ANSWERED: string = '#28A878';
+const SEGMENT_WIDTH: number = 196;
+const SEGMENT_INSET: number = 3;
+const SEGMENT_HEIGHT: number = 40;
+const LONG_PRESS_MS: number = 500;
 
-// Recent calls: an action card (new call / calls tab) above the call history
-// from searchCallMessages. Rows open the chat; actual calling isn't supported.
 @Entry
 @Component
 struct CallsPage {
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @State calls: CallItem[] = [];
-  @State loading: boolean = true;
-  @State hasMore: boolean = false;
+  @State mode: CallsMode = 'all';
+  @State loadState: CallsLoadState = 'loading';
+  @State pageState: CallsPageState = 'idle';
+  @State refreshing: boolean = false;
+  @State syncError: string = '';
+  @State totalCount: number = 0;
+  @State actionKey: string = '';
+  @State nowSeconds: number = Math.floor(Date.now() / 1000);
+  @State pressedKey: string = '';
+  @State contextMenuShown: boolean = false;
+  @State menuCallKey: string = '';
   private store: CallsStore | null = null;
-  private unsub: (() => void) | null = null;
+  private unsubscribe: (() => void) | null = null;
+  private clockTimer: number = -1;
+  private pressActive: boolean = false;
+  private pressConsumedByMenu: boolean = false;
+  private pressKey: string = '';
+  private pressIndex: number = -1;
+  private pressVersion: string = '';
+  private pendingCalls: CallItem[] | null = null;
+  private menuCallSnapshot: CallItem | null = null;
+  private active: boolean = false;
+  private navigationLocked: boolean = false;
+  private navigationTimer: number = -1;
+
+  @Styles
+  pressNormal() {
+    .opacity(1).scale({ x: 1, y: 1 }).backgroundColor(Color.Transparent)
+  }
+
+  @Styles
+  pressDown() {
+    .opacity(0.7).scale({ x: 0.96, y: 0.96 }).backgroundColor($r('app.color.surface_alt'))
+  }
 
   aboutToAppear(): void {
+    this.active = true;
+    this.navigationLocked = false;
+    this.actionKey = '';
     const store = new CallsStore(getTdClient());
     this.store = store;
-    this.unsub = store.subscribe(() => {
-      this.calls = store.calls;
-      this.loading = store.loading;
-      this.hasMore = store.hasMore;
+    this.unsubscribe = store.subscribe((): void => {
+      if (this.contextMenuShown) { this.pendingCalls = store.calls.slice(); }
+      else { this.calls = store.calls; }
+      this.mode = store.mode;
+      this.loadState = store.loadState;
+      this.pageState = store.pageState;
+      this.refreshing = store.refreshing;
+      this.syncError = store.syncError;
+      this.totalCount = store.totalCount;
     });
     store.open();
+    this.clockTimer = setInterval((): void => {
+      this.nowSeconds = Math.floor(Date.now() / 1000);
+    }, 60000);
   }
 
   aboutToDisappear(): void {
-    if (this.unsub !== null) { this.unsub(); this.unsub = null; }
+    this.active = false;
+    if (this.unsubscribe !== null) { this.unsubscribe(); this.unsubscribe = null; }
     if (this.store !== null) { this.store.close(); this.store = null; }
+    if (this.clockTimer !== -1) { clearInterval(this.clockTimer); this.clockTimer = -1; }
+    this.contextMenuShown = false;
+    this.pendingCalls = null;
+    this.menuCallSnapshot = null;
+    if (this.navigationTimer !== -1) { clearTimeout(this.navigationTimer); this.navigationTimer = -1; }
   }
 
-  private openChat(chatId: number): void {
-    const params: Record<string, Object> = { 'chatId': chatId };
-    router.pushUrl({ url: 'pages/chat/ChatPage', params: params });
+  private selectMode(mode: CallsMode): void {
+    if (mode === this.mode || this.actionKey !== '') { return; }
+    this.mode = mode;
+    this.pressedKey = '';
+    this.store?.setMode(mode);
   }
 
-  private notSupported(): void {
-    promptAction.showToast({ message: '暂未支持通话功能' });
+  private handleHorizontalSwipe(offsetX: number): void {
+    if (Math.abs(offsetX) < 42) { return; }
+    if (offsetX < 0 && this.mode === 'all') { this.selectMode('missed'); }
+    else if (offsetX > 0 && this.mode === 'missed') { this.selectMode('all'); }
+  }
+
+  private openChat(call: CallItem): void {
+    if (this.actionKey !== '' || this.navigationLocked || call.chatId === 0) { return; }
+    this.navigationLocked = true;
+    const params: Record<string, Object> = { 'chatId': call.chatId };
+    router.pushUrl({ url: 'pages/chat/ChatPage', params }).catch((error: Error): void => {
+      this.navigationLocked = false;
+      console.error(`CallsPage.openChat failed: ${error.message}`);
+      promptAction.showToast({ message: '无法打开聊天，请稍后重试', duration: 1700 });
+    });
+    this.navigationTimer = setTimeout((): void => {
+      this.navigationLocked = false;
+      this.navigationTimer = -1;
+    }, 800);
+  }
+
+  private refresh(): void {
+    if (this.store === null) { this.refreshing = false; return; }
+    this.store.refresh();
+    if (!this.store.refreshing) { this.refreshing = false; }
+  }
+
+  private confirmClear(): void {
+    if (this.calls.length === 0 || this.actionKey !== '' || this.store === null) { return; }
+    promptAction.showDialog({
+      title: '清空通话记录',
+      message: '通话记录将只从你的账号中删除，不会影响对方。',
+      buttons: [
+        { text: '取消', color: COLOR_TEXT_SECONDARY as string },
+        { text: '清空', color: COLOR_MISSED }
+      ]
+    }).then((result: promptAction.ShowDialogSuccessResponse): void => {
+      if (!this.active || result.index !== 1 || this.store === null || this.actionKey !== '') { return; }
+      this.actionKey = 'clear';
+      this.store.clearAll().then((): void => {
+        if (!this.active) { return; }
+        this.actionKey = '';
+        promptAction.showToast({ message: '通话记录已清空', duration: 1500 });
+      }).catch((error: Error): void => {
+        if (!this.active) { return; }
+        this.actionKey = '';
+        console.error(`CallsPage.clearAll failed: ${error.message}`);
+        promptAction.showToast({ message: '清空失败，记录已恢复', duration: 1900 });
+      });
+    }).catch((): void => {});
+  }
+
+  private confirmDelete(call: CallItem): void {
+    if (this.actionKey !== '' || this.store === null) { return; }
+    promptAction.showDialog({
+      title: '删除通话记录',
+      message: `确定删除与「${call.name !== '' ? call.name : '该联系人'}」的这条通话记录吗？`,
+      buttons: [
+        { text: '取消', color: COLOR_TEXT_SECONDARY as string },
+        { text: '删除', color: COLOR_MISSED }
+      ]
+    }).then((result: promptAction.ShowDialogSuccessResponse): void => {
+      if (!this.active || result.index !== 1 || this.store === null || this.actionKey !== '') { return; }
+      this.actionKey = `delete_${call.key}`;
+      this.store.deleteCall(call).then((): void => {
+        if (!this.active) { return; }
+        this.actionKey = '';
+        promptAction.showToast({ message: '通话记录已删除', duration: 1400 });
+      }).catch((error: Error): void => {
+        if (!this.active) { return; }
+        this.actionKey = '';
+        console.error(`CallsPage.deleteCall failed: ${error.message}`);
+        promptAction.showToast({ message: '删除失败，记录已恢复', duration: 1800 });
+      });
+    }).catch((): void => {});
+  }
+
+  private toneColor(call: CallItem): string | ResourceColor {
+    if (call.tone === 'missed') { return COLOR_MISSED; }
+    if (call.tone === 'warning') { return COLOR_WARNING; }
+    if (call.tone === 'active') { return COLOR_PRIMARY; }
+    return COLOR_ANSWERED;
+  }
+
+  private countLabel(): string {
+    if (this.loadState === 'loading') { return '正在同步…'; }
+    if (this.totalCount > this.calls.length) { return `约 ${this.totalCount} 条记录`; }
+    return `${this.calls.length} 条记录`;
+  }
+
+  private isSectionStart(index: number): boolean {
+    return index === 0 || callDayKey(this.calls[index - 1].date) !== callDayKey(this.calls[index].date);
+  }
+
+  private callVersion(call: CallItem): string {
+    return [call.key, `${call.date}`, call.name, call.avatarPath, call.statusText,
+      `${call.outgoing}`, `${call.missed}`, `${call.active}`].join('|');
+  }
+
+  private currentCallIndex(key: string): number {
+    return this.calls.findIndex((call: CallItem): boolean => call.key === key);
+  }
+
+  private beginPress(call: CallItem): void {
+    this.pressConsumedByMenu = false;
+    this.pressActive = true;
+    this.pressKey = call.key;
+    this.pressIndex = this.currentCallIndex(call.key);
+    this.pressVersion = this.callVersion(call);
+    this.pressedKey = call.key;
+  }
+
+  private endPress(): void {
+    this.pressActive = false;
+    this.pressedKey = '';
+  }
+
+  private openMenuIfCurrent(call: CallItem): void {
+    const index = this.currentCallIndex(call.key);
+    const current = index >= 0 ? this.calls[index] : undefined;
+    const unchanged = this.pressActive && this.pressKey === call.key && index === this.pressIndex
+      && current !== undefined && this.callVersion(current) === this.pressVersion;
+    this.pressActive = false;
+    this.pressedKey = '';
+    if (!unchanged) { return; }
+    this.pressConsumedByMenu = true;
+    this.menuCallKey = call.key;
+    this.menuCallSnapshot = call;
+    this.contextMenuShown = true;
+  }
+
+  private menuCall(): CallItem | undefined {
+    return this.calls.find((call: CallItem): boolean => call.key === this.menuCallKey)
+      ?? (this.menuCallSnapshot ?? undefined);
+  }
+
+  private closeContextMenu(): void {
+    this.contextMenuShown = false;
+    this.menuCallKey = '';
+    this.pressActive = false;
+    this.pressedKey = '';
+    if (this.pendingCalls !== null) {
+      this.calls = this.pendingCalls;
+      this.pendingCalls = null;
+    }
+  }
+
+  @Builder
+  topMenu() {
+    Menu() {
+      MenuItem({ content: '刷新通话记录' }).enabled(!this.refreshing && this.actionKey === '')
+        .onClick((): void => this.refresh());
+      MenuItem({ content: '清空通话记录' }).enabled(this.calls.length > 0 && this.actionKey === '')
+        .onClick((): void => this.confirmClear());
+    }
+  }
+
+  private redial(call: CallItem): void {
+    // 私聊的 chatId 即对端 userId（TDLib 约定）；群组通话不走 1:1 回拨。
+    if (call.isGroup || call.chatId <= 0) {
+      return;
+    }
+    getCallSession().startCall(call.chatId, call.isVideo);
+    router.pushUrl({ url: 'pages/call/CallPage' }).catch((error: Error): void => {
+      console.error(`CallsPage.redial failed: ${error.message}`);
+    });
+  }
+
+  @Builder
+  callContextMenu() {
+    Menu() {
+      if (!(this.menuCall()?.isGroup ?? true)) {
+        MenuItem({ content: '回拨' }).onClick((): void => {
+          const call = this.menuCall();
+          if (call !== undefined) { this.redial(call); }
+        });
+      }
+      MenuItem({ content: '打开聊天' }).onClick((): void => {
+        const call = this.menuCall();
+        if (call !== undefined) { this.openChat(call); }
+      });
+      MenuItem({ content: '删除这条记录' }).onClick((): void => {
+        const call = this.menuCall();
+        if (call !== undefined) { this.confirmDelete(call); }
+      });
+    }
   }
 
   @Builder
   topBar() {
-    Row({ space: 16 }) {
-      SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(26).fontColor([COLOR_TEXT_PRIMARY])
-        .onClick(() => { router.back(); });
-      Text('通话').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
-        .layoutWeight(1);
-      SymbolGlyph($r('sys.symbol.more')).fontSize(24).fontColor([COLOR_TEXT_PRIMARY]);
-    }
-    .width('100%').height(48).padding({ left: 16, right: 16 })
-    .alignItems(VerticalAlign.Center);
-  }
-
-  @Builder
-  actionRow(icon: string, label: string, onTap: () => void) {
-    Row({ space: 14 }) {
-      SymbolGlyph($r(icon)).fontSize(22).fontColor([COLOR_PRIMARY]).width(40)
-        .margin({ left: 4 });
-      Text(label).fontSize(16).fontColor(COLOR_PRIMARY).layoutWeight(1);
-    }
-    .width('100%').padding({ left: 14, right: 14, top: 12, bottom: 12 })
-    .alignItems(VerticalAlign.Center)
-    .onClick(() => { onTap(); });
-  }
-
-  @Builder
-  actionCard() {
-    Column() {
-      Column() {
-        this.actionRow('sys.symbol.phone_fill', '创建新通话', () => { this.notSupported(); });
-        Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 68 });
-        this.actionRow('sys.symbol.arrow_down_circle', '显示通话标签页', () => { this.notSupported(); });
+    Row({ space: 6 }) {
+      Row() { SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(25).fontColor([COLOR_TEXT_PRIMARY]); }
+        .width(44).height(44).borderRadius(22).justifyContent(FlexAlign.Center)
+        .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
+        .onClick((): void => router.back());
+      Column({ space: 1 }) {
+        Text('通话记录').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
+        Text(this.countLabel()).fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+      if (this.actionKey !== '' || this.refreshing) {
+        LoadingProgress().width(19).height(19).color(COLOR_PRIMARY).margin({ right: 13 });
+      } else {
+        Row() { SymbolGlyph($r('sys.symbol.more')).fontSize(23).fontColor([COLOR_TEXT_PRIMARY]); }
+          .width(44).height(44).borderRadius(22).justifyContent(FlexAlign.Center)
+          .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
+          .bindMenu(this.topMenu());
       }
-      .width('100%').backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
-      .padding({ top: 2, bottom: 2 });
-    }
-    .margin({ left: 12, right: 12, top: 8 });
+    }.width('100%').height(56).padding({ left: 8, right: 8 }).alignItems(VerticalAlign.Center);
   }
 
   @Builder
-  callRow(c: CallItem) {
+  segmentItem(mode: CallsMode, title: string) {
+    Text(title).fontSize(14).fontWeight(this.mode === mode ? FontWeight.Medium : FontWeight.Regular)
+      .fontColor(this.mode === mode ? COLOR_PRIMARY : COLOR_TEXT_SECONDARY)
+      .width((SEGMENT_WIDTH - SEGMENT_INSET * 2) / 2).height(SEGMENT_HEIGHT - SEGMENT_INSET * 2)
+      .textAlign(TextAlign.Center)
+      .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
+      .onClick((): void => this.selectMode(mode));
+  }
+
+  @Builder
+  segmentBar() {
+    Row() {
+      Stack({ alignContent: Alignment.TopStart }) {
+        Row().width((SEGMENT_WIDTH - SEGMENT_INSET * 2) / 2).height(SEGMENT_HEIGHT - SEGMENT_INSET * 2)
+          .borderRadius((SEGMENT_HEIGHT - SEGMENT_INSET * 2) / 2)
+          .backgroundColor($r('app.color.surface'))
+          .shadow({ radius: 4, color: '#16000000', offsetX: 0, offsetY: 1 })
+          .position({
+            x: this.mode === 'all' ? SEGMENT_INSET : SEGMENT_WIDTH / 2,
+            y: SEGMENT_INSET
+          })
+          .animation({
+            duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 220),
+            curve: Curve.EaseOut
+          });
+        Row() {
+          this.segmentItem('all', '全部');
+          this.segmentItem('missed', '未接');
+        }.width('100%').height('100%').padding(SEGMENT_INSET);
+      }.width(SEGMENT_WIDTH).height(SEGMENT_HEIGHT)
+        .backgroundColor($r('app.color.surface_alt')).borderRadius(SEGMENT_HEIGHT / 2);
+    }.width('100%').justifyContent(FlexAlign.Center).padding({ top: 2, bottom: 8 });
+  }
+
+  @Builder
+  skeleton() {
+    Column({ space: 9 }) {
+      ForEach([0, 1, 2, 3, 4], (index: number) => {
+        Row({ space: 12 }) {
+          Circle({ width: 46, height: 46 }).fill($r('app.color.surface_alt'));
+          Column({ space: 8 }) {
+            Row().width(index % 2 === 0 ? '44%' : '58%').height(13).borderRadius(7)
+              .backgroundColor($r('app.color.surface_alt'));
+            Row().width(index % 2 === 0 ? '62%' : '48%').height(10).borderRadius(5)
+              .backgroundColor($r('app.color.surface_alt'));
+          }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+        }.width('100%').height(66).padding({ left: 14, right: 14 })
+          .backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
+      }, (index: number): string => `call_skeleton_${index}`);
+    }.layoutWeight(1).width('100%').padding({ left: 12, right: 12, top: 4 });
+  }
+
+  @Builder
+  errorState() {
+    Column({ space: 12 }) {
+      Text('📞').fontSize(44);
+      Text('通话记录加载失败').fontSize(18).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+      Text('网络恢复后可以重新加载，聊天内容不会受影响。')
+        .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center);
+      Text('重新加载').fontSize(15).fontColor(Color.White).fontWeight(FontWeight.Medium)
+        .padding({ left: 22, right: 22, top: 10, bottom: 10 })
+        .backgroundColor(COLOR_PRIMARY).borderRadius(18)
+        .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
+        .onClick((): void => this.store?.retry());
+    }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center)
+      .padding({ left: 28, right: 28, bottom: this.bottomSafe + 28 });
+  }
+
+  @Builder
+  emptyState() {
+    Column({ space: 9 }) {
+      Text(this.mode === 'missed' ? '✓' : '📞').fontSize(44).fontColor(COLOR_PRIMARY);
+      Text(this.mode === 'missed' ? '没有未接来电' : '暂无通话记录')
+        .fontSize(18).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+      Text(this.mode === 'missed' ? '新的未接或拒接通话会显示在这里' : '完成通话后，记录会显示在这里')
+        .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center);
+      Text('刷新记录').fontSize(14).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
+        .padding({ left: 18, right: 18, top: 9, bottom: 9 })
+        .backgroundColor('#145B8FF9').borderRadius(17)
+        .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
+        .onClick((): void => this.refresh());
+    }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center)
+      .padding({ bottom: this.bottomSafe + 32 });
+  }
+
+  @Builder
+  syncWarningBar() {
+    if (this.syncError !== '') {
+      Row({ space: 8 }) {
+        SymbolGlyph($r('sys.symbol.exclamationmark_circle')).fontSize(16).fontColor([COLOR_WARNING]);
+        Text(this.syncError).fontSize(12).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
+        Text('重试').fontSize(12).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY);
+      }.width('100%').padding({ left: 12, right: 12, top: 9, bottom: 9 })
+        .margin({ left: 12, right: 12, bottom: 7 })
+        .backgroundColor('#16E68A00').borderRadius(11)
+        .onClick((): void => this.refresh())
+        .transition(TransitionEffect.OPACITY.animation({ duration: 170, curve: Curve.EaseOut }));
+    }
+  }
+
+  @Builder
+  mediaBadge(call: CallItem) {
+    Row() {
+      SymbolGlyph($r(call.isVideo ? 'sys.symbol.video' : 'sys.symbol.phone'))
+        .fontSize(13).fontColor([this.toneColor(call)]);
+    }.width(25).height(25).borderRadius(9).justifyContent(FlexAlign.Center)
+      .backgroundColor(call.tone === 'missed' ? '#14E64646' : '#1428A878');
+  }
+
+  @Builder
+  callRow(call: CallItem) {
     Row({ space: 12 }) {
-      AvatarView({ avatarPath: c.avatarPath, initials: c.initials, colorSeed: c.colorSeed, avatarSize: 46 });
-      Column({ space: 3 }) {
-        Text(c.name !== '' ? c.name : '…')
-          .fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY)
-          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
-        Row({ space: 5 }) {
-          Text(c.outgoing ? '↗' : '↙')
-            .fontSize(14).fontWeight(FontWeight.Bold)
-            .fontColor(c.missed ? COLOR_MISSED : COLOR_ANSWERED);
-          Text(c.timeLabel).fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
-            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
-        }.alignItems(VerticalAlign.Center);
-      }.alignItems(HorizontalAlign.Start).layoutWeight(1);
-      SymbolGlyph($r('sys.symbol.phone')).fontSize(22).fontColor([COLOR_PRIMARY])
-        .onClick(() => { this.notSupported(); });
+      AvatarView({
+        avatarPath: call.avatarPath,
+        initials: call.initials,
+        colorSeed: call.colorSeed,
+        avatarSize: 46
+      });
+      Column({ space: 5 }) {
+        Row({ space: 7 }) {
+          Text(call.name !== '' ? call.name : '正在读取聊天…')
+            .fontSize(16).fontWeight(FontWeight.Medium)
+            .fontColor(call.name !== '' ? COLOR_TEXT_PRIMARY : COLOR_TEXT_SECONDARY)
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1);
+          Text(callClockLabel(call.date)).fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
+        }.width('100%');
+        Row({ space: 6 }) {
+          this.mediaBadge(call);
+          SymbolGlyph($r('sys.symbol.arrow_up_right')).fontSize(13).fontColor([this.toneColor(call)])
+            .rotate({ angle: call.outgoing ? 0 : 180 });
+          Text(call.statusText).fontSize(12).fontColor(this.toneColor(call))
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1);
+          if (call.isGroup && call.participantCount > 0) {
+            Text(`${call.participantCount}人`).fontSize(10).fontColor(COLOR_TEXT_SECONDARY);
+          }
+          SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(13).fontColor([COLOR_TEXT_SECONDARY]);
+        }.width('100%').alignItems(VerticalAlign.Center);
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start);
     }
-    .width('100%').padding({ left: 14, right: 14, top: 9, bottom: 9 })
-    .alignItems(VerticalAlign.Center)
-    .onClick(() => { this.openChat(c.chatId); });
+    .width('100%').constraintSize({ minHeight: 68 })
+    .padding({ left: 14, right: 12, top: 10, bottom: 10 })
+    .backgroundColor(this.pressedKey === call.key ? $r('app.color.surface_alt') : COLOR_SURFACE)
+    .borderRadius(CARD_RADIUS)
+    .scale({ x: this.pressedKey === call.key ? 0.99 : 1, y: this.pressedKey === call.key ? 0.985 : 1 })
+    .animation({ duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 110), curve: Curve.EaseOut })
+    .accessibilityText(`${call.name}，${call.statusText}，${callSectionLabel(call.date, this.nowSeconds)} ${callClockLabel(call.date)}`)
+    .onTouch((event: TouchEvent): void => {
+      if (event.type === TouchType.Down) { this.beginPress(call); }
+      else if (event.type === TouchType.Up || event.type === TouchType.Cancel) { this.endPress(); }
+    })
+    .onClick((): void => {
+      this.pressedKey = '';
+      if (this.pressConsumedByMenu || this.contextMenuShown) {
+        this.pressConsumedByMenu = false;
+        return;
+      }
+      this.openChat(call);
+    })
+    .parallelGesture(
+      LongPressGesture({ fingers: 1, repeat: false, duration: LONG_PRESS_MS })
+        .onAction((): void => this.openMenuIfCurrent(call))
+        .onActionCancel((): void => this.endPress())
+    )
+    .bindContextMenu(
+      this.contextMenuShown && this.menuCallKey === call.key,
+      this.callContextMenu,
+      {
+        preview: MenuPreviewMode.IMAGE,
+        previewBorderRadius: CARD_RADIUS,
+        previewAnimationOptions: {
+          scale: [0.98, 1.03],
+          transition: TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.98, y: 0.98 }))
+            .animation({
+              duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+              curve: Curve.FastOutSlowIn
+            })
+        },
+        borderRadius: 16,
+        backgroundColor: Color.Transparent,
+        backgroundBlurStyle: BlurStyle.COMPONENT_ULTRA_THICK,
+        mask: { color: '#52000000', backgroundBlurStyle: BlurStyle.BACKGROUND_THIN },
+        modalMode: ModalMode.TARGET_WINDOW,
+        hapticFeedbackMode: HapticFeedbackMode.AUTO,
+        onDisappear: (): void => this.closeContextMenu()
+      }
+    );
   }
 
   @Builder
-  listCard() {
-    Column() {
-      Column() {
-        ForEach(this.calls, (c: CallItem, index: number) => {
-          if (index > 0) {
-            Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 72 });
-          }
-          this.callRow(c);
-        }, (c: CallItem) => `${c.msgId}_${c.name}_${c.avatarPath}`);
-        if (this.hasMore) {
-          // Auto-paged by the outer Scroll's onReachEnd — just show activity.
-          Row() {
-            LoadingProgress().width(22).height(22).color(COLOR_TEXT_SECONDARY);
-          }.width('100%').justifyContent(FlexAlign.Center).padding({ top: 8, bottom: 8 });
+  callList() {
+    List({ space: 7 }) {
+      ForEach(this.calls, (call: CallItem, index: number) => {
+        ListItem() {
+          Column({ space: 6 }) {
+            if (this.isSectionStart(index)) {
+              Text(callSectionLabel(call.date, this.nowSeconds))
+                .fontSize(13).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_SECONDARY)
+                .width('100%').padding({ left: 5, top: index === 0 ? 1 : 8, bottom: 1 });
+            }
+            this.callRow(call);
+          }.width('100%');
+        }.transition(
+          TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: -6 }))
+            .animation({ duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180), curve: Curve.EaseOut })
+        );
+      }, (call: CallItem): string => call.key);
+      ListItem() {
+        if (this.pageState === 'loading') {
+          Row() { LoadingProgress().width(21).height(21).color(COLOR_PRIMARY); }
+            .width('100%').justifyContent(FlexAlign.Center).padding({ top: 12, bottom: 12 });
+        } else if (this.pageState === 'error') {
+          Row({ space: 7 }) {
+            Text('更多记录加载失败').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+            Text('重试').fontSize(13).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY);
+          }.width('100%').justifyContent(FlexAlign.Center).padding({ top: 12, bottom: 12 })
+            .onClick((): void => this.store?.retry());
+        } else if (this.pageState === 'end' && this.calls.length >= 20) {
+          Text('已显示全部通话记录').fontSize(11).fontColor(COLOR_TEXT_SECONDARY)
+            .width('100%').textAlign(TextAlign.Center).padding({ top: 11, bottom: 11 });
         }
       }
-      .width('100%').backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
-      .padding({ top: 4, bottom: 4 });
     }
-    .margin({ left: 12, right: 12, top: 12 });
+    .layoutWeight(1).width('100%').cachedCount(8)
+    .padding({ left: 12, right: 12 })
+    .contentEndOffset(this.bottomSafe + 18)
+    .edgeEffect(EdgeEffect.Spring).scrollBar(BarState.Off)
+    .onReachEnd((): void => this.store?.loadMore());
+  }
+
+  @Builder
+  readyContent() {
+    Column() {
+      this.syncWarningBar();
+      Refresh({ refreshing: $$this.refreshing }) {
+        this.callList();
+      }.layoutWeight(1).width('100%').onRefreshing((): void => this.refresh());
+    }.layoutWeight(1).width('100%');
+  }
+
+  @Builder
+  body() {
+    Column() {
+      if (this.loadState === 'loading') { this.skeleton(); }
+      else if (this.loadState === 'error') { this.errorState(); }
+      else if (this.loadState === 'empty') {
+        Column() {
+          this.syncWarningBar();
+          Refresh({ refreshing: $$this.refreshing }) {
+            this.emptyState();
+          }.layoutWeight(1).width('100%').onRefreshing((): void => this.refresh());
+        }.layoutWeight(1).width('100%');
+      } else { this.readyContent(); }
+    }.layoutWeight(1).width('100%')
+      .parallelGesture(
+        PanGesture({ fingers: 1, direction: PanDirection.Horizontal, distance: 12 })
+          .onActionEnd((event: GestureEvent): void => this.handleHorizontalSwipe(event.offsetX))
+      );
   }
 
   build() {
     Column() {
       this.topBar();
-      Scroll() {
-        Column() {
-          this.actionCard();
-          if (this.loading) {
-            LoadingProgress().width(32).height(32).color(COLOR_TEXT_SECONDARY)
-              .margin({ top: 48 });
-          } else if (this.calls.length === 0) {
-            Text('暂无通话记录').fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
-              .margin({ top: 48 });
-          } else {
-            this.listCard();
-          }
-        }
-        .width('100%')
-        .padding({ bottom: this.bottomSafe + 16 });
-      }
-      .layoutWeight(1)
-      .width('100%')
-      .align(Alignment.Top)
-      .edgeEffect(EdgeEffect.Spring)
-      .scrollBar(BarState.Off)
-      .onReachEnd(() => { if (this.hasMore && this.store !== null) { this.store.loadMore(); } });
-    }
-    .width('100%').height('100%')
-    .backgroundColor(PAGE_BG)
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
-    .padding({ top: this.topSafe });
+      this.segmentBar();
+      this.body();
+    }.width('100%').height('100%').backgroundColor(COLOR_PAGE_BG)
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+      .padding({ top: this.topSafe });
   }
 }

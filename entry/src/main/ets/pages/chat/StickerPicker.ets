@@ -6,6 +6,11 @@ import {
   KEY_POWER_ACTIVE, KEY_POWER_EMOJI, KEY_POWER_STICKERS, KEY_POWER_STICKER_AUTOPLAY, KEY_REDUCE_ANIM
 } from '../../store/AppSettings';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import {
+  addFavoriteSticker, getFavoriteStickers, getRecentStickers, rememberRecentSticker,
+  removeFavoriteSticker
+} from '../../store/StickerApi';
+import { promptAction } from '@kit.ArkUI';
 
 export interface StickerItem {
   fileId: number;   // the sticker's own file (what gets sent)
@@ -130,7 +135,85 @@ export struct StickerPicker {
       this.loading = false;
       this.refreshGrid();
     }
+    this.loadQuickSections();
     this.loadSets();
+  }
+
+  // 收藏 / 最近 sections, prepended before the installed packs like the
+  // official clients. Custom-emoji mode has no such server lists.
+  private loadQuickSections(): void {
+    if (this.stickerType === 'custom_emoji') { return; }
+    const seq = this.loadSeq;
+    Promise.all([getFavoriteStickers(), getRecentStickers()])
+      .then((lists: TdObject[][]): void => {
+        if (seq !== this.loadSeq) { return; }
+        const sections: StickerSetTab[] = [];
+        const specs: string[][] = [
+          ['fav', '收藏', '⭐'], ['recent', '最近使用', '🕘']
+        ];
+        lists.forEach((raw: TdObject[], index: number): void => {
+          if (raw.length === 0) { return; }
+          const spec = specs[index];
+          const items = raw.map((st: TdObject): StickerItem => this.stickerItemOf(st))
+            .filter((it: StickerItem): boolean => it.fileId !== 0);
+          if (items.length === 0) { return; }
+          sections.push({
+            id: spec[0], title: spec[1], iconPath: '', iconText: spec[2],
+            loaded: true, failed: false, stickers: items
+          });
+          for (const st of raw) {
+            const file = st['sticker'] as TdObject | undefined;
+            const fileId = file !== undefined ? ((file['id'] as number | undefined) ?? 0) : 0;
+            if (fileId !== 0) {
+              this.downloadThumb(spec[0], fileId, st['thumbnail'] as TdObject | undefined);
+              if (this.playbackEnabled()) { this.downloadSource(spec[0], fileId); }
+            }
+          }
+        });
+        if (sections.length === 0) { return; }
+        this.sets = [...sections, ...this.sets];
+        this.refreshGrid();
+      }).catch((): void => {});
+  }
+
+  private toggleFavorite(s: StickerItem): void {
+    if (s.fileId === 0 || this.stickerType === 'custom_emoji') { return; }
+    const favSection = this.sets.find((t: StickerSetTab): boolean => t.id === 'fav');
+    const isFav = favSection !== undefined &&
+      favSection.stickers.some((it: StickerItem): boolean => it.fileId === s.fileId);
+    const task: Promise<void> = isFav
+      ? removeFavoriteSticker(s.fileId) : addFavoriteSticker(s.fileId);
+    task.then((): void => {
+      promptAction.showToast({
+        message: isFav ? '已取消收藏' : '已加入收藏', duration: 1300
+      });
+    }).catch((): void => {
+      promptAction.showToast({ message: '收藏操作失败', duration: 1300 });
+    });
+  }
+
+  // Shared TDLib sticker → StickerItem mapping (packs, search, quick sections).
+  private stickerItemOf(st: TdObject): StickerItem {
+    const file = st['sticker'] as TdObject | undefined;
+    const fileId = file !== undefined ? ((file['id'] as number | undefined) ?? 0) : 0;
+    const fmt = st['format'] as TdObject | undefined;
+    const fmtName = fmt !== undefined ? ((fmt['@type'] as string | undefined) ?? '') : '';
+    const format = fmtName === 'stickerFormatWebp' ? 'webp'
+      : (fmtName === 'stickerFormatTgs' ? 'tgs' : 'webm');
+    const fullType = st['full_type'] as TdObject | undefined;
+    const ceId = fullType !== undefined
+      && ((fullType['@type'] as string | undefined) ?? '') === 'stickerFullTypeCustomEmoji'
+      ? `${fullType['custom_emoji_id']}` : '';
+    const rasterThumb = this.rasterThumbFile(st['thumbnail'] as TdObject | undefined);
+    return {
+      fileId,
+      width: (st['width'] as number | undefined) ?? 512,
+      height: (st['height'] as number | undefined) ?? 512,
+      thumbPath: '',
+      thumbFileId: rasterThumb !== undefined ? ((rasterThumb['id'] as number | undefined) ?? 0) : 0,
+      emoji: (st['emoji'] as string | undefined) ?? '',
+      format, srcPath: '', customEmojiId: ceId
+    };
   }
 
   private typeObj(): TdObject {
@@ -765,7 +848,14 @@ export struct StickerPicker {
       duration: this.reduceAnimations || this.powerSaving ? 0 : 110,
       curve: Curve.EaseOut
     })
-    .onClick(() => { this.onPick(s); });
+    .onClick(() => {
+      if (s.fileId !== 0 && this.stickerType !== 'custom_emoji') {
+        rememberRecentSticker(s.fileId);
+      }
+      this.onPick(s);
+    })
+    // Long-press to (un)favorite — the 收藏 section refreshes on next open.
+    .gesture(LongPressGesture().onAction(() => { this.toggleFavorite(s); }));
   }
 
   @Builder

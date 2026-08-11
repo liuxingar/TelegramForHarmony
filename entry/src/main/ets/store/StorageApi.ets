@@ -1,84 +1,329 @@
 import { getTdClient } from '../tdkit/Globals';
 import { TdObject, TdRequest } from '../tdkit/TdTypes';
-
-// Storage / network / draft calls behind 数据与存储. Media auto-download and
-// "save to gallery" are deliberately absent: TDLib doesn't auto-download on the
-// client's behalf and we have no gallery writer, so those switches would toggle
-// nothing.
+import { AutoDownloadPolicy } from './AppSettings';
 
 export interface StorageUsage {
-  filesSize: number;   // downloaded media — the part worth clearing
+  filesSize: number;
   fileCount: number;
   databaseSize: number;
+  languagePackDatabaseSize: number;
+  logSize: number;
+  totalSize: number;
+}
+
+export interface StorageCategory {
+  key: string;
+  label: string;
+  size: number;
+  count: number;
+}
+
+export interface ChatStorageUsage {
+  chatId: number;
+  size: number;
+  count: number;
+  categories: StorageCategory[];
+}
+
+export interface DetailedStorageUsage {
+  size: number;
+  count: number;
+  categories: StorageCategory[];
+  chats: ChatStorageUsage[];
+}
+
+export interface NetworkBreakdown {
+  key: string;
+  label: string;
+  sent: number;
+  received: number;
+  duration: number;
 }
 
 export interface NetworkUsage {
   sent: number;
   received: number;
-  sinceDate: number;   // unix seconds
+  sinceDate: number;
+  callDuration: number;
+  byNetwork: NetworkBreakdown[];
+  byCategory: NetworkBreakdown[];
 }
 
-// Human-readable byte size, matching the official clients (1.28 GB).
+export interface CacheClearResult {
+  remainingSize: number;
+  remainingCount: number;
+}
+
+function safeNumber(value: Object | undefined): number {
+  const parsed = value as number | undefined;
+  return parsed !== undefined && Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
 export function formatBytes(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  const kb = bytes / 1024;
-  if (kb < 1024) {
-    return `${kb.toFixed(1)} KB`;
-  }
+  const safe = Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
+  if (safe < 1024) { return `${Math.round(safe)} B`; }
+  const kb = safe / 1024;
+  if (kb < 1024) { return `${kb.toFixed(1)} KB`; }
   const mb = kb / 1024;
-  if (mb < 1024) {
-    return `${mb.toFixed(1)} MB`;
-  }
-  return `${(mb / 1024).toFixed(2)} GB`;
+  if (mb < 1024) { return `${mb.toFixed(1)} MB`; }
+  const gb = mb / 1024;
+  if (gb < 1024) { return `${gb.toFixed(2)} GB`; }
+  return `${(gb / 1024).toFixed(2)} TB`;
+}
+
+export function formatDuration(seconds: number): string {
+  const safe = Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : 0;
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  if (hours > 0) { return `${hours} 小时 ${minutes} 分钟`; }
+  if (minutes > 0) { return `${minutes} 分钟`; }
+  return `${safe} 秒`;
 }
 
 export async function getStorageUsage(): Promise<StorageUsage> {
-  const res = await getTdClient().send({ '@type': 'getStorageStatisticsFast' } as TdRequest);
+  const res = await getTdClient().send({ '@type': 'getStorageStatisticsFast' } as TdRequest, 12000);
+  const filesSize = safeNumber(res['files_size']);
+  const databaseSize = safeNumber(res['database_size']);
+  const languagePackDatabaseSize = safeNumber(res['language_pack_database_size']);
+  const logSize = safeNumber(res['log_size']);
   return {
-    filesSize: (res['files_size'] as number | undefined) ?? 0,
-    fileCount: (res['file_count'] as number | undefined) ?? 0,
-    databaseSize: (res['database_size'] as number | undefined) ?? 0
+    filesSize,
+    fileCount: safeNumber(res['file_count']),
+    databaseSize,
+    languagePackDatabaseSize,
+    logSize,
+    totalSize: filesSize + databaseSize + languagePackDatabaseSize + logSize
   };
 }
 
-// Drop every cached media file. The unlimited-everything form of optimizeStorage:
-// -1 means "no limit" for size/ttl/count, so nothing is spared by age or volume.
-export async function clearCache(): Promise<void> {
-  const req: TdRequest = { '@type': 'optimizeStorage' };
-  req['size'] = -1;
-  req['ttl'] = -1;
-  req['count'] = -1;
-  req['immunity_delay'] = 0;
-  req['file_types'] = [];
-  req['chat_ids'] = [];
-  req['exclude_chat_ids'] = [];
-  req['return_deleted_file_statistics'] = false;
-  req['chat_limit'] = 0;
-  await getTdClient().send(req);
+function fileTypeInfo(type: TdObject | undefined): StorageCategory {
+  const raw = type !== undefined ? ((type['@type'] as string | undefined) ?? '') : '';
+  if (raw === 'fileTypePhoto') { return { key: 'photo', label: '图片', size: 0, count: 0 }; }
+  if (raw === 'fileTypeVideo' || raw === 'fileTypeVideoNote') {
+    return { key: 'video', label: '视频', size: 0, count: 0 };
+  }
+  if (raw === 'fileTypeAnimation') { return { key: 'animation', label: 'GIF', size: 0, count: 0 }; }
+  if (raw === 'fileTypeAudio') { return { key: 'audio', label: '音乐', size: 0, count: 0 }; }
+  if (raw === 'fileTypeVoiceNote') { return { key: 'voice', label: '语音', size: 0, count: 0 }; }
+  if (raw === 'fileTypeSticker') { return { key: 'sticker', label: '贴纸', size: 0, count: 0 }; }
+  if (raw === 'fileTypeDocument') { return { key: 'file', label: '文件', size: 0, count: 0 }; }
+  if (raw === 'fileTypeThumbnail') { return { key: 'thumbnail', label: '缩略图', size: 0, count: 0 }; }
+  if (raw === 'fileTypeProfilePhoto') { return { key: 'profile', label: '头像', size: 0, count: 0 }; }
+  if (raw === 'fileTypeWallpaper') { return { key: 'wallpaper', label: '聊天背景', size: 0, count: 0 }; }
+  if (raw === 'fileTypeSecret') { return { key: 'secret', label: '秘密聊天', size: 0, count: 0 }; }
+  return { key: 'other', label: '其他', size: 0, count: 0 };
 }
 
-export async function getNetworkUsage(): Promise<NetworkUsage> {
-  const req: TdRequest = { '@type': 'getNetworkStatistics' };
-  req['only_current'] = false;
-  const res = await getTdClient().send(req);
+function addCategory(target: Map<string, StorageCategory>, item: StorageCategory): void {
+  const existing = target.get(item.key);
+  if (existing === undefined) {
+    target.set(item.key, item);
+  } else {
+    existing.size += item.size;
+    existing.count += item.count;
+  }
+}
+
+function sortedCategories(map: Map<string, StorageCategory>): StorageCategory[] {
+  return Array.from(map.values()).filter((item: StorageCategory): boolean => item.size > 0 || item.count > 0)
+    .sort((left: StorageCategory, right: StorageCategory): number => right.size - left.size);
+}
+
+function categoriesOf(raw: TdObject[]): StorageCategory[] {
+  const map = new Map<string, StorageCategory>();
+  for (const entry of raw) {
+    const item = fileTypeInfo(entry['file_type'] as TdObject | undefined);
+    item.size = safeNumber(entry['size']);
+    item.count = safeNumber(entry['count']);
+    addCategory(map, item);
+  }
+  return sortedCategories(map);
+}
+
+export async function getDetailedStorageUsage(chatLimit: number = 30): Promise<DetailedStorageUsage> {
+  const request: TdRequest = { '@type': 'getStorageStatistics' };
+  request['chat_limit'] = Math.max(0, Math.min(100, Math.round(chatLimit)));
+  const res = await getTdClient().send(request, 30000);
+  const chatsRaw = (res['by_chat'] as TdObject[] | undefined) ?? [];
+  const chats: ChatStorageUsage[] = [];
+  const totalCategories = new Map<string, StorageCategory>();
+  for (const raw of chatsRaw) {
+    const categories = categoriesOf((raw['by_file_type'] as TdObject[] | undefined) ?? []);
+    for (const item of categories) {
+      addCategory(totalCategories, {
+        key: item.key, label: item.label, size: item.size, count: item.count
+      });
+    }
+    chats.push({
+      chatId: (raw['chat_id'] as number | undefined) ?? 0,
+      size: safeNumber(raw['size']),
+      count: safeNumber(raw['count']),
+      categories
+    });
+  }
+  chats.sort((left: ChatStorageUsage, right: ChatStorageUsage): number => right.size - left.size);
+  return {
+    size: safeNumber(res['size']), count: safeNumber(res['count']),
+    categories: sortedCategories(totalCategories), chats
+  };
+}
+
+// size/ttl/count are explicit zero targets. Unlike -1 (TDLib defaults), this
+// reliably removes every eligible cached media file. TDLib deliberately keeps
+// protected classes such as secret thumbnails; the UI describes the result as
+// "可清理缓存" rather than promising the whole file database becomes empty.
+export async function clearCache(): Promise<CacheClearResult> {
+  return clearCacheSelection('', 0);
+}
+
+function tdFileTypes(category: string): TdObject[] {
+  if (category === 'photo') { return [{ '@type': 'fileTypePhoto' }]; }
+  if (category === 'video') {
+    return [{ '@type': 'fileTypeVideo' }, { '@type': 'fileTypeVideoNote' }];
+  }
+  if (category === 'animation') { return [{ '@type': 'fileTypeAnimation' }]; }
+  if (category === 'audio') { return [{ '@type': 'fileTypeAudio' }]; }
+  if (category === 'voice') { return [{ '@type': 'fileTypeVoiceNote' }]; }
+  if (category === 'sticker') { return [{ '@type': 'fileTypeSticker' }]; }
+  if (category === 'file') { return [{ '@type': 'fileTypeDocument' }]; }
+  if (category === 'thumbnail') { return [{ '@type': 'fileTypeThumbnail' }]; }
+  if (category === 'profile') { return [{ '@type': 'fileTypeProfilePhoto' }]; }
+  if (category === 'wallpaper') { return [{ '@type': 'fileTypeWallpaper' }]; }
+  if (category === 'secret') { return [{ '@type': 'fileTypeSecret' }]; }
+  return [];
+}
+
+export async function clearCacheSelection(category: string, chatId: number): Promise<CacheClearResult> {
+  const request: TdRequest = { '@type': 'optimizeStorage' };
+  request['size'] = 0;
+  request['ttl'] = 0;
+  request['count'] = 0;
+  request['immunity_delay'] = 0;
+  request['file_types'] = tdFileTypes(category);
+  request['chat_ids'] = chatId !== 0 ? [chatId] : [];
+  request['exclude_chat_ids'] = [];
+  request['return_deleted_file_statistics'] = false;
+  request['chat_limit'] = 0;
+  const result = await getTdClient().send(request, 60000);
+  return { remainingSize: safeNumber(result['size']), remainingCount: safeNumber(result['count']) };
+}
+
+function networkInfo(type: TdObject | undefined): NetworkBreakdown {
+  const raw = type !== undefined ? ((type['@type'] as string | undefined) ?? '') : '';
+  if (raw === 'networkTypeWiFi') { return { key: 'wifi', label: 'Wi‑Fi', sent: 0, received: 0, duration: 0 }; }
+  if (raw === 'networkTypeMobile') { return { key: 'mobile', label: '移动网络', sent: 0, received: 0, duration: 0 }; }
+  if (raw === 'networkTypeMobileRoaming') { return { key: 'roaming', label: '漫游', sent: 0, received: 0, duration: 0 }; }
+  return { key: 'other', label: '其他网络', sent: 0, received: 0, duration: 0 };
+}
+
+function fileNetworkCategory(type: TdObject | undefined): NetworkBreakdown {
+  const storage = fileTypeInfo(type);
+  return { key: storage.key, label: storage.label, sent: 0, received: 0, duration: 0 };
+}
+
+function addNetwork(target: Map<string, NetworkBreakdown>, item: NetworkBreakdown): void {
+  const existing = target.get(item.key);
+  if (existing === undefined) { target.set(item.key, item); return; }
+  existing.sent += item.sent;
+  existing.received += item.received;
+  existing.duration += item.duration;
+}
+
+function sortedNetwork(map: Map<string, NetworkBreakdown>): NetworkBreakdown[] {
+  return Array.from(map.values()).filter((item: NetworkBreakdown): boolean =>
+    item.sent > 0 || item.received > 0 || item.duration > 0)
+    .sort((left: NetworkBreakdown, right: NetworkBreakdown): number =>
+      (right.sent + right.received) - (left.sent + left.received));
+}
+
+export async function getNetworkUsage(onlyCurrent: boolean = false): Promise<NetworkUsage> {
+  const request: TdRequest = { '@type': 'getNetworkStatistics' };
+  request['only_current'] = onlyCurrent;
+  const res = await getTdClient().send(request, 15000);
   const entries = (res['entries'] as TdObject[] | undefined) ?? [];
+  const byNetwork = new Map<string, NetworkBreakdown>();
+  const byCategory = new Map<string, NetworkBreakdown>();
   let sent = 0;
   let received = 0;
-  for (const e of entries) {
-    sent += (e['sent_bytes'] as number | undefined) ?? 0;
-    received += (e['received_bytes'] as number | undefined) ?? 0;
+  let callDuration = 0;
+  for (const entry of entries) {
+    const entrySent = safeNumber(entry['sent_bytes']);
+    const entryReceived = safeNumber(entry['received_bytes']);
+    const duration = safeNumber(entry['duration']);
+    sent += entrySent;
+    received += entryReceived;
+    callDuration += duration;
+    const network = networkInfo(entry['network_type'] as TdObject | undefined);
+    network.sent = entrySent;
+    network.received = entryReceived;
+    network.duration = duration;
+    addNetwork(byNetwork, network);
+    const type = (entry['@type'] as string | undefined) ?? '';
+    let category: NetworkBreakdown;
+    if (type === 'networkStatisticsEntryCall') {
+      category = { key: 'call', label: '通话', sent: 0, received: 0, duration: 0 };
+    } else {
+      category = fileNetworkCategory(entry['file_type'] as TdObject | undefined);
+    }
+    category.sent = entrySent;
+    category.received = entryReceived;
+    category.duration = duration;
+    addNetwork(byCategory, category);
   }
-  return { sent, received, sinceDate: (res['since_date'] as number | undefined) ?? 0 };
+  return {
+    sent, received, callDuration,
+    sinceDate: safeNumber(res['since_date']),
+    byNetwork: sortedNetwork(byNetwork), byCategory: sortedNetwork(byCategory)
+  };
 }
 
 export async function resetNetworkUsage(): Promise<void> {
-  await getTdClient().send({ '@type': 'resetNetworkStatistics' } as TdRequest);
+  await getTdClient().send({ '@type': 'resetNetworkStatistics' } as TdRequest, 15000);
 }
 
 export async function clearAllDrafts(): Promise<void> {
-  const req: TdRequest = { '@type': 'clearAllDraftMessages' };
-  req['exclude_secret_chats'] = true;
-  await getTdClient().send(req);
+  const request: TdRequest = { '@type': 'clearAllDraftMessages' };
+  request['exclude_secret_chats'] = true;
+  await getTdClient().send(request, 20000);
+}
+
+function tdNetworkType(network: string): TdObject {
+  if (network === 'wifi') { return { '@type': 'networkTypeWiFi' }; }
+  if (network === 'roaming') { return { '@type': 'networkTypeMobileRoaming' }; }
+  return { '@type': 'networkTypeMobile' };
+}
+
+export async function syncAutoDownloadSettings(policy: AutoDownloadPolicy): Promise<void> {
+  const settings: TdObject = { '@type': 'autoDownloadSettings' };
+  settings['is_auto_download_enabled'] = policy.photos || policy.videos || policy.files;
+  settings['max_photo_file_size'] = policy.photos ? 10 * 1024 * 1024 : 0;
+  settings['max_video_file_size'] = policy.videos ? policy.videoLimit : 0;
+  settings['max_other_file_size'] = policy.files ? policy.fileLimit : 0;
+  settings['video_upload_bitrate'] = 0;
+  settings['preload_large_videos'] = policy.preloadLargeVideos;
+  settings['preload_next_audio'] = policy.preloadNextAudio;
+  settings['preload_stories'] = policy.preloadStories;
+  settings['use_less_data_for_calls'] = policy.lessDataForCalls;
+  const request: TdRequest = { '@type': 'setAutoDownloadSettings' };
+  request['settings'] = settings;
+  request['type'] = tdNetworkType(policy.network);
+  await getTdClient().send(request, 15000);
+}
+
+export async function prepareAutosaveSettings(): Promise<void> {
+  await getTdClient().send({ '@type': 'getAutosaveSettings' } as TdRequest, 15000);
+}
+
+export async function syncAutosaveSettings(scope: string, enabled: boolean,
+  maxVideoSize: number = 64 * 1024 * 1024): Promise<void> {
+  const scopeType = scope === 'channel' ? 'autosaveSettingsScopeChannelChats'
+    : (scope === 'group' ? 'autosaveSettingsScopeGroupChats' : 'autosaveSettingsScopePrivateChats');
+  const settings: TdObject = { '@type': 'scopeAutosaveSettings' };
+  settings['autosave_photos'] = enabled;
+  settings['autosave_videos'] = enabled;
+  settings['max_video_file_size'] = maxVideoSize;
+  const request: TdRequest = { '@type': 'setAutosaveSettings' };
+  request['scope'] = { '@type': scopeType } as TdObject;
+  request['settings'] = settings;
+  await getTdClient().send(request, 15000);
 }

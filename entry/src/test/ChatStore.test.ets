@@ -77,6 +77,32 @@ function bridgeOf(store: ChatStore): FakeBridge {
 
 export default function chatStoreTest() {
   describe('ChatStore', () => {
+    it('forum_supergroup_detected', 0, () => {
+      const b = new FakeBridge();
+      const c = new TdClient(b);
+      const store = new ChatStore(c, new UserStore(c));
+      c.start();
+      const type: TdObject = { '@type': 'chatTypeSupergroup' };
+      type['supergroup_id'] = 77;
+      type['is_channel'] = false;
+      const chat: TdObject = { '@type': 'chat' };
+      chat['id'] = -100777;
+      chat['title'] = '话题群';
+      chat['type'] = type;
+      chat['positions'] = [];
+      const newChat: TdObject = { '@type': 'updateNewChat' };
+      newChat['chat'] = chat;
+      b.onReceive(JSON.stringify(newChat));
+      expect(store.isForum(-100777)).assertFalse();
+      const supergroup: TdObject = { '@type': 'supergroup' };
+      supergroup['id'] = 77;
+      supergroup['is_forum'] = true;
+      const upd: TdObject = { '@type': 'updateSupergroup' };
+      upd['supergroup'] = supergroup;
+      b.onReceive(JSON.stringify(upd));
+      expect(store.isForum(-100777)).assertTrue();
+      expect(store.isForum(999)).assertFalse();
+    });
     it('orders_by_desc_order_pinned_first', 0, () => {
       const store = make();
       const b = bridgeOf(store);
@@ -122,6 +148,17 @@ export default function chatStoreTest() {
       const u: TdObject = { '@type': 'updateChatReadInbox' };
       u['chat_id'] = 1; u['unread_count'] = 0;
       b.onReceive(JSON.stringify(u));
+      expect(store.getChats()[0].unreadCount).assertEqual(0);
+    });
+    it('visible_last_message_clears_stuck_unread_optimistically', 0, () => {
+      const store = make();
+      const b = bridgeOf(store);
+      const last = textMessage('joined', 1783512000);
+      last['id'] = 100;
+      pushNewChat(b, 1, 'A', [mainPos('100', false)], last, 1);
+      store.markReadLocally(1, 99);
+      expect(store.getChats()[0].unreadCount).assertEqual(1);
+      store.markReadLocally(1, 100);
       expect(store.getChats()[0].unreadCount).assertEqual(0);
     });
     it('notification_settings_mute', 0, () => {

@@ -1,5 +1,6 @@
 import { MessageEntry, ReactionInfo, InlineBtn } from '../../store/MessageEntry';
 import { TdObject } from '../../tdkit/TdTypes';
+import { getAccentColorStore, getUserStore } from '../../tdkit/Globals';
 import { AvatarView } from '../chatlist/AvatarView';
 import {
   KEY_TEXT_SIZE, KEY_BUBBLE_RADIUS, KEY_REDUCE_ANIM, TEXT_SIZE_DEFAULT, RADIUS_DEFAULT,
@@ -25,6 +26,7 @@ import { formatClockTime } from '../../util/formatTime';
 import { formatFileSize } from '../../util/formatFileSize';
 import { parseFormattedText, RichSegment, RichRun } from '../../util/richText';
 import { packAlbumRows, AlbumCell } from '../../util/packAlbumRows';
+import { linkPreviewPresentation, LinkPreviewPresentation } from '../../util/linkPreview';
 import { COLOR_PRIMARY, COLOR_TEXT_SECONDARY, COLOR_BUBBLE_OUT, COLOR_BUBBLE_IN, COLOR_BUBBLE_TEXT, AVATAR_PALETTE, botButtonBg } from '../../util/theme';
 
 const ALBUM_MAX_WIDTH: number = 280;
@@ -35,6 +37,8 @@ const LINK_PREVIEW_HEIGHT_RATIO: number = 0.62;
 // Quick reactions shown in the long-press menu's top row (tap the chevron to
 // open the full emoji picker).
 const QUICK_REACTIONS: string[] = ['❤️', '👍', '👎', '🔥', '🥰', '👏'];
+// Media whose caption can be replaced via editMessageCaption.
+const EDITABLE_CAPTION_TYPES: string[] = ['photo', 'video', 'file', 'audio', 'voice'];
 
 interface MediaBox {
   width: number;
@@ -44,6 +48,8 @@ interface MediaBox {
 @Component
 export struct MessageBubble {
   @Prop msg: MessageEntry;
+  // Chat-theme outgoing bubble color ('' = the standard theme resource color).
+  @Prop themeBubbleOut: string = '';
   @Prop nowSec: number;
   @Prop isGroup: boolean;
   @Prop isChannel: boolean;
@@ -75,6 +81,7 @@ export struct MessageBubble {
   onFileTap: (messageId: number) => void = (): void => {};
   onFileSave: (messageId: number) => void = (): void => {};
   onStickerRetry: (messageId: number) => void = (): void => {};
+  onLinkPreviewRetry: (messageId: number) => void = (): void => {};
   onContactOpen: (userId: number, phone: string, vcard: string) => void =
     (_userId: number, _phone: string, _vcard: string): void => {};
   onPhoneOpen: (phone: string) => void = (_phone: string): void => {};
@@ -112,6 +119,15 @@ export struct MessageBubble {
   // Long-press context menu actions.
   onSetReaction: (messageId: number, emoji: string, isChosen: boolean) => void = (): void => {};
   onReplyTo: (messageId: number) => void = (): void => {};
+  onEditMsg: (messageId: number) => void = (): void => {};
+  onShowReactors: (messageId: number, emoji: string) => void = (): void => {};
+  onTranslateMsg: (messageId: number) => void = (): void => {};
+  onPinMsg: (messageId: number, unpin: boolean) => void = (): void => {};
+  onStopPoll: (messageId: number) => void = (): void => {};
+  onReplaceMedia: (messageId: number) => void = (): void => {};
+  onPollVoters: (messageId: number) => void = (): void => {};
+  onSetDefaultReaction: (emoji: string) => void = (): void => {};
+  @Prop isPinnedMsg: boolean = false;
   onCopyText: (messageId: number) => void = (): void => {};
   onCopyCode: (text: string) => void = (): void => {};
   onCopyLink: (messageId: number) => void = (): void => {};
@@ -150,6 +166,7 @@ export struct MessageBubble {
   @Prop showSenderName: boolean = true; // first row of a same-sender run
   @State mediaVisible: boolean = true;
   @State stickerPlaybackFailed: boolean = false;
+  @State linkPreviewOpening: boolean = false;
 
   aboutToAppear(): void {
     this.requestAutoplayDownload();
@@ -243,14 +260,26 @@ export struct MessageBubble {
     // A tappable inline Span owns its own pressed feedback. Letting the parent
     // bubble dim as well makes a tiny link tap flash the whole message. Voice
     // controls also provide their own compact pressed feedback.
-    .opacity(this.hasInlineLink() || this.msg.contentType === 'voice' ||
+    .opacity(this.hasInlineLink() || this.hasLinkPreview() || this.msg.contentType === 'voice' ||
       this.msg.contentType === 'audio' || this.msg.contentType === 'file' ? 1 : 0.84)
     .scale({
-      x: this.hasInlineLink() || this.msg.contentType === 'voice' ||
+      x: this.hasInlineLink() || this.hasLinkPreview() || this.msg.contentType === 'voice' ||
         this.msg.contentType === 'audio' || this.msg.contentType === 'file' ? 1 : 0.992,
-      y: this.hasInlineLink() || this.msg.contentType === 'voice' ||
+      y: this.hasInlineLink() || this.hasLinkPreview() || this.msg.contentType === 'voice' ||
         this.msg.contentType === 'audio' || this.msg.contentType === 'file' ? 1 : 0.992
     })
+  }
+
+  @Styles
+  linkCardNormalStyle() {
+    .opacity(1)
+    .scale({ x: 1, y: 1 })
+  }
+
+  @Styles
+  linkCardPressedStyle() {
+    .opacity(0.8)
+    .scale({ x: 0.986, y: 0.986 })
   }
 
   @Styles
@@ -418,17 +447,68 @@ export struct MessageBubble {
     return { width, height };
   }
 
-  private linkPreviewH(): number {
-    return this.cardMaxW() * LINK_PREVIEW_HEIGHT_RATIO;
+  private linkPreviewH(width: number = this.cardMaxW()): number {
+    if (this.msg.linkPhotoWidth > 0 && this.msg.linkPhotoHeight > 0) {
+      const ratio: number = Math.max(0.82,
+        Math.min(1.92, this.msg.linkPhotoWidth / this.msg.linkPhotoHeight));
+      return Math.max(108, Math.min(188, width / ratio));
+    }
+    return width * LINK_PREVIEW_HEIGHT_RATIO;
+  }
+
+  private hasLinkPreview(): boolean {
+    return this.msg.linkUrl !== '' || this.msg.linkSiteName !== '' ||
+      this.msg.linkTitle !== '' || this.msg.linkDescription !== '' ||
+      this.msg.linkPhotoFileId !== 0;
+  }
+
+  private linkPresentation(): LinkPreviewPresentation {
+    return linkPreviewPresentation(
+      this.msg.linkUrl, this.msg.linkPreviewType, this.msg.linkSiteName);
+  }
+
+  private compactTelegramPreview(): boolean {
+    const kind: string = this.linkPresentation().kind;
+    return this.msg.linkPhotoFileId !== 0 &&
+      (kind === 'telegramChat' || kind === 'telegramInvite');
+  }
+
+  private openOrRetryLinkPreview(): void {
+    if (this.msg.linkPhotoFailed) {
+      this.onLinkPreviewRetry(this.msg.id);
+      return;
+    }
+    const presentation: LinkPreviewPresentation = this.linkPresentation();
+    if (!presentation.actionable || this.linkPreviewOpening) {
+      return;
+    }
+    this.linkPreviewOpening = true;
+    this.onLinkTap(this.msg.linkUrl);
+    setTimeout((): void => {
+      this.linkPreviewOpening = false;
+    }, 650);
+  }
+
+  private linkPreviewActionLabel(): string {
+    if (this.msg.linkPhotoFailed) {
+      return '重新加载预览图';
+    }
+    return this.linkPreviewOpening ? '正在打开…' : this.linkPresentation().actionLabel;
   }
 
   private albumW(): number {
     return Math.min(ALBUM_MAX_WIDTH, this.inlineMaxW());
   }
 
-  // Per-sender name color, matching the sender's avatar color (same hash/palette
-  // as AvatarView) so a user's name and avatar are visually tied together.
+  // Per-sender name color: the sender's Telegram accent color when known,
+  // otherwise the avatar hash palette so name and avatar stay visually tied.
   private senderColor(): ResourceColor {
+    const accentId = this.msg.senderId > 0
+      ? getUserStore().accentColorId(this.msg.senderId) : -1;
+    if (accentId >= 0) {
+      const hex = getAccentColorStore().nameColorHex(accentId, false);
+      if (hex !== '') { return hex; }
+    }
     return AVATAR_PALETTE[Math.abs(this.msg.senderId) % AVATAR_PALETTE.length];
   }
 
@@ -458,7 +538,7 @@ export struct MessageBubble {
   // the overlaid timestamp occupies, so it never covers real text (Telegram's
   // inline-time layout).
   private timeReserve(): string {
-    const editReserve = this.msg.editDate > 0 ? '    ' : '';
+    const editReserve = this.msg.editDate > 0 ? '         ' : '';
     return `${editReserve}  ${this.messageTimeText()}${this.msg.isOutgoing ? '   ' : ''}`;
   }
 
@@ -959,42 +1039,115 @@ export struct MessageBubble {
     }.alignItems(HorizontalAlign.Start).width(this.albumW()).constraintSize({ maxWidth: this.albumW() });
   }
 
-  // URL / message-link preview card (TDLib messageText.link_preview): accent
-  // left border, site name, title, description, optional photo, tap to open.
+  @Builder
+  linkPreviewMeta(compact: boolean) {
+    Column() {
+      Text(this.linkPresentation().siteLabel)
+        .fontSize(12).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
+        .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
+      if (this.msg.linkTitle !== '') {
+        Text(this.msg.linkTitle)
+          .fontSize(14).fontColor(COLOR_BUBBLE_TEXT).fontWeight(FontWeight.Bold)
+          .lineHeight(19).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+          .margin({ top: 2 });
+      }
+      if (this.msg.linkDescription !== '') {
+        // Description entities are deliberately display-only: the entire card
+        // has one predictable target and nested links can't hijack a tap.
+        Text(this.msg.linkDescription)
+          .fontSize(13).fontColor(COLOR_BUBBLE_TEXT).lineHeight(18)
+          .maxLines(compact ? 3 : 4).textOverflow({ overflow: TextOverflow.Ellipsis })
+          .margin({ top: 2 });
+      } else if (this.msg.linkTitle === '') {
+        Text(this.linkPresentation().isTelegram ? 'Telegram 链接' : '网页链接')
+          .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).margin({ top: 2 });
+      }
+    }
+    .alignItems(HorizontalAlign.Start)
+    .layoutWeight(compact ? 1 : 0);
+  }
+
+  @Builder
+  linkPreviewImage(width: number, height: number, compact: boolean) {
+    Stack({ alignContent: Alignment.Center }) {
+      if (this.msg.linkPhotoPath !== '') {
+        Image(this.msg.linkPhotoPath.startsWith('/')
+          ? `file://${this.msg.linkPhotoPath}` : this.msg.linkPhotoPath)
+          .width(width).height(height).objectFit(ImageFit.Cover)
+          .transition(TransitionEffect.OPACITY.animation({
+            duration: this.effectDuration(180), curve: Curve.EaseOut
+          }));
+      } else {
+        Column({ space: 5 }) {
+          if (this.msg.linkPhotoFailed) {
+            SymbolGlyph($r('sys.symbol.arrow_clockwise'))
+              .fontSize(compact ? 20 : 24).fontColor([COLOR_PRIMARY]);
+            if (!compact) {
+              Text('图片加载失败').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+            }
+          } else {
+            LoadingProgress()
+              .width(compact ? 22 : 26).height(compact ? 22 : 26).color(COLOR_PRIMARY);
+            if (!compact && this.msg.linkPhotoProgress > 0 && this.msg.linkPhotoProgress < 100) {
+              Text(`${this.msg.linkPhotoProgress}%`).fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
+            }
+          }
+        }
+        .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
+        .width(width).height(height).backgroundColor($r('app.color.surface_alt'));
+      }
+    }
+    .width(width).height(height)
+    .borderRadius(compact ? Math.floor(width / 2) : 8)
+    .clip(true);
+  }
+
+  // URL / Telegram preview card: compact avatar treatment for channel/invite
+  // targets, proportion-aware hero image for web/message previews, stable
+  // loading/error geometry and a target-specific action label.
   @Builder
   linkPreviewCard() {
     Column() {
-      if (this.msg.linkSiteName !== '') {
-        Text(this.msg.linkSiteName).fontSize(13).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Bold);
-      }
-      if (this.msg.linkTitle !== '') {
-        Text(this.msg.linkTitle).fontSize(14).fontColor(COLOR_BUBBLE_TEXT).fontWeight(FontWeight.Bold)
-          .margin({ top: 2 }).constraintSize({ maxWidth: this.cardMaxW() });
-      }
-      if (this.msg.linkDescription !== '') {
-        // Plain text, not richContent: entities inside a preview description
-        // (e.g. an @mention) must not be individually tappable — the whole
-        // card is one tap target, so a stray link inside the text can't hijack it.
-        Text(this.msg.linkDescription).fontSize(14).fontColor(COLOR_BUBBLE_TEXT)
-          .margin({ top: 2 }).constraintSize({ maxWidth: this.cardMaxW() });
-      }
-      if (this.msg.linkPhotoFileId !== 0) {
-        if (this.msg.linkPhotoPath !== '') {
-          Image(this.msg.linkPhotoPath.startsWith('/') ? `file://${this.msg.linkPhotoPath}` : this.msg.linkPhotoPath)
-            .width(this.cardMaxW()).height(this.linkPreviewH()).borderRadius(6).objectFit(ImageFit.Cover)
-            .margin({ top: 4 });
-        } else {
-          Column().width(this.cardMaxW()).height(this.linkPreviewH()).borderRadius(6).backgroundColor('#E0E0E0').margin({ top: 4 });
+      if (this.compactTelegramPreview()) {
+        Row({ space: 10 }) {
+          this.linkPreviewMeta(true);
+          this.linkPreviewImage(58, 58, true);
+        }
+        .width(this.cardMaxW()).alignItems(VerticalAlign.Center);
+      } else {
+        this.linkPreviewMeta(false);
+        if (this.msg.linkPhotoFileId !== 0) {
+          this.linkPreviewImage(this.cardMaxW(), this.linkPreviewH(), false);
+          Blank().height(6);
         }
       }
-      Text('查看消息').fontSize(13).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium).margin({ top: 6 });
+      Row({ space: 5 }) {
+        Text(this.msg.linkPhotoFailed ? '↻' : (this.linkPresentation().isTelegram ? '›' : '↗'))
+          .fontSize(14).fontColor(this.linkPresentation().actionable || this.msg.linkPhotoFailed
+            ? COLOR_PRIMARY : COLOR_TEXT_SECONDARY);
+        Text(this.linkPreviewActionLabel())
+          .fontSize(12).fontColor(this.linkPresentation().actionable || this.msg.linkPhotoFailed
+            ? COLOR_PRIMARY : COLOR_TEXT_SECONDARY)
+          .fontWeight(FontWeight.Medium).maxLines(1);
+        if (this.linkPreviewOpening) {
+          LoadingProgress().width(13).height(13).color(COLOR_PRIMARY);
+        }
+      }
+      .margin({ top: 6 });
     }
     .alignItems(HorizontalAlign.Start)
-    .constraintSize({ maxWidth: this.inlineMaxW() })
-    .backgroundColor('#F2EFE9').borderRadius(8)
+    .width(this.inlineMaxW())
+    .backgroundColor($r('app.color.surface_alt')).borderRadius(10)
     .border({ width: { left: 3 }, color: COLOR_PRIMARY })
-    .padding({ left: 8, right: 8, top: 6, bottom: 6 }).margin({ top: 4 })
-    .onClick(() => { this.onLinkTap(this.msg.linkUrl); });
+    .padding({ left: 9, right: 9, top: 8, bottom: 8 }).margin({ top: 5 })
+    .stateStyles({ normal: this.linkCardNormalStyle, pressed: this.linkCardPressedStyle })
+    .animation({ duration: this.effectDuration(120), curve: Curve.EaseOut })
+    .transition(TransitionEffect.OPACITY
+      .combine(TransitionEffect.translate({ y: 4 }))
+      .animation({ duration: this.effectDuration(180), curve: Curve.EaseOut }))
+    .accessibilityText(`${this.linkPresentation().siteLabel}，${this.linkPreviewActionLabel()}`)
+    .enabled(this.linkPresentation().actionable || this.msg.linkPhotoFailed)
+    .onClick((): void => { this.openOrRetryLinkPreview(); });
   }
 
   // Emoji reaction pills (👍 3, ❤️ 2, ...), highlighted when the current user
@@ -1016,6 +1169,10 @@ export struct MessageBubble {
         })
         .animation({ duration: this.reactionDuration(120), curve: Curve.EaseOut })
         .onClick(() => { this.onSetReaction(this.msg.id, r.emoji, r.isChosen); })
+        // Long-press a chip to see who reacted with it.
+        .gesture(LongPressGesture().onAction(() => {
+          this.onShowReactors(this.msg.id, r.emoji);
+        }))
         .transition(
           TransitionEffect.scale({ x: 0.6, y: 0.6 })
             .combine(TransitionEffect.OPACITY)
@@ -1069,7 +1226,10 @@ export struct MessageBubble {
               pressed: this.menuActionPressedStyle
             })
             .animation({ duration: this.reactionDuration(120), curve: Curve.EaseOut })
-            .onClick(() => { this.onSetReaction(this.msg.id, e, this.reactionChosen(e)); });
+            .onClick(() => { this.onSetReaction(this.msg.id, e, this.reactionChosen(e)); })
+            // Long-press a quick emoji to make it the account's default
+            // reaction (used by double-tap in the official clients).
+            .gesture(LongPressGesture().onAction(() => { this.onSetDefaultReaction(e); }));
         }, (e: string) => e);
         Blank();
         // Round "expand" button → opens the full emoji reaction picker.
@@ -1089,9 +1249,37 @@ export struct MessageBubble {
       .alignItems(VerticalAlign.Center);
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
       this.menuRow('sys.symbol.arrowshape_turn_up_left', '回复', false, () => { this.onReplyTo(this.msg.id); });
+      // TDLib 1.8.65 has no can_be_edited on message (it moved to
+      // getMessageProperties); gate locally on Telegram's 48h edit window and
+      // let the server be the final judge. Media types edit their caption.
+      if (this.msg.isOutgoing && this.nowSec - this.msg.date < 172800 &&
+        (this.msg.contentType === 'text' ||
+          EDITABLE_CAPTION_TYPES.indexOf(this.msg.contentType) >= 0)) {
+        this.menuRow('sys.symbol.square_and_pencil',
+          this.msg.contentType === 'text' ? '编辑' : '编辑说明文字',
+          false, () => { this.onEditMsg(this.msg.id); });
+      }
       this.menuRow('sys.symbol.plus_square_on_square', '复制文本', false, () => { this.onCopyText(this.msg.id); });
+      if (this.msg.text !== '') {
+        this.menuRow('sys.symbol.translate', '翻译', false, () => { this.onTranslateMsg(this.msg.id); });
+      }
       this.menuRow('sys.symbol.link', '拷贝消息链接', false, () => { this.onCopyLink(this.msg.id); });
       this.menuRow('sys.symbol.arrowshape_turn_up_right', '转发', false, () => { this.onForwardMsg(this.msg.id); });
+      this.menuRow('sys.symbol.pin', this.isPinnedMsg ? '取消置顶' : '置顶', false,
+        () => { this.onPinMsg(this.msg.id, this.isPinnedMsg); });
+      if (this.msg.isOutgoing && this.nowSec - this.msg.date < 172800 &&
+        (this.msg.contentType === 'photo' || this.msg.contentType === 'video')) {
+        this.menuRow('sys.symbol.picture', '替换图片/视频', false,
+          () => { this.onReplaceMedia(this.msg.id); });
+      }
+      if (this.msg.contentType === 'poll' && this.msg.isOutgoing && !this.msg.pollIsClosed) {
+        this.menuRow('sys.symbol.checkmark_circle', '结束投票', false,
+          () => { this.onStopPoll(this.msg.id); });
+      }
+      if (this.msg.contentType === 'poll' && !this.msg.pollIsAnonymous) {
+        this.menuRow('sys.symbol.person_2', '查看投票人', false,
+          () => { this.onPollVoters(this.msg.id); });
+      }
       this.menuRow('sys.symbol.exclamationmark_circle', '举报', true, () => { this.onReportMsg(this.msg.id); });
       this.menuRow('sys.symbol.checkmark_circle', '选择', false, () => { this.onSelectMsg(this.msg.id); });
     }
@@ -1141,7 +1329,7 @@ export struct MessageBubble {
         this.richContent(this.msg.text, this.msg.textEntities, this.inlineMaxW(),
           this.timeReserveInText());
       }
-      if (this.msg.linkTitle !== '' || this.msg.linkSiteName !== '' || this.msg.linkDescription !== '') {
+      if (this.hasLinkPreview()) {
         this.linkPreviewCard();
       }
     } else if (this.msg.contentType === 'photo' || this.msg.contentType === 'video') {
@@ -1370,7 +1558,9 @@ export struct MessageBubble {
         emoji: this.msg.diceEmoji,
         value: this.msg.diceValue,
         hasFinalState: this.msg.diceHasFinalState,
-        successFrame: this.msg.diceSuccessFrame
+        successFrame: this.msg.diceSuccessFrame,
+        stickerPath: this.msg.stickerPath,
+        layerPaths: this.msg.diceLayerPaths
       });
     } else if (this.msg.contentType === 'game') {
       GameBubble({
@@ -1866,7 +2056,9 @@ export struct MessageBubble {
       .alignItems(HorizontalAlign.Start)
       .constraintSize({ maxWidth: this.bubbleMaxW() })
       .backgroundColor(this.isBareEmoji() ? Color.Transparent
-        : (this.msg.isOutgoing ? COLOR_BUBBLE_OUT : COLOR_BUBBLE_IN))
+        : (this.msg.isOutgoing
+          ? (this.themeBubbleOut !== '' ? this.themeBubbleOut : COLOR_BUBBLE_OUT)
+          : COLOR_BUBBLE_IN))
       // Adjacent rows share a restrained 7vp corner. Only the final row gets
       // the tight tail corner; a single-row run keeps the configured top arc.
       .borderRadius({
@@ -1892,7 +2084,7 @@ export struct MessageBubble {
       if (this.msg.isOutgoing && this.hasBubbleTail()) {
         Polygon({ width: 8, height: 12 })
           .points([[0, 0], [8, 12], [0, 12]])
-          .fill(COLOR_BUBBLE_OUT)
+          .fill(this.themeBubbleOut !== '' ? this.themeBubbleOut : COLOR_BUBBLE_OUT)
           .margin({ left: -1 });
       } else if (this.msg.isOutgoing && !this.isBareEmoji()) {
         Column().width(7);

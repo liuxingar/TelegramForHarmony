@@ -1,14 +1,31 @@
 import { router, promptAction } from '@kit.ArkUI';
-import { TdError } from '../../tdkit/TdTypes';
+import { pasteboard } from '@kit.BasicServicesKit';
+import { TdError, TdObject } from '../../tdkit/TdTypes';
+import { getTdClient } from '../../tdkit/Globals';
 import {
   ProxyEntry, PROXY_SOCKS5, PROXY_MTPROTO, PROXY_HTTP,
-  proxyTypeLabel, listProxies, addProxy, enableProxy, disableProxy, removeProxy, pingProxy
+  proxyTypeLabel, listProxies, addProxy, editProxy, enableProxy, disableProxy,
+  removeProxy, pingProxy, testProxy, getProxyShareLink, getProxyConnectionState
 } from '../../store/ProxyApi';
-import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import {
+  parseProxyPort, proxyActionErrorText, proxyConnectionText,
+  proxyFormError, sameProxyConfiguration
+} from '../../util/proxyLogic';
+import {
+  COLOR_DIVIDER, COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE,
+  COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
+} from '../../util/theme';
+import {
+  KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration
+} from '../../store/AppSettings';
 
 const CARD_RADIUS: number = 14;
-const DANGER: string = '#E53935';
+const TOP_ACTION_SIZE: number = 44;
+const DANGER: string = '#E64646';
 const OK_GREEN: string = '#34C759';
+const WARNING: string = '#FF9500';
+const DIRECT_PING_ID: number = 0;
+const SKELETON_ROWS: number[] = [0, 1, 2];
 
 interface TypeOption {
   label: string;
@@ -21,8 +38,8 @@ const TYPES: TypeOption[] = [
   { label: 'HTTP', value: PROXY_HTTP }
 ];
 
-// 代理设置: the proxy list TDLib actually connects through. Enabling a proxy
-// here reroutes the live connection immediately.
+// Proxy settings are backed only by TDLib. The UI serializes mutations and
+// reconciles uncertain results, while TDLib remains the owner of networking.
 @Entry
 @Component
 struct ProxyPage {
@@ -30,306 +47,1207 @@ struct ProxyPage {
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @State proxies: ProxyEntry[] = [];
   @State loading: boolean = true;
-  @State pings: Map<number, number> = new Map(); // proxy id → seconds (-1 = unreachable)
-  // Add-proxy sheet.
+  @State refreshing: boolean = false;
+  @State loadError: string = '';
+  @State syncWarning: string = '';
+  @State connectionState: string = '';
+  @State pings: Map<number, number> = new Map();
+  @State pingStates: Map<number, string> = new Map(); // loading | ready | error
+  @State actionKey: string = '';
+  @State preferredProxyId: number = 0;
+  @State skeletonBright: boolean = false;
+
   @State sheetOpen: boolean = false;
+  @State editingId: number = 0;
+  @State importedForm: boolean = false;
   @State fType: string = PROXY_SOCKS5;
   @State fServer: string = '';
   @State fPort: string = '';
   @State fUser: string = '';
   @State fPass: string = '';
   @State fSecret: string = '';
+  @State fHttpOnly: boolean = false;
+  @State fEnableAfterSave: boolean = true;
+  @State fRevealCredential: boolean = false;
+  @State formError: string = '';
+  @State formTestState: string = 'idle'; // idle | loading | ready | error
+  @State formTestMs: number = 0;
   @State saving: boolean = false;
+  @State formOutcomeUnknown: boolean = false;
+
+  private active: boolean = false;
+  private paramsConsumed: boolean = false;
+  private loadSequence: number = 0;
+  private operationSequence: number = 0;
+  private formSequence: number = 0;
+  private pingGeneration: number = 0;
+  private pingTokens: Map<number, number> = new Map();
+  private skeletonTimer: number = -1;
+  private unsubscribeConnection: (() => void) | null = null;
+
+  @Styles
+  actionNormalStyle() {
+    .backgroundColor(Color.Transparent)
+    .opacity(1)
+    .scale({ x: 1, y: 1 })
+  }
+
+  @Styles
+  actionPressedStyle() {
+    .backgroundColor($r('app.color.surface_alt'))
+    .opacity(0.72)
+    .scale({ x: 0.92, y: 0.92 })
+  }
+
+  @Styles
+  rowNormalStyle() {
+    .backgroundColor(COLOR_SURFACE)
+    .scale({ x: 1, y: 1 })
+  }
+
+  @Styles
+  rowPressedStyle() {
+    .backgroundColor($r('app.color.surface_alt'))
+    .scale({ x: 0.99, y: 0.99 })
+  }
+
+  @Styles
+  primaryNormalStyle() {
+    .opacity(1)
+    .scale({ x: 1, y: 1 })
+  }
+
+  @Styles
+  primaryPressedStyle() {
+    .opacity(0.72)
+    .scale({ x: 0.96, y: 0.96 })
+  }
 
   aboutToAppear(): void {
-    this.load();
+    this.active = true;
+    this.subscribeConnectionState();
+    this.consumeRouteParams();
+    this.load(true);
   }
 
-  private load(): void {
-    listProxies().then((list: ProxyEntry[]) => {
-      this.proxies = list;
+  aboutToDisappear(): void {
+    this.active = false;
+    this.loadSequence++;
+    this.operationSequence++;
+    this.formSequence++;
+    this.pingGeneration++;
+    this.stopSkeletonPulse();
+    if (this.unsubscribeConnection !== null) {
+      this.unsubscribeConnection();
+      this.unsubscribeConnection = null;
+    }
+  }
+
+  onBackPress(): boolean {
+    if (this.saving) { return true; }
+    if (this.sheetOpen) {
+      this.cancelForm();
+      return true;
+    }
+    return false;
+  }
+
+  private animationDuration(fallback: number): number {
+    return powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, fallback);
+  }
+
+  private startSkeletonPulse(): void {
+    if (this.skeletonTimer !== -1 || this.animationDuration(1) === 0) { return; }
+    this.skeletonTimer = setInterval((): void => {
+      this.skeletonBright = !this.skeletonBright;
+    }, 680);
+  }
+
+  private stopSkeletonPulse(): void {
+    if (this.skeletonTimer !== -1) {
+      clearInterval(this.skeletonTimer);
+      this.skeletonTimer = -1;
+    }
+    this.skeletonBright = false;
+  }
+
+  private subscribeConnectionState(): void {
+    if (this.unsubscribeConnection === null) {
+      this.unsubscribeConnection = getTdClient().onUpdate(
+        'updateConnectionState', (update: TdObject): void => {
+          if (!this.active) { return; }
+          const state = update['state'] as TdObject | undefined;
+          this.connectionState = state !== undefined
+            ? ((state['@type'] as string | undefined) ?? '') : '';
+        }
+      );
+    }
+    getProxyConnectionState().then((state: string): void => {
+      if (this.active) { this.connectionState = state; }
+    }).catch((error: TdError): void => {
+      console.warn(`ProxyPage.getConnectionState failed: ${error.message}`);
+    });
+  }
+
+  private consumeRouteParams(): void {
+    if (this.paramsConsumed) { return; }
+    this.paramsConsumed = true;
+    const params = router.getParams() as Record<string, Object> | undefined;
+    if (params === undefined) { return; }
+    const server = (params['proxyServer'] as string | undefined) ?? '';
+    const portValue = params['proxyPort'] as number | undefined;
+    const port = portValue ?? 0;
+    if (server === '' || port <= 0) { return; }
+    const type = (params['proxyType'] as string | undefined) ?? PROXY_SOCKS5;
+    this.resetForm();
+    this.importedForm = true;
+    this.fType = TYPES.some((item: TypeOption): boolean => item.value === type)
+      ? type : PROXY_SOCKS5;
+    this.fServer = server;
+    this.fPort = `${port}`;
+    this.fUser = (params['proxyUsername'] as string | undefined) ?? '';
+    this.fPass = (params['proxyPassword'] as string | undefined) ?? '';
+    this.fSecret = (params['proxySecret'] as string | undefined) ?? '';
+    this.fHttpOnly = (params['proxyHttpOnly'] as boolean | undefined) ?? false;
+    this.fEnableAfterSave = true;
+    this.sheetOpen = true;
+  }
+
+  private sorted(list: ProxyEntry[]): ProxyEntry[] {
+    return list.slice().sort((left: ProxyEntry, right: ProxyEntry): number => {
+      if (left.isEnabled !== right.isEnabled) { return left.isEnabled ? -1 : 1; }
+      if (left.lastUsedDate !== right.lastUsedDate) { return right.lastUsedDate - left.lastUsedDate; }
+      return left.id - right.id;
+    });
+  }
+
+  private load(initial: boolean): void {
+    const sequence = ++this.loadSequence;
+    if (initial && this.proxies.length === 0) {
+      this.loading = true;
+      this.loadError = '';
+      this.startSkeletonPulse();
+    } else {
+      this.refreshing = true;
+      this.syncWarning = '';
+    }
+    listProxies().then((list: ProxyEntry[]): void => {
+      if (!this.active || sequence !== this.loadSequence) { return; }
+      const sorted = this.sorted(list);
+      this.proxies = sorted;
       this.loading = false;
-      for (const p of list) {
-        this.ping(p);
+      this.refreshing = false;
+      this.loadError = '';
+      this.syncWarning = '';
+      this.stopSkeletonPulse();
+      const enabled = sorted.find((entry: ProxyEntry): boolean => entry.isEnabled);
+      if (enabled !== undefined) { this.preferredProxyId = enabled.id; }
+      this.startPingQueue(sorted);
+    }).catch((error: TdError): void => {
+      if (!this.active || sequence !== this.loadSequence) { return; }
+      this.loading = false;
+      this.refreshing = false;
+      this.stopSkeletonPulse();
+      if (this.proxies.length === 0) {
+        this.loadError = '无法读取代理列表，请检查网络后重试';
+      } else {
+        this.syncWarning = '代理状态同步失败，当前显示的是上次结果';
       }
-    }).catch((e: TdError) => {
-      console.error(`ProxyPage.listProxies failed: ${e.message}`);
-      this.loading = false;
-      promptAction.showToast({ message: '读取代理列表失败', duration: 1500 });
+      console.error(`ProxyPage.listProxies failed: ${error.message}`);
     });
   }
 
-  private ping(p: ProxyEntry): void {
-    pingProxy(p).then((sec: number) => {
-      const next: Map<number, number> = new Map(this.pings);
-      next.set(p.id, sec);
-      this.pings = next; // new map — @State only re-renders on assignment
-    });
+  private activeProxy(): ProxyEntry | null {
+    return this.proxies.find((entry: ProxyEntry): boolean => entry.isEnabled) ?? null;
+  }
+
+  private usingProxy(): boolean {
+    return this.activeProxy() !== null;
+  }
+
+  private currentProxyDetail(): string {
+    const active = this.activeProxy();
+    if (active === null) { return '流量不经过代理服务器'; }
+    return `${proxyTypeLabel(active.type)} · ${active.server}:${active.port}`;
+  }
+
+  private connectionColor(): string {
+    if (this.connectionState === 'connectionStateReady') { return OK_GREEN; }
+    if (this.connectionState === 'connectionStateWaitingForNetwork') { return DANGER; }
+    return WARNING;
+  }
+
+  private connectionLabel(): string {
+    return proxyConnectionText(this.connectionState, this.usingProxy());
+  }
+
+  private currentPingId(): number {
+    const active = this.activeProxy();
+    return active !== null ? active.id : DIRECT_PING_ID;
+  }
+
+  private pingState(id: number): string {
+    return this.pingStates.get(id) ?? 'loading';
   }
 
   private pingLabel(id: number): string {
-    const sec = this.pings.get(id);
-    if (sec === undefined) {
-      return '检测中…';
-    }
-    if (sec < 0) {
-      return '无法连接';
-    }
-    return `${Math.round(sec * 1000)} ms`;
+    const state = this.pingState(id);
+    if (state === 'loading') { return '检测中…'; }
+    if (state === 'error') { return '无法连接'; }
+    const seconds = this.pings.get(id) ?? 0;
+    return `${Math.max(1, Math.round(seconds * 1000))} ms`;
   }
 
   private pingColor(id: number): string {
-    const sec = this.pings.get(id);
-    if (sec === undefined) {
-      return COLOR_TEXT_SECONDARY as string;
-    }
-    return sec < 0 ? DANGER : OK_GREEN;
+    const state = this.pingState(id);
+    if (state === 'ready') { return OK_GREEN; }
+    if (state === 'error') { return DANGER; }
+    return COLOR_TEXT_SECONDARY as string;
   }
 
-  private toggle(p: ProxyEntry): void {
-    const call: Promise<void> = p.isEnabled ? disableProxy() : enableProxy(p.id);
-    const wasEnabled = p.isEnabled;
-    // Only one proxy can be enabled at a time.
-    this.proxies = this.proxies.map((x: ProxyEntry): ProxyEntry => ({
-      id: x.id, server: x.server, port: x.port, type: x.type,
-      username: x.username, password: x.password, secret: x.secret,
-      isEnabled: !wasEnabled && x.id === p.id
-    }));
-    call.then(() => {
-      promptAction.showToast({
-        message: wasEnabled ? '已停用代理' : `已启用 ${p.server}`, duration: 1500
-      });
-    }).catch((e: TdError) => {
-      console.error(`ProxyPage.toggle failed: ${e.message}`);
-      promptAction.showToast({ message: '操作失败，请重试', duration: 1500 });
-      this.load();
+  private beginPing(id: number): number {
+    const token = (this.pingTokens.get(id) ?? 0) + 1;
+    this.pingTokens.set(id, token);
+    const states = new Map(this.pingStates);
+    states.set(id, 'loading');
+    this.pingStates = states;
+    return token;
+  }
+
+  private finishPing(id: number, token: number, seconds: number, success: boolean): void {
+    if (!this.active || this.pingTokens.get(id) !== token) { return; }
+    const states = new Map(this.pingStates);
+    states.set(id, success ? 'ready' : 'error');
+    this.pingStates = states;
+    if (success) {
+      const values = new Map(this.pings);
+      values.set(id, seconds);
+      this.pings = values;
+    }
+  }
+
+  private async pingLane(list: ProxyEntry[], start: number, generation: number): Promise<void> {
+    let index = start;
+    while (index < list.length && this.active && generation === this.pingGeneration) {
+      const entry = list[index];
+      const token = this.beginPing(entry.id);
+      try {
+        const seconds = await pingProxy(entry.id);
+        if (generation === this.pingGeneration) {
+          this.finishPing(entry.id, token, seconds, true);
+        }
+      } catch (caught) {
+        if (generation === this.pingGeneration) {
+          this.finishPing(entry.id, token, 0, false);
+        }
+      }
+      index += 3;
+    }
+  }
+
+  private startPingQueue(list: ProxyEntry[]): void {
+    const generation = ++this.pingGeneration;
+    this.pingDirect(generation);
+    for (let lane = 0; lane < Math.min(3, list.length); lane++) {
+      this.pingLane(list, lane, generation);
+    }
+  }
+
+  private pingDirect(generation: number = this.pingGeneration): void {
+    const token = this.beginPing(DIRECT_PING_ID);
+    pingProxy(0).then((seconds: number): void => {
+      if (generation === this.pingGeneration) {
+        this.finishPing(DIRECT_PING_ID, token, seconds, true);
+      }
+    }).catch((): void => {
+      if (generation === this.pingGeneration) {
+        this.finishPing(DIRECT_PING_ID, token, 0, false);
+      }
     });
   }
 
-  private confirmRemove(p: ProxyEntry): void {
+  private retryPing(entry: ProxyEntry): void {
+    const token = this.beginPing(entry.id);
+    pingProxy(entry.id).then((seconds: number): void => {
+      this.finishPing(entry.id, token, seconds, true);
+    }).catch((): void => {
+      this.finishPing(entry.id, token, 0, false);
+    });
+  }
+
+  private retryCurrentPing(): void {
+    const active = this.activeProxy();
+    if (active === null) { this.pingDirect(); } else { this.retryPing(active); }
+  }
+
+  private copyEnabled(entry: ProxyEntry, enabled: boolean): ProxyEntry {
+    return {
+      id: entry.id, server: entry.server, port: entry.port, type: entry.type,
+      username: entry.username, password: entry.password, secret: entry.secret,
+      httpOnly: entry.httpOnly, lastUsedDate: entry.lastUsedDate, isEnabled: enabled
+    };
+  }
+
+  private applyEnabledProxy(proxyId: number): void {
+    this.proxies = this.sorted(this.proxies.map((entry: ProxyEntry): ProxyEntry =>
+      this.copyEnabled(entry, proxyId > 0 && entry.id === proxyId)
+    ));
+  }
+
+  private masterChanged(useProxy: boolean): void {
+    if (this.actionKey !== '') { return; }
+    if (!useProxy) {
+      this.setEnabledProxy(null);
+      return;
+    }
+    if (this.proxies.length === 0) {
+      this.openAdd();
+      return;
+    }
+    const preferred = this.proxies.find(
+      (entry: ProxyEntry): boolean => entry.id === this.preferredProxyId
+    ) ?? this.proxies[0];
+    this.setEnabledProxy(preferred);
+  }
+
+  private async setEnabledProxy(entry: ProxyEntry | null): Promise<void> {
+    if (this.actionKey !== '') { return; }
+    const targetId = entry !== null ? entry.id : 0;
+    if ((entry === null && !this.usingProxy()) ||
+      (entry !== null && this.activeProxy()?.id === entry.id)) { return; }
+    const snapshot = this.proxies.slice();
+    const sequence = ++this.operationSequence;
+    this.actionKey = entry !== null ? `enable_${entry.id}` : 'disable';
+    this.applyEnabledProxy(targetId);
+    this.connectionState = entry !== null
+      ? 'connectionStateConnectingToProxy' : 'connectionStateConnecting';
+    try {
+      if (entry !== null) { await enableProxy(entry.id); } else { await disableProxy(); }
+      if (!this.active || sequence !== this.operationSequence) { return; }
+      this.actionKey = '';
+      if (entry !== null) { this.preferredProxyId = entry.id; }
+      promptAction.showToast({
+        message: entry !== null ? `已启用 ${entry.server}` : '已切换为直连', duration: 1400
+      });
+      this.subscribeConnectionState();
+      this.load(false);
+    } catch (caught) {
+      if (!this.active || sequence !== this.operationSequence) { return; }
+      const error = caught as TdError;
+      this.actionKey = '';
+      this.proxies = snapshot;
+      this.syncWarning = '启用状态可能已变化，正在重新同步';
+      promptAction.showToast({
+        message: proxyActionErrorText(error.message, entry !== null ? '启用代理' : '切换直连'),
+        duration: 1900
+      });
+      console.error(`ProxyPage.setEnabledProxy failed: ${error.message}`);
+      this.load(false);
+    }
+  }
+
+  private confirmRemove(entry: ProxyEntry): void {
+    if (this.actionKey !== '' || this.saving) { return; }
     promptAction.showDialog({
       title: '删除代理',
-      message: `确定要删除 ${p.server}:${p.port} 吗？`,
+      message: entry.isEnabled
+        ? `删除 ${entry.server}:${entry.port} 后将切回直连。`
+        : `确定删除 ${entry.server}:${entry.port} 吗？`,
       buttons: [
         { text: '取消', color: COLOR_TEXT_SECONDARY as string },
         { text: '删除', color: DANGER }
       ]
-    }).then((res: promptAction.ShowDialogSuccessResponse) => {
-      if (res.index !== 1) {
-        return;
-      }
-      const before = this.proxies;
-      this.proxies = this.proxies.filter((x: ProxyEntry) => x.id !== p.id);
-      removeProxy(p.id).catch((e: TdError) => {
-        console.error(`ProxyPage.removeProxy failed: ${e.message}`);
-        this.proxies = before;
-        promptAction.showToast({ message: '删除失败，请重试', duration: 1500 });
+    }).then((result: promptAction.ShowDialogSuccessResponse): void => {
+      if (result.index === 1) { this.performRemove(entry); }
+    }).catch((error: Object): void => {
+      console.error(`ProxyPage.remove dialog failed: ${JSON.stringify(error)}`);
+    });
+  }
+
+  private async performRemove(entry: ProxyEntry): Promise<void> {
+    if (this.actionKey !== '') { return; }
+    const before = this.proxies.slice();
+    const sequence = ++this.operationSequence;
+    this.actionKey = `remove_${entry.id}`;
+    animateTo({ duration: this.animationDuration(170), curve: Curve.EaseOut }, (): void => {
+      this.proxies = this.proxies.filter((item: ProxyEntry): boolean => item.id !== entry.id);
+    });
+    try {
+      await removeProxy(entry.id);
+      if (!this.active || sequence !== this.operationSequence) { return; }
+      this.actionKey = '';
+      if (this.preferredProxyId === entry.id) { this.preferredProxyId = 0; }
+      promptAction.showToast({ message: '代理已删除', duration: 1300 });
+      this.load(false);
+    } catch (caught) {
+      if (!this.active || sequence !== this.operationSequence) { return; }
+      const error = caught as TdError;
+      this.actionKey = '';
+      this.proxies = before;
+      promptAction.showToast({
+        message: proxyActionErrorText(error.message, '删除代理'), duration: 1800
       });
-    }).catch((e: Object) => {
-      console.error(`ProxyPage.showDialog failed: ${JSON.stringify(e)}`);
+      this.load(false);
+    }
+  }
+
+  private copyShareLink(entry: ProxyEntry): void {
+    if (entry.type === PROXY_HTTP || this.actionKey !== '') { return; }
+    this.actionKey = `share_${entry.id}`;
+    getProxyShareLink(entry.id).then((url: string): void => {
+      if (!this.active) { return; }
+      if (url === '') { throw new TdError(-1, 'empty proxy link'); }
+      const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, url);
+      pasteboard.getSystemPasteboard().setData(data).then((): void => {
+        if (!this.active) { return; }
+        this.actionKey = '';
+        promptAction.showToast({ message: '代理链接已复制', duration: 1400 });
+      }).catch((error: Error): void => {
+        if (!this.active) { return; }
+        this.actionKey = '';
+        console.error(`ProxyPage.copyProxyLink failed: ${error.message}`);
+        promptAction.showToast({ message: '复制代理链接失败', duration: 1600 });
+      });
+    }).catch((error: TdError): void => {
+      if (!this.active) { return; }
+      this.actionKey = '';
+      console.error(`ProxyPage.getProxyLink failed: ${error.message}`);
+      promptAction.showToast({ message: '生成代理链接失败', duration: 1600 });
     });
   }
 
   private resetForm(): void {
+    this.editingId = 0;
+    this.importedForm = false;
     this.fType = PROXY_SOCKS5;
     this.fServer = '';
     this.fPort = '';
     this.fUser = '';
     this.fPass = '';
     this.fSecret = '';
+    this.fHttpOnly = false;
+    this.fEnableAfterSave = true;
+    this.fRevealCredential = false;
+    this.formError = '';
+    this.formTestState = 'idle';
+    this.formTestMs = 0;
+    this.formOutcomeUnknown = false;
   }
 
-  // Validate at the boundary: a bad port or an empty host would be rejected by
-  // TDLib with an opaque error, so say what's wrong here instead.
-  private save(): void {
-    const server = this.fServer.trim();
-    const port = Number.parseInt(this.fPort.trim(), 10);
-    if (server === '') {
-      promptAction.showToast({ message: '请填写服务器地址', duration: 1500 });
-      return;
-    }
-    if (Number.isNaN(port) || port <= 0 || port > 65535) {
-      promptAction.showToast({ message: '端口需为 1-65535 的数字', duration: 1500 });
-      return;
-    }
-    if (this.fType === PROXY_MTPROTO && this.fSecret.trim() === '') {
-      promptAction.showToast({ message: 'MTProto 代理需要填写密钥', duration: 1500 });
-      return;
-    }
-    if (this.saving) {
-      return;
-    }
-    this.saving = true;
-    const entry: ProxyEntry = {
-      id: 0, server, port, type: this.fType,
-      username: this.fUser.trim(), password: this.fPass,
-      secret: this.fSecret.trim(), isEnabled: false
+  private openAdd(): void {
+    if (this.actionKey !== '' || this.saving) { return; }
+    this.resetForm();
+    this.sheetOpen = true;
+  }
+
+  private openEdit(entry: ProxyEntry): void {
+    if (this.actionKey !== '' || this.saving) { return; }
+    this.resetForm();
+    this.editingId = entry.id;
+    this.fType = entry.type;
+    this.fServer = entry.server;
+    this.fPort = `${entry.port}`;
+    this.fUser = entry.username;
+    this.fPass = entry.password;
+    this.fSecret = entry.secret;
+    this.fHttpOnly = entry.httpOnly;
+    this.fEnableAfterSave = entry.isEnabled;
+    this.sheetOpen = true;
+  }
+
+  private cancelForm(): void {
+    if (this.saving) { return; }
+    this.sheetOpen = false;
+    this.formSequence++;
+    this.resetForm();
+  }
+
+  private onFormChanged(): void {
+    this.formError = '';
+    this.formTestState = 'idle';
+    this.formTestMs = 0;
+    this.formOutcomeUnknown = false;
+    this.formSequence++;
+  }
+
+  private formEntry(): ProxyEntry {
+    const existing = this.proxies.find(
+      (entry: ProxyEntry): boolean => entry.id === this.editingId
+    );
+    return {
+      id: this.editingId,
+      server: this.fServer.trim(),
+      port: parseProxyPort(this.fPort),
+      type: this.fType,
+      username: this.fType === PROXY_MTPROTO ? '' : this.fUser.trim(),
+      password: this.fType === PROXY_MTPROTO ? '' : this.fPass,
+      secret: this.fType === PROXY_MTPROTO ? this.fSecret.trim() : '',
+      httpOnly: this.fType === PROXY_HTTP && this.fHttpOnly,
+      lastUsedDate: existing !== undefined ? existing.lastUsedDate : 0,
+      isEnabled: existing !== undefined ? existing.isEnabled : false
     };
-    addProxy(entry, true).then(() => {
-      this.saving = false;
-      this.sheetOpen = false;
-      this.resetForm();
-      promptAction.showToast({ message: '代理已添加并启用', duration: 1500 });
-      this.load();
-    }).catch((e: TdError) => {
-      this.saving = false;
-      console.error(`ProxyPage.addProxy failed: ${e.message}`);
-      promptAction.showToast({ message: `添加失败：${e.message}`, duration: 2000 });
+  }
+
+  private upsertProxy(entry: ProxyEntry): void {
+    let next = this.proxies.filter((item: ProxyEntry): boolean => item.id !== entry.id);
+    if (entry.isEnabled) {
+      next = next.map((item: ProxyEntry): ProxyEntry => this.copyEnabled(item, false));
+    }
+    next.push(entry);
+    this.proxies = this.sorted(next);
+  }
+
+  private testForm(): void {
+    if (this.formTestState === 'loading' || this.saving) { return; }
+    const validation = proxyFormError(this.fServer, this.fPort, this.fType, this.fSecret);
+    if (validation !== '') {
+      this.formError = validation;
+      return;
+    }
+    const sequence = ++this.formSequence;
+    this.formError = '';
+    this.formTestState = 'loading';
+    testProxy(this.formEntry()).then((seconds: number): void => {
+      if (!this.active || sequence !== this.formSequence) { return; }
+      this.formTestMs = Math.max(1, Math.round(seconds * 1000));
+      this.formTestState = 'ready';
+    }).catch((error: TdError): void => {
+      if (!this.active || sequence !== this.formSequence) { return; }
+      this.formTestState = 'error';
+      this.formError = proxyActionErrorText(error.message, '测试连接');
     });
+  }
+
+  private saveForm(): void {
+    if (this.saving || this.formOutcomeUnknown) { return; }
+    const validation = proxyFormError(this.fServer, this.fPort, this.fType, this.fSecret);
+    if (validation !== '') {
+      this.formError = validation;
+      return;
+    }
+    const draft = this.formEntry();
+    const duplicate = this.proxies.find((entry: ProxyEntry): boolean =>
+      entry.id !== this.editingId && sameProxyConfiguration(entry, draft)
+    );
+    if (duplicate !== undefined) {
+      if (this.editingId === 0 && this.fEnableAfterSave && !duplicate.isEnabled) {
+        this.sheetOpen = false;
+        this.resetForm();
+        this.setEnabledProxy(duplicate);
+      } else {
+        this.formError = duplicate.isEnabled ? '相同代理已经在使用中' : '相同代理已经存在';
+      }
+      return;
+    }
+    const sequence = ++this.formSequence;
+    this.saving = true;
+    this.formError = '';
+    if (this.editingId > 0) {
+      editProxy(draft, this.fEnableAfterSave).then((saved: ProxyEntry): void => {
+        if (!this.active || sequence !== this.formSequence) { return; }
+        this.saving = false;
+        this.upsertProxy(saved);
+        if (saved.isEnabled) { this.preferredProxyId = saved.id; }
+        this.sheetOpen = false;
+        this.resetForm();
+        promptAction.showToast({ message: '代理已保存', duration: 1400 });
+        this.load(false);
+      }).catch((error: TdError): void => {
+        this.finishFormFailure(error, sequence, '保存代理');
+      });
+      return;
+    }
+    addProxy(draft, false).then((saved: ProxyEntry): void => {
+      if (!this.active || sequence !== this.formSequence) { return; }
+      if (saved.id <= 0) {
+        this.finishFormFailure(new TdError(-1, 'invalid added proxy result'), sequence, '添加代理');
+        return;
+      }
+      this.upsertProxy(saved);
+      if (!this.fEnableAfterSave) {
+        this.finishFormSuccess('代理已添加');
+        return;
+      }
+      enableProxy(saved.id).then((): void => {
+        if (!this.active || sequence !== this.formSequence) { return; }
+        this.applyEnabledProxy(saved.id);
+        this.preferredProxyId = saved.id;
+        this.finishFormSuccess('代理已添加并启用');
+      }).catch((error: TdError): void => {
+        if (!this.active || sequence !== this.formSequence) { return; }
+        this.saving = false;
+        this.sheetOpen = false;
+        this.resetForm();
+        promptAction.showToast({
+          message: error.message.toLowerCase().indexOf('timeout') >= 0
+            ? '代理已保存，启用状态待确认' : '代理已保存，但暂时无法启用',
+          duration: 2100
+        });
+        this.load(false);
+      });
+    }).catch((error: TdError): void => {
+      this.finishFormFailure(error, sequence, '添加代理');
+    });
+  }
+
+  private finishFormSuccess(message: string): void {
+    this.saving = false;
+    this.sheetOpen = false;
+    this.resetForm();
+    promptAction.showToast({ message: message, duration: 1500 });
+    this.load(false);
+  }
+
+  private finishFormFailure(error: TdError, sequence: number, action: string): void {
+    if (!this.active || sequence !== this.formSequence) { return; }
+    this.saving = false;
+    if (error.message.toLowerCase().indexOf('request timeout') >= 0) {
+      this.formOutcomeUnknown = true;
+      this.formError = `${action}结果暂时无法确认，请关闭后刷新列表，避免重复提交`;
+      this.load(false);
+    } else {
+      this.formError = proxyActionErrorText(error.message, action);
+    }
+    console.error(`ProxyPage.${action} failed: ${error.message}`);
+  }
+
+  private typeTint(type: string): string {
+    if (type === PROXY_MTPROTO) { return '#9B6BEA'; }
+    if (type === PROXY_HTTP) { return '#FF9500'; }
+    return '#3478F6';
+  }
+
+  private typeIconBackground(type: string): string {
+    if (type === PROXY_MTPROTO) { return '#1F9B6BEA'; }
+    if (type === PROXY_HTTP) { return '#1FFF9500'; }
+    return '#1F3478F6';
+  }
+
+  private typeBadgeBackground(type: string): string {
+    if (type === PROXY_MTPROTO) { return '#169B6BEA'; }
+    if (type === PROXY_HTTP) { return '#16FF9500'; }
+    return '#163478F6';
+  }
+
+  private typeDetail(entry: ProxyEntry): string {
+    if (entry.type === PROXY_HTTP && entry.httpOnly) { return 'HTTP · 仅 HTTP'; }
+    return proxyTypeLabel(entry.type);
+  }
+
+  private rowBusy(entry: ProxyEntry): boolean {
+    return this.actionKey.indexOf(`_${entry.id}`) >= 0;
   }
 
   @Builder
   header() {
-    Row({ space: 16 }) {
-      SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(26).fontColor([COLOR_TEXT_PRIMARY])
-        .onClick(() => { router.back(); });
-      Text('代理设置').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
-        .layoutWeight(1);
-      SymbolGlyph($r('sys.symbol.plus')).fontSize(22).fontColor([COLOR_PRIMARY])
-        .onClick(() => { this.sheetOpen = true; });
-    }
-    .width('100%').height(48).padding({ left: 16, right: 16 })
-    .alignItems(VerticalAlign.Center);
-  }
-
-  @Builder
-  field(label: string, value: string, onChange: (v: string) => void, isPassword: boolean) {
-    Column({ space: 4 }) {
-      Text(label).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
-      TextInput({ text: value })
-        .type(isPassword ? InputType.Password : InputType.Normal)
-        .fontSize(16)
-        .backgroundColor($r('app.color.page_bg'))
-        .borderRadius(10)
-        .onChange((v: string) => { onChange(v); });
-    }
-    .width('100%').alignItems(HorizontalAlign.Start)
-    .padding({ left: 16, right: 16, top: 6 });
-  }
-
-  @Builder
-  addSheet() {
-    Column({ space: 10 }) {
-      Text('添加代理').fontSize(18).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
-        .padding({ top: 16, bottom: 4 });
-      Row({ space: 8 }) {
-        ForEach(TYPES, (t: TypeOption) => {
-          Text(t.label).fontSize(14)
-            .fontColor(this.fType === t.value ? Color.White : COLOR_TEXT_PRIMARY)
-            .backgroundColor(this.fType === t.value ? COLOR_PRIMARY : $r('app.color.page_bg'))
-            .borderRadius(16)
-            .padding({ left: 16, right: 16, top: 7, bottom: 7 })
-            .onClick(() => { this.fType = t.value; });
-        }, (t: TypeOption) => t.value);
-      }.padding({ bottom: 4 });
-
-      this.field('服务器', this.fServer, (v: string): void => { this.fServer = v; }, false);
-      this.field('端口', this.fPort, (v: string): void => { this.fPort = v; }, false);
-      if (this.fType === PROXY_MTPROTO) {
-        this.field('密钥 (secret)', this.fSecret, (v: string): void => { this.fSecret = v; }, false);
-      } else {
-        this.field('用户名（可选）', this.fUser, (v: string): void => { this.fUser = v; }, false);
-        this.field('密码（可选）', this.fPass, (v: string): void => { this.fPass = v; }, true);
+    Row({ space: 6 }) {
+      Row() {
+        SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(24).fontColor([COLOR_TEXT_PRIMARY]);
       }
+      .width(TOP_ACTION_SIZE).height(TOP_ACTION_SIZE).borderRadius(TOP_ACTION_SIZE / 2)
+      .justifyContent(FlexAlign.Center)
+      .stateStyles({ normal: this.actionNormalStyle, pressed: this.actionPressedStyle })
+      .accessibilityText('返回').onClick((): void => { if (!this.saving) { router.back(); } });
 
-      Row({ space: 12 }) {
-        Text('取消').fontSize(16).fontColor(COLOR_TEXT_SECONDARY)
-          .layoutWeight(1).textAlign(TextAlign.Center)
-          .padding({ top: 12, bottom: 12 })
-          .onClick(() => { this.sheetOpen = false; });
-        Text(this.saving ? '添加中…' : '添加并启用')
-          .fontSize(16).fontColor(Color.White)
-          .layoutWeight(1).textAlign(TextAlign.Center)
-          .backgroundColor(COLOR_PRIMARY).borderRadius(10)
-          .padding({ top: 12, bottom: 12 })
-          .onClick(() => { this.save(); });
-      }
-      .width('100%').padding({ left: 16, right: 16, top: 10, bottom: 10 });
-    }
-    .width('100%')
-    .padding({ bottom: this.bottomSafe + 8 });
-  }
-
-  @Builder
-  proxyRow(p: ProxyEntry) {
-    Row({ space: 12 }) {
-      Column({ space: 3 }) {
-        Row({ space: 6 }) {
-          Text(`${p.server}:${p.port}`).fontSize(16).fontColor(COLOR_TEXT_PRIMARY)
-            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-            .constraintSize({ maxWidth: 200 });
-          Text(proxyTypeLabel(p.type)).fontSize(11).fontColor(COLOR_TEXT_SECONDARY)
-            .backgroundColor($r('app.color.page_bg')).borderRadius(6)
-            .padding({ left: 6, right: 6, top: 2, bottom: 2 });
-        }.alignItems(VerticalAlign.Center);
-        Row({ space: 8 }) {
-          Text(this.pingLabel(p.id)).fontSize(12).fontColor(this.pingColor(p.id));
-          if (p.isEnabled) {
-            Text('使用中').fontSize(12).fontColor(COLOR_PRIMARY);
-          }
-        };
+      Column({ space: 1 }) {
+        Text('代理设置').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
+        if (this.refreshing) {
+          Text('正在同步…').fontSize(11).fontColor(COLOR_TEXT_SECONDARY)
+            .transition(TransitionEffect.OPACITY.animation({
+              duration: this.animationDuration(140), curve: Curve.EaseOut
+            }));
+        }
       }.alignItems(HorizontalAlign.Start).layoutWeight(1);
-      Toggle({ type: ToggleType.Switch, isOn: p.isEnabled })
-        .selectedColor(COLOR_PRIMARY)
-        .onChange(() => { this.toggle(p); });
-      Text('删除').fontSize(14).fontColor(DANGER)
-        .onClick(() => { this.confirmRemove(p); });
+
+      Row() {
+        if (this.refreshing) {
+          LoadingProgress().width(18).height(18).color(COLOR_PRIMARY);
+        } else {
+          SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(20)
+            .fontColor([COLOR_TEXT_SECONDARY]);
+        }
+      }
+      .width(TOP_ACTION_SIZE).height(TOP_ACTION_SIZE).borderRadius(TOP_ACTION_SIZE / 2)
+      .justifyContent(FlexAlign.Center).enabled(!this.loading && !this.refreshing)
+      .stateStyles({ normal: this.actionNormalStyle, pressed: this.actionPressedStyle })
+      .accessibilityText('刷新代理状态').onClick((): void => this.load(false));
+
+      Row() {
+        SymbolGlyph($r('sys.symbol.plus')).fontSize(21).fontColor([COLOR_PRIMARY]);
+      }
+      .width(TOP_ACTION_SIZE).height(TOP_ACTION_SIZE).borderRadius(TOP_ACTION_SIZE / 2)
+      .justifyContent(FlexAlign.Center).enabled(this.actionKey === '' && !this.saving)
+      .stateStyles({ normal: this.actionNormalStyle, pressed: this.actionPressedStyle })
+      .accessibilityText('添加代理').onClick((): void => this.openAdd());
     }
-    .width('100%').padding({ left: 16, right: 16, top: 10, bottom: 10 })
-    .alignItems(VerticalAlign.Center);
+    .width('100%').height(56).padding({ left: 6, right: 8 })
+    .alignItems(VerticalAlign.Center).backgroundColor(COLOR_PAGE_BG);
+  }
+
+  @Builder
+  connectionCard() {
+    Column({ space: 12 }) {
+      Row({ space: 12 }) {
+        Stack({ alignContent: Alignment.Center }) {
+          Circle({ width: 46, height: 46 }).fill('#163478F6');
+          SymbolGlyph($r('sys.symbol.link')).fontSize(23).fontColor([COLOR_PRIMARY]);
+        }
+        Column({ space: 3 }) {
+          Row({ space: 6 }) {
+            Circle({ width: 7, height: 7 }).fill(this.connectionColor());
+            Text(this.connectionLabel()).fontSize(16).fontWeight(FontWeight.Medium)
+              .fontColor(COLOR_TEXT_PRIMARY);
+          }
+          Text(this.currentProxyDetail()).fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
+        }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+        if (this.actionKey === 'disable' || this.actionKey.indexOf('enable_') === 0) {
+          LoadingProgress().width(24).height(24).color(COLOR_PRIMARY);
+        } else {
+          Toggle({ type: ToggleType.Switch, isOn: this.usingProxy() })
+            .selectedColor(COLOR_PRIMARY)
+            .enabled(!this.loading && this.actionKey === '')
+            .onChange((value: boolean): void => this.masterChanged(value));
+        }
+      }.width('100%').alignItems(VerticalAlign.Center);
+
+      Divider().strokeWidth(0.5).color(COLOR_DIVIDER);
+
+      Row({ space: 8 }) {
+        Text(this.usingProxy() ? '当前代理延迟' : '直连延迟')
+          .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).layoutWeight(1);
+        if (this.pingState(this.currentPingId()) === 'loading') {
+          LoadingProgress().width(15).height(15).color(COLOR_PRIMARY);
+        }
+        Text(this.pingLabel(this.currentPingId())).fontSize(13)
+          .fontWeight(FontWeight.Medium).fontColor(this.pingColor(this.currentPingId()));
+        Row() {
+          SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(15)
+            .fontColor([COLOR_TEXT_SECONDARY]);
+        }
+        .width(32).height(32).borderRadius(16).justifyContent(FlexAlign.Center)
+        .stateStyles({ normal: this.actionNormalStyle, pressed: this.actionPressedStyle })
+        .accessibilityText('重新检测当前连接').onClick((): void => this.retryCurrentPing());
+      }.width('100%').alignItems(VerticalAlign.Center);
+    }
+    .width('100%').padding(14).backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS)
+    .transition(TransitionEffect.OPACITY.combine(
+      TransitionEffect.translate({ y: -6 })
+    ).animation({ duration: this.animationDuration(180), curve: Curve.EaseOut }));
+  }
+
+  @Builder
+  syncWarningCard() {
+    if (this.syncWarning !== '') {
+      Row({ space: 8 }) {
+        SymbolGlyph($r('sys.symbol.exclamationmark_circle')).fontSize(16).fontColor([WARNING]);
+        Text(this.syncWarning).fontSize(12).fontColor(COLOR_TEXT_SECONDARY).layoutWeight(1)
+          .maxLines(2);
+        Text('重试').fontSize(12).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY);
+      }
+      .width('100%').padding({ left: 12, right: 12, top: 10, bottom: 10 })
+      .backgroundColor('#14FF9500').borderRadius(12)
+      .onClick((): void => this.load(false))
+      .transition(TransitionEffect.OPACITY.combine(
+        TransitionEffect.translate({ y: -5 })
+      ).animation({ duration: this.animationDuration(160), curve: Curve.EaseOut }));
+    }
+  }
+
+  @Builder
+  proxyMenu(entry: ProxyEntry) {
+    Menu() {
+      MenuItem({ content: '编辑代理' }).onClick((): void => this.openEdit(entry));
+      MenuItem({ content: '测试连接' }).onClick((): void => this.retryPing(entry));
+      if (entry.type !== PROXY_HTTP) {
+        MenuItem({ content: '复制分享链接' }).onClick((): void => this.copyShareLink(entry));
+      }
+      MenuItem({ content: '删除代理' }).onClick((): void => this.confirmRemove(entry));
+    }
+  }
+
+  @Builder
+  proxyRow(entry: ProxyEntry) {
+    Row({ space: 8 }) {
+      Row({ space: 12 }) {
+        Stack({ alignContent: Alignment.Center }) {
+          Circle({ width: 44, height: 44 }).fill(this.typeIconBackground(entry.type));
+          SymbolGlyph(entry.type === PROXY_MTPROTO
+            ? $r('sys.symbol.lock_fill') : $r('sys.symbol.link'))
+            .fontSize(21).fontColor([this.typeTint(entry.type)]);
+        }
+        Column({ space: 4 }) {
+          Text(`${entry.server}:${entry.port}`).fontSize(16).fontColor(COLOR_TEXT_PRIMARY)
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
+          Row({ space: 7 }) {
+            Text(this.typeDetail(entry)).fontSize(11).fontColor(this.typeTint(entry.type))
+              .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+              .backgroundColor(this.typeBadgeBackground(entry.type)).borderRadius(6);
+            if (this.pingState(entry.id) === 'loading') {
+              LoadingProgress().width(13).height(13).color(COLOR_PRIMARY);
+            }
+            Text(this.pingLabel(entry.id)).fontSize(12).fontColor(this.pingColor(entry.id));
+            if (entry.isEnabled) {
+              Text('使用中').fontSize(12).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY);
+            }
+          }.alignItems(VerticalAlign.Center);
+        }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+      }
+      .layoutWeight(1).padding({ left: 12, top: 9, bottom: 9 })
+      .stateStyles({ normal: this.rowNormalStyle, pressed: this.rowPressedStyle })
+      .accessibilityText(`编辑 ${entry.server}:${entry.port}`)
+      .onClick((): void => this.openEdit(entry));
+
+      Row() {
+        if (this.rowBusy(entry)) {
+          LoadingProgress().width(18).height(18).color(COLOR_PRIMARY);
+        } else {
+          Row() {
+            if (entry.isEnabled) {
+              SymbolGlyph($r('sys.symbol.checkmark')).fontSize(14).fontColor([Color.White]);
+            }
+          }
+          .width(24).height(24).borderRadius(12).justifyContent(FlexAlign.Center)
+          .backgroundColor(entry.isEnabled ? COLOR_PRIMARY : Color.Transparent)
+          .border({
+            width: entry.isEnabled ? 0 : 1.4,
+            color: entry.isEnabled ? Color.Transparent : COLOR_TEXT_SECONDARY
+          });
+        }
+      }
+      .width(40).height(40).borderRadius(20).justifyContent(FlexAlign.Center)
+      .backgroundColor(Color.Transparent)
+      .enabled(this.actionKey === '')
+      .stateStyles({ normal: this.actionNormalStyle, pressed: this.actionPressedStyle })
+      .accessibilityText(entry.isEnabled ? '当前代理' : '启用此代理')
+      .onClick((): void => { this.setEnabledProxy(entry); });
+
+      Row() {
+        SymbolGlyph($r('sys.symbol.more')).fontSize(20).fontColor([COLOR_TEXT_SECONDARY]);
+      }
+      .width(40).height(40).borderRadius(20).justifyContent(FlexAlign.Center)
+      .margin({ right: 6 }).enabled(this.actionKey === '')
+      .stateStyles({ normal: this.actionNormalStyle, pressed: this.actionPressedStyle })
+      .accessibilityText('代理更多操作').bindMenu(this.proxyMenu(entry));
+    }
+    .width('100%').alignItems(VerticalAlign.Center)
+    .transition(TransitionEffect.OPACITY.combine(
+      TransitionEffect.translate({ x: 10 })
+    ).animation({ duration: this.animationDuration(170), curve: Curve.EaseOut }));
+  }
+
+  @Builder
+  proxyListCard() {
+    Column() {
+      Row() {
+        Text('代理服务器').fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY);
+        Blank();
+        Text(`${this.proxies.length} 个`).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+      }.width('100%').height(40).padding({ left: 14, right: 14 });
+      ForEach(this.proxies, (entry: ProxyEntry, index: number) => {
+        if (index > 0) {
+          Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 68 });
+        }
+        this.proxyRow(entry);
+      }, (entry: ProxyEntry): string =>
+        `proxy_${entry.id}_${entry.server}_${entry.port}_${entry.type}_${entry.httpOnly}_${entry.isEnabled}`
+      );
+    }
+    .width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
+  }
+
+  @Builder
+  skeletonCard() {
+    Column() {
+      ForEach(SKELETON_ROWS, (index: number) => {
+        if (index > 0) {
+          Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 68 });
+        }
+        Row({ space: 12 }) {
+          Circle({ width: 44, height: 44 }).fill($r('app.color.surface_alt'));
+          Column({ space: 7 }) {
+            Row().width(index % 2 === 0 ? '58%' : '46%').height(13)
+              .borderRadius(7).backgroundColor($r('app.color.surface_alt'));
+            Row().width(index % 2 === 0 ? '38%' : '52%').height(10)
+              .borderRadius(5).backgroundColor($r('app.color.surface_alt'));
+          }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+          Circle({ width: 32, height: 32 }).fill($r('app.color.surface_alt'));
+        }.height(64).width('100%').padding({ left: 12, right: 12 });
+      }, (index: number): string => `${index}`);
+    }
+    .width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS)
+    .opacity(this.skeletonBright ? 0.55 : 0.94)
+    .animation({ duration: this.animationDuration(640), curve: Curve.EaseInOut });
+  }
+
+  @Builder
+  emptyState() {
+    Column({ space: 10 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        Circle({ width: 68, height: 68 }).fill('#163478F6');
+        SymbolGlyph($r('sys.symbol.link')).fontSize(32).fontColor([COLOR_PRIMARY]);
+      }
+      Text('还没有代理').fontSize(18).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+      Text('添加 SOCKS5、MTProto 或 HTTP 代理。代理关闭时仍保持直连。')
+        .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center)
+        .constraintSize({ maxWidth: 290 });
+      Row({ space: 6 }) {
+        SymbolGlyph($r('sys.symbol.plus')).fontSize(15).fontColor([Color.White]);
+        Text('添加代理').fontSize(15).fontWeight(FontWeight.Medium).fontColor(Color.White);
+      }
+      .height(42).padding({ left: 18, right: 19 }).borderRadius(21).backgroundColor(COLOR_PRIMARY)
+      .margin({ top: 5 }).stateStyles({
+        normal: this.primaryNormalStyle, pressed: this.primaryPressedStyle
+      }).onClick((): void => this.openAdd());
+    }
+    .width('100%').padding({ top: 42, bottom: 42 })
+    .backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS)
+    .transition(TransitionEffect.OPACITY.combine(
+      TransitionEffect.scale({ x: 0.97, y: 0.97 })
+    ).animation({ duration: this.animationDuration(180), curve: Curve.EaseOut }));
+  }
+
+  @Builder
+  errorState() {
+    Column({ space: 9 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        Circle({ width: 64, height: 64 }).fill('#14E64646');
+        SymbolGlyph($r('sys.symbol.exclamationmark_circle')).fontSize(30).fontColor([DANGER]);
+      }
+      Text('代理列表加载失败').fontSize(18).fontWeight(FontWeight.Medium)
+        .fontColor(COLOR_TEXT_PRIMARY);
+      Text(this.loadError).fontSize(13).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center);
+      Row({ space: 6 }) {
+        SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(14).fontColor([Color.White]);
+        Text('重新加载').fontSize(14).fontWeight(FontWeight.Medium).fontColor(Color.White);
+      }
+      .height(40).padding({ left: 16, right: 17 }).borderRadius(20).backgroundColor(COLOR_PRIMARY)
+      .stateStyles({ normal: this.primaryNormalStyle, pressed: this.primaryPressedStyle })
+      .onClick((): void => this.load(true));
+    }
+    .width('100%').padding({ top: 40, bottom: 40, left: 20, right: 20 })
+    .backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
+  }
+
+  @Builder
+  typeSelector() {
+    Row({ space: 4 }) {
+      ForEach(TYPES, (option: TypeOption) => {
+        Text(option.label).fontSize(13).fontWeight(FontWeight.Medium)
+          .fontColor(this.fType === option.value ? Color.White : COLOR_TEXT_SECONDARY)
+          .layoutWeight(1).height(34).textAlign(TextAlign.Center)
+          .backgroundColor(this.fType === option.value ? COLOR_PRIMARY : Color.Transparent)
+          .borderRadius(17).padding({ top: 7 })
+          .animation({ duration: this.animationDuration(150), curve: Curve.EaseOut })
+          .onClick((): void => {
+            if (!this.saving && this.fType !== option.value) {
+              this.fType = option.value;
+              this.onFormChanged();
+            }
+          });
+      }, (option: TypeOption): string => option.value);
+    }
+    .width('100%').padding(3).backgroundColor($r('app.color.surface_alt')).borderRadius(20);
+  }
+
+  @Builder
+  formField(label: string, value: string, placeholder: string,
+    numberOnly: boolean, onChange: (value: string) => void) {
+    Column({ space: 5 }) {
+      Text(label).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+      TextInput({ text: value, placeholder: placeholder })
+        .width('100%').height(42).fontSize(16).type(numberOnly ? InputType.Number : InputType.Normal)
+        .backgroundColor($r('app.color.page_bg')).borderRadius(10)
+        .padding({ left: 12, right: 12 }).caretColor(COLOR_PRIMARY)
+        .onChange((next: string): void => {
+          onChange(next);
+          this.onFormChanged();
+        });
+    }.width('100%').alignItems(HorizontalAlign.Start);
+  }
+
+  @Builder
+  credentialField() {
+    Column({ space: 5 }) {
+      Text(this.fType === PROXY_MTPROTO ? '密钥' : '密码（可选）')
+        .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+      Row({ space: 6 }) {
+        TextInput({
+          text: this.fType === PROXY_MTPROTO ? this.fSecret : this.fPass,
+          placeholder: this.fType === PROXY_MTPROTO ? 'MTProto secret' : '代理密码'
+        })
+          .layoutWeight(1).height(42).fontSize(16)
+          .type(this.fRevealCredential ? InputType.Normal : InputType.Password)
+          .backgroundColor(Color.Transparent).padding({ left: 12 }).caretColor(COLOR_PRIMARY)
+          .onChange((next: string): void => {
+            if (this.fType === PROXY_MTPROTO) { this.fSecret = next; } else { this.fPass = next; }
+            this.onFormChanged();
+          });
+        Text(this.fRevealCredential ? '隐藏' : '显示').fontSize(12).fontColor(COLOR_PRIMARY)
+          .width(44).height(38).textAlign(TextAlign.Center).padding({ top: 10 })
+          .onClick((): void => { this.fRevealCredential = !this.fRevealCredential; });
+      }
+      .width('100%').height(42).backgroundColor($r('app.color.page_bg')).borderRadius(10);
+    }.width('100%').alignItems(HorizontalAlign.Start);
+  }
+
+  @Builder
+  formTestCard() {
+    Row({ space: 9 }) {
+      if (this.formTestState === 'loading') {
+        LoadingProgress().width(20).height(20).color(COLOR_PRIMARY);
+      } else {
+        SymbolGlyph(this.formTestState === 'ready'
+          ? $r('sys.symbol.checkmark_circle') : $r('sys.symbol.arrow_clockwise'))
+          .fontSize(20).fontColor([
+            this.formTestState === 'ready' ? OK_GREEN : COLOR_PRIMARY
+          ]);
+      }
+      Column({ space: 2 }) {
+        Text(this.formTestState === 'loading' ? '正在测试连接…' :
+          (this.formTestState === 'ready' ? '连接测试成功' : '测试当前配置'))
+          .fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+        Text(this.formTestState === 'ready' ? `${this.formTestMs} ms` : '不会保存或启用代理')
+          .fontSize(11).fontColor(this.formTestState === 'ready' ? OK_GREEN : COLOR_TEXT_SECONDARY);
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+      Text(this.formTestState === 'ready' ? '重测' : '测试').fontSize(13).fontColor(COLOR_PRIMARY);
+    }
+    .width('100%').padding({ left: 12, right: 14, top: 10, bottom: 10 })
+    .backgroundColor($r('app.color.surface_alt')).borderRadius(11)
+    .enabled(!this.saving && this.formTestState !== 'loading')
+    .stateStyles({ normal: this.primaryNormalStyle, pressed: this.primaryPressedStyle })
+    .onClick((): void => this.testForm());
+  }
+
+  @Builder
+  proxyFormSheet() {
+    Scroll() {
+      Column({ space: 13 }) {
+        Column({ space: 3 }) {
+          Text(this.editingId > 0 ? '编辑代理' : '添加代理')
+            .fontSize(20).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
+          Text(this.importedForm ? '已从 Telegram 代理链接填入，请确认后保存' :
+            (this.editingId > 0 ? '修改后由 TDLib 更新现有代理' : '代理不会在保存前生效'))
+            .fontSize(12).fontColor(this.importedForm ? WARNING : COLOR_TEXT_SECONDARY)
+            .textAlign(TextAlign.Center);
+        }.width('100%').padding({ top: 5 });
+
+        this.typeSelector();
+
+        Column({ space: 11 }) {
+          this.formField('服务器', this.fServer, '域名或 IP 地址', false,
+            (value: string): void => { this.fServer = value; });
+          this.formField('端口', this.fPort, '1–65535', true,
+            (value: string): void => { this.fPort = value; });
+          if (this.fType !== PROXY_MTPROTO) {
+            this.formField('用户名（可选）', this.fUser, '代理用户名', false,
+              (value: string): void => { this.fUser = value; });
+          }
+          this.credentialField();
+          if (this.fType === PROXY_HTTP) {
+            Row({ space: 10 }) {
+              Column({ space: 2 }) {
+                Text('仅支持 HTTP 请求').fontSize(14).fontColor(COLOR_TEXT_PRIMARY);
+                Text('代理不支持 HTTP CONNECT 时开启').fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
+              }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+              Toggle({ type: ToggleType.Switch, isOn: this.fHttpOnly })
+                .selectedColor(COLOR_PRIMARY).enabled(!this.saving)
+                .onChange((value: boolean): void => {
+                  this.fHttpOnly = value;
+                  this.onFormChanged();
+                });
+            }.width('100%');
+          }
+        }
+        .width('100%').padding(13).backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
+
+        this.formTestCard();
+
+        Row({ space: 10 }) {
+          Column({ space: 2 }) {
+            Text('保存后启用').fontSize(14).fontColor(COLOR_TEXT_PRIMARY);
+            Text('关闭时仅保存到代理列表').fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
+          }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+          Toggle({ type: ToggleType.Switch, isOn: this.fEnableAfterSave })
+            .selectedColor(COLOR_PRIMARY).enabled(!this.saving)
+            .onChange((value: boolean): void => { this.fEnableAfterSave = value; });
+        }
+        .width('100%').padding({ left: 13, right: 13, top: 11, bottom: 11 })
+        .backgroundColor(COLOR_SURFACE).borderRadius(12);
+
+        if (this.formError !== '') {
+          Row({ space: 8 }) {
+            SymbolGlyph($r('sys.symbol.exclamationmark_circle')).fontSize(16).fontColor([DANGER]);
+            Text(this.formError).fontSize(12).fontColor(DANGER).layoutWeight(1).maxLines(3);
+          }
+          .width('100%').padding({ left: 12, right: 12, top: 10, bottom: 10 })
+          .backgroundColor('#14E64646').borderRadius(11)
+          .transition(TransitionEffect.OPACITY.combine(
+            TransitionEffect.translate({ y: -5 })
+          ).animation({ duration: this.animationDuration(150), curve: Curve.EaseOut }));
+        }
+
+        Row({ space: 10 }) {
+          Text('取消').fontSize(15).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_SECONDARY)
+            .layoutWeight(1).height(44).textAlign(TextAlign.Center).padding({ top: 12 })
+            .backgroundColor($r('app.color.surface_alt')).borderRadius(12)
+            .enabled(!this.saving)
+            .stateStyles({ normal: this.primaryNormalStyle, pressed: this.primaryPressedStyle })
+            .onClick((): void => this.cancelForm());
+          Row({ space: 6 }) {
+            if (this.saving) { LoadingProgress().width(16).height(16).color(Color.White); }
+            Text(this.saving ? '正在保存…' : (this.editingId > 0 ? '保存修改' : '添加代理'))
+              .fontSize(15).fontWeight(FontWeight.Medium).fontColor(Color.White);
+          }
+          .layoutWeight(1).height(44).justifyContent(FlexAlign.Center)
+          .backgroundColor(COLOR_PRIMARY).borderRadius(12)
+          .opacity(this.formOutcomeUnknown ? 0.45 : 1)
+          .enabled(!this.saving && !this.formOutcomeUnknown)
+          .stateStyles({ normal: this.primaryNormalStyle, pressed: this.primaryPressedStyle })
+          .onClick((): void => this.saveForm());
+        }.width('100%');
+      }
+      .width('100%').padding({
+        left: 14, right: 14, top: 5, bottom: this.bottomSafe + 20
+      });
+    }
+    .width('100%').height('100%').scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring);
   }
 
   build() {
     Column() {
       this.header();
-      if (this.loading) {
-        Column() {
-          LoadingProgress().width(36).height(36).color(COLOR_TEXT_SECONDARY);
-        }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
-      } else if (this.proxies.length === 0) {
-        Column({ space: 10 }) {
-          Text('没有代理').fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
-          Text('添加 SOCKS5、MTProto 或 HTTP 代理后，连接会通过它建立。')
-            .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center)
-            .padding({ left: 40, right: 40 });
-          Text('添加代理').fontSize(16).fontColor(Color.White)
-            .backgroundColor(COLOR_PRIMARY).borderRadius(22)
-            .padding({ left: 24, right: 24, top: 11, bottom: 11 })
-            .margin({ top: 6 })
-            .onClick(() => { this.sheetOpen = true; });
-        }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
-      } else {
-        Scroll() {
-          Column({ space: 8 }) {
-            Column() {
-              ForEach(this.proxies, (p: ProxyEntry, idx: number) => {
-                if (idx > 0) {
-                  Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 16 });
-                }
-                this.proxyRow(p);
-              }, (p: ProxyEntry) => `p_${p.id}_${p.isEnabled}`);
-            }
-            .width('100%').backgroundColor($r('app.color.surface')).borderRadius(CARD_RADIUS);
-            Text('同一时间只能启用一个代理。关闭全部代理即直连。')
-              .fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
-              .width('100%').padding({ left: 16, right: 16, top: 4 });
+      Scroll() {
+        Column({ space: 12 }) {
+          if (!this.loading || this.proxies.length > 0) {
+            this.connectionCard();
           }
-          .width('100%')
-          .padding({ left: 12, right: 12, top: 8, bottom: this.bottomSafe + 24 });
+          this.syncWarningCard();
+          if (this.loading && this.proxies.length === 0) {
+            this.skeletonCard();
+          } else if (this.loadError !== '' && this.proxies.length === 0) {
+            this.errorState();
+          } else if (this.proxies.length === 0) {
+            this.emptyState();
+          } else {
+            this.proxyListCard();
+            Text('同一时间只能启用一个代理；关闭“使用代理”即恢复直连。')
+              .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).width('100%')
+              .padding({ left: 14, right: 14, top: 1 });
+          }
         }
-        .layoutWeight(1).width('100%')
-        .align(Alignment.Top)
-        .scrollBar(BarState.Off);
+        .width('100%').padding({
+          left: 12, right: 12, top: 6, bottom: this.bottomSafe + 24
+        });
       }
+      .layoutWeight(1).width('100%').align(Alignment.Top)
+      .scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring);
     }
-    .width('100%').height('100%')
-    .backgroundColor($r('app.color.page_bg'))
+    .width('100%').height('100%').backgroundColor(COLOR_PAGE_BG)
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .padding({ top: this.topSafe })
-    .bindSheet($$this.sheetOpen, this.addSheet(), {
-      height: SheetSize.FIT_CONTENT,
-      backgroundColor: $r('app.color.surface'),
-      dragBar: true
+    .bindSheet($$this.sheetOpen, this.proxyFormSheet(), {
+      height: '82%', backgroundColor: COLOR_PAGE_BG, dragBar: !this.saving
     });
   }
 }

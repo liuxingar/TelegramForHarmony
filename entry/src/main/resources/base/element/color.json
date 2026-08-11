@@ -5,6 +5,7 @@
     { "name": "page_bg", "value": "#EFEFF4" },
     { "name": "chat_bg", "value": "#EFEFF4" },
     { "name": "surface", "value": "#FFFFFF" },
+    { "name": "dock_glass", "value": "#8CFFFFFF" },
     { "name": "surface_alt", "value": "#F3F4F6" },
     { "name": "selected_pill", "value": "#E3F0FB" },
     { "name": "tab_pill_bg", "value": "#E5F0FB" },

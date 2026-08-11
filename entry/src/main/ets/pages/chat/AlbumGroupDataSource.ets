@@ -10,6 +10,12 @@ import { AlbumGroup } from '../../util/collapseAlbums';
 // update() diffs the old/new group lists by key (common prefix + suffix) and
 // emits the minimal notification: ADD for pure prepend/append, CHANGE for
 // in-place mutations, DELETE for removals, RELOAD only for complex mixed edits.
+//
+// The return value tells the caller which path was taken: 'incremental' ops
+// let List.maintainVisibleContentPosition hold the scroll anchor by itself;
+// only 'reload' rebuilds the list and needs a manual anchor restore.
+export type DataSourceUpdateKind = 'none' | 'incremental' | 'reload';
+
 export class AlbumGroupDataSource implements IDataSource {
   private groups: AlbumGroup[] = [];
   private listeners: DataChangeListener[] = [];
@@ -32,7 +38,7 @@ export class AlbumGroupDataSource implements IDataSource {
     this.listeners = this.listeners.filter((l: DataChangeListener) => l !== listener);
   }
 
-  update(next: AlbumGroup[]): void {
+  update(next: AlbumGroup[]): DataSourceUpdateKind {
     const prev = this.groups;
     this.groups = next;
     const minLen = Math.min(prev.length, next.length);
@@ -47,7 +53,7 @@ export class AlbumGroupDataSource implements IDataSource {
     const oldMid = prev.length - p - s;
     const newMid = next.length - p - s;
     if (oldMid === 0 && newMid === 0) {
-      return; // keys identical — nothing to tell the list
+      return 'none'; // keys identical — nothing to tell the list
     }
     if (oldMid === newMid) {
       // Same-length middle region: in-place item changes (photo arrived,
@@ -57,16 +63,16 @@ export class AlbumGroupDataSource implements IDataSource {
         ops.push({ type: DataOperationType.CHANGE, index: p + i } as DataChangeOperation);
       }
       this.notify(ops);
-      return;
+      return 'incremental';
     }
     if (oldMid === 0) {
       // Pure insert (prepend when p === 0 — the case scroll position must survive).
       this.notify([{ type: DataOperationType.ADD, index: p, count: newMid } as DataAddOperation]);
-      return;
+      return 'incremental';
     }
     if (newMid === 0) {
       this.notify([{ type: DataOperationType.DELETE, index: p, count: oldMid } as DataDeleteOperation]);
-      return;
+      return 'incremental';
     }
     // Insert + in-place changes in one notify. This is the NORMAL page case,
     // not a rare one: prepending an older page always mutates the old first
@@ -106,11 +112,12 @@ export class AlbumGroupDataSource implements IDataSource {
           count: added
         } as DataAddOperation);
         this.notify(ops);
-        return;
+        return 'incremental';
       }
     }
     // Genuinely mixed structural edit (e.g. a loadAround window replacement).
     this.notify([{ type: DataOperationType.RELOAD } as DataReloadOperation]);
+    return 'reload';
   }
 
   private notify(ops: DataOperation[]): void {

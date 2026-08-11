@@ -67,7 +67,8 @@ struct ChatSettingsPage {
   }
 
   private booleanValue(key: string): boolean {
-    return key === KEY_REDUCE_ANIM ? this.reduceAnim : this.sendByEnter;
+    if (key === KEY_REDUCE_ANIM) { return this.reduceAnim; }
+    return this.sendByEnter;
   }
 
   @Styles
@@ -289,6 +290,21 @@ struct ChatSettingsPage {
           }
           .width('100%').backgroundColor(CARD_BG).borderRadius(CARD_RADIUS);
 
+          Row({ space: 12 }) {
+            SymbolGlyph($r('sys.symbol.picture')).fontSize(20).fontColor([COLOR_PRIMARY]);
+            Text('聊天背景').fontSize(16).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
+            SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(16)
+              .fontColor([COLOR_TEXT_SECONDARY]);
+          }
+          .width('100%').height(52).padding({ left: 16, right: 12 })
+          .backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
+          .onClick((): void => {
+            router.pushUrl({ url: 'pages/main/ChatBackgroundPage' })
+              .catch((error: Error): void => {
+                console.error(`ChatSettings open background failed: ${error.message}`);
+              });
+          });
+
           Column() {
             this.chatListView();
           }.width('100%').backgroundColor(CARD_BG).borderRadius(CARD_RADIUS);
@@ -304,6 +320,7 @@ struct ChatSettingsPage {
           }
           .width('100%').backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
           .padding({ top: 4, bottom: 4 });
+
         }
         .width('100%')
         .padding({ left: 12, right: 12, top: 8, bottom: this.bottomSafe + 24 });

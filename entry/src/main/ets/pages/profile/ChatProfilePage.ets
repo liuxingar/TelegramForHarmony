@@ -16,7 +16,7 @@ import {
 import { ExpandableText } from './ExpandableText';
 import { publicLink } from '../../util/telegramLink';
 import {
-  createVideoChat, getGroupCall, startScheduledVideoChat
+  createVideoChat, endGroupCall, getGroupCall, startScheduledVideoChat
 } from '../../tdkit/GroupCallApi';
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
 
@@ -60,6 +60,7 @@ struct ChatProfilePage {
   @State isChannel: boolean = false;
   @State isMuted: boolean = false;
   @State canManageVideoChats: boolean = false;
+  @State canManageChat: boolean = false;
   @State liveGroupCallId: number = 0;
   @State creatingLive: boolean = false;
   @State members: MemberItem[] = [];
@@ -86,6 +87,7 @@ struct ChatProfilePage {
   private inviteLink: string = '';
   private pendingDraftText: string = '';
   private pendingJumpTo: number = 0;
+  private justJoined: boolean = false;
   private store: ChatProfileStore | null = null;
   private unsub: (() => void) | null = null;
   private tabScroller: Scroller = new Scroller();
@@ -220,6 +222,7 @@ struct ChatProfilePage {
     this.isChannel = s.isChannel;
     this.isMuted = s.isMuted;
     this.canManageVideoChats = s.canManageVideoChats;
+    this.canManageChat = s.canManageChat;
     this.liveGroupCallId = s.liveGroupCallId;
     this.members = s.members;
   }
@@ -235,7 +238,145 @@ struct ChatProfilePage {
     if (this.pendingJumpTo > 0) {
       params['jumpTo'] = this.pendingJumpTo;
     }
+    if (this.justJoined) {
+      params['showJoinedNotice'] = true;
+      params['joinedNoticeIsChannel'] = this.isChannel;
+      this.justJoined = false;
+    }
     router.pushUrl({ url: 'pages/chat/ChatPage', params: params });
+  }
+
+  private openSearchInChat(): void {
+    if (this.chatId === 0) { return; }
+    const params: Record<string, Object> = { 'chatId': this.chatId, 'startSearch': true };
+    router.pushUrl({ url: 'pages/chat/ChatPage', params });
+  }
+
+
+  private leaveCurrentChat(): void {
+    promptAction.showDialog({
+      title: this.isChannel ? '退出频道' : '退出群组',
+      message: `确定退出「${this.title}」吗？`,
+      buttons: [
+        { text: '取消', color: '#8E8E93' },
+        { text: '退出', color: '#E5484D' }
+      ]
+    }).then((result): void => {
+      if (result.index !== 1) { return; }
+      const req: TdRequest = { '@type': 'leaveChat' };
+      req['chat_id'] = this.chatId;
+      getTdClient().send(req).then((): void => {
+        promptAction.showToast({ message: '已退出', duration: 1500 });
+        router.back();
+      }).catch((error: TdError): void => {
+        console.error(`ChatProfilePage.leave failed: ${error.message}`);
+        promptAction.showToast({ message: '退出失败，请稍后重试', duration: 1800 });
+      });
+    }).catch((): void => {});
+  }
+
+  private boostChat(): void {
+    const req: TdRequest = { '@type': 'getChatBoostStatus' };
+    req['chat_id'] = this.chatId;
+    getTdClient().send(req).then((status: TdObject): void => {
+      const level = (status['level'] as number | undefined) ?? 0;
+      const count = (status['boost_count'] as number | undefined) ?? 0;
+      const next = (status['next_level_boost_count'] as number | undefined) ?? 0;
+      promptAction.showDialog({
+        title: '助力频道',
+        message: `当前等级 Lv.${level} · ${count} 次助力` +
+          (next > 0 ? `，升级还需 ${Math.max(0, next - count)} 次` : ''),
+        buttons: [
+          { text: '取消', color: '#8E8E93' },
+          { text: '助力', color: $r('app.color.primary') }
+        ]
+      }).then((result): void => {
+        if (result.index !== 1) { return; }
+        this.performBoost();
+      }).catch((): void => {});
+    }).catch((error: TdError): void => {
+      console.error(`ChatProfilePage.boostStatus failed: ${error.message}`);
+      promptAction.showToast({ message: '获取助力信息失败', duration: 1700 });
+    });
+  }
+
+  private performBoost(): void {
+    getTdClient().send({ '@type': 'getAvailableChatBoostSlots' } as TdRequest)
+      .then((slots: TdObject): void => {
+        const list = (slots['slots'] as TdObject[] | undefined) ?? [];
+        const usable = list.find((slot: TdObject): boolean =>
+          ((slot['currently_boosted_chat_id'] as number | undefined) ?? 0) !== this.chatId);
+        if (usable === undefined) {
+          promptAction.showToast({
+            message: '没有可用的助力名额（助力需要 Telegram Premium）', duration: 2200
+          });
+          return;
+        }
+        const req: TdRequest = { '@type': 'boostChat' };
+        req['chat_id'] = this.chatId;
+        req['slot_ids'] = [(usable['slot_id'] as number | undefined) ?? 0];
+        getTdClient().send(req).then((): void => {
+          promptAction.showToast({ message: '助力成功', duration: 1600 });
+        }).catch((error: TdError): void => {
+          console.error(`ChatProfilePage.boost failed: ${error.message}`);
+          promptAction.showToast({ message: '助力失败，请稍后重试', duration: 1800 });
+        });
+      }).catch((error: TdError): void => {
+        console.error(`ChatProfilePage.boostSlots failed: ${error.message}`);
+        promptAction.showToast({ message: '获取助力名额失败', duration: 1700 });
+      });
+  }
+
+  // TDLib's report flow is iterative: an empty option first, then the server
+  // returns the reason list; picking one either finishes or asks for text.
+  private reportChat(optionId: string): void {
+    const req: TdRequest = { '@type': 'reportChat' };
+    req['chat_id'] = this.chatId;
+    req['option_id'] = optionId;
+    req['message_ids'] = [];
+    req['text'] = '';
+    getTdClient().send(req, 15000).then((result: TdObject): void => {
+      const typeName = (result['@type'] as string | undefined) ?? '';
+      if (typeName === 'reportChatResultOk') {
+        promptAction.showToast({ message: '举报已提交', duration: 1700 });
+        return;
+      }
+      if (typeName === 'reportChatResultTextRequired') {
+        // Optional-comment step: submit without extra text.
+        const nextId = (result['option_id'] as string | undefined) ?? '';
+        if (((result['is_optional'] as boolean | undefined) ?? false) && nextId !== optionId) {
+          this.reportChat(nextId);
+        } else {
+          promptAction.showToast({ message: '该举报类型需要补充说明，暂不支持', duration: 2000 });
+        }
+        return;
+      }
+      if (typeName === 'reportChatResultOptionRequired') {
+        const options = (result['options'] as TdObject[] | undefined) ?? [];
+        if (options.length === 0) {
+          promptAction.showToast({ message: '当前不支持举报该会话', duration: 1800 });
+          return;
+        }
+        const shown = options.slice(0, 6);
+        promptAction.showActionMenu({
+          title: (result['title'] as string | undefined) ?? '选择举报原因',
+          buttons: shown.map((option: TdObject): promptAction.Button =>
+            ({ text: (option['text'] as string | undefined) ?? '', color: '#E5484D' } as promptAction.Button)) as
+            [promptAction.Button, promptAction.Button?, promptAction.Button?,
+              promptAction.Button?, promptAction.Button?, promptAction.Button?]
+        }).then((chosen): void => {
+          const option = shown[chosen.index];
+          if (option !== undefined) {
+            this.reportChat((option['id'] as string | undefined) ?? '');
+          }
+        }).catch((): void => {});
+        return;
+      }
+      promptAction.showToast({ message: '举报流程暂不支持该步骤', duration: 1800 });
+    }).catch((error: TdError): void => {
+      console.error(`ChatProfilePage.report failed: ${error.message}`);
+      promptAction.showToast({ message: '举报失败，请稍后重试', duration: 1800 });
+    });
   }
 
   private loadInvitePreview(): void {
@@ -307,6 +448,7 @@ struct ChatProfilePage {
         return;
       }
       this.membershipState = 'writable';
+      this.justJoined = true;
       promptAction.showToast({
         message: this.isChannel ? '已加入频道' : '已加入群组',
         duration: 1500
@@ -403,6 +545,22 @@ struct ChatProfilePage {
         }
       });
     }
+  }
+
+  private detailTabLabelWidth(label: string): number {
+    let width = 0;
+    for (let i = 0; i < label.length; i++) {
+      width += label.charCodeAt(i) > 127 ? 14 : 8;
+    }
+    return Math.max(14, width);
+  }
+
+  private detailTabBarWidth(): number {
+    let width = 16; // inner Row's left/right padding
+    for (const tab of this.visibleTabs()) {
+      width += this.detailTabLabelWidth(tab.label) + 26; // pill padding + 2vp gap
+    }
+    return Math.min(Math.max(58, width), Math.max(58, this.screenW - 16));
   }
 
   private selectTab(index: number): void {
@@ -523,8 +681,22 @@ struct ChatProfilePage {
 
   private createLiveMenu(): void {
     if (!this.canManageVideoChats || this.creatingLive) { return; }
+    // A live call already exists: admins can either join it or end it for
+    // everyone (endGroupCall), which plain "leave" never does.
     if (this.liveGroupCallId > 0) {
-      this.openExistingLive();
+      promptAction.showActionMenu({
+        title: '直播进行中',
+        buttons: [
+          { text: '进入直播', color: '#3390EC' },
+          { text: '结束直播（所有人）', color: '#E5484D' }
+        ]
+      }).then((result): void => {
+        if (result.index === 0) {
+          this.openExistingLive();
+        } else if (result.index === 1) {
+          this.confirmEndLive();
+        }
+      }).catch((): void => {});
       return;
     }
     promptAction.showActionMenu({
@@ -539,6 +711,28 @@ struct ChatProfilePage {
       } else if (result.index === 1) {
         this.createAndOpenLive(true);
       }
+    }).catch((): void => {});
+  }
+
+  private confirmEndLive(): void {
+    const groupCallId = this.liveGroupCallId;
+    if (groupCallId <= 0) { return; }
+    promptAction.showDialog({
+      title: '结束直播',
+      message: '直播将对所有参与者结束，无法恢复。',
+      buttons: [
+        { text: '取消', color: '#8E8E93' },
+        { text: '结束', color: '#E5484D' }
+      ]
+    }).then((result): void => {
+      if (result.index !== 1) { return; }
+      endGroupCall(getTdClient(), groupCallId).then((): void => {
+        this.liveGroupCallId = 0;
+        promptAction.showToast({ message: '直播已结束', duration: 1500 });
+      }).catch((error: TdError): void => {
+        console.error(`ChatProfilePage.endLive failed: ${error.message}`);
+        promptAction.showToast({ message: '结束直播失败，请重试', duration: 1700 });
+      });
     }).catch((): void => {});
   }
 
@@ -644,9 +838,7 @@ struct ChatProfilePage {
   liveButton() {
     Column({ space: 5 }) {
       SymbolGlyph($r('sys.symbol.camera')).fontSize(22).fontColor([COLOR_PRIMARY]);
-      Text(this.creatingLive
-        ? '处理中'
-        : (this.liveGroupCallId > 0 ? '进入直播' : '直播'))
+      Text(this.creatingLive ? '处理中' : '直播')
         .fontSize(12).fontColor(COLOR_PRIMARY);
     }
     .layoutWeight(1).height(62)
@@ -668,7 +860,11 @@ struct ChatProfilePage {
       Row() {
         this.circleButton('sys.symbol.chevron_left', () => { router.back(); });
         Blank().layoutWeight(1);
-        this.circleButton('sys.symbol.more', () => {});
+        // Top-right is the leave action; everything else lives in the
+        // actions-row 更多 menu.
+        this.circleButton('sys.symbol.arrow_right_and_square', () => {
+          if (this.chatId !== 0) { this.leaveCurrentChat(); }
+        });
       }.width('100%').padding({ left: 12, right: 12 });
       AvatarView({
         avatarPath: this.avatarPath, initials: this.initials,
@@ -688,17 +884,48 @@ struct ChatProfilePage {
   }
 
   @Builder
+  // Two fixed rows of at most four buttons each: primary actions on top,
+  // secondary/administrative ones below. Seven buttons never fit one row.
   actionsRow() {
-    Row({ space: 8 }) {
-      this.primaryActionButton();
-      if (this.chatId !== 0) {
-        this.muteButton();
-        this.actionButton('sys.symbol.magnifyingglass', '搜索', () => {});
-        if (this.canManageVideoChats) {
-          this.liveButton();
-        } else {
-          this.actionButton('sys.symbol.more', '更多', () => {});
+    Column({ space: 8 }) {
+      Row({ space: 8 }) {
+        // 发消息 is redundant — tapping back returns to the chat. The primary
+        // button only appears while joining is still the pending action.
+        if (this.membershipState !== 'writable') {
+          this.primaryActionButton();
         }
+        if (this.chatId !== 0) {
+          this.muteButton();
+          this.actionButton('sys.symbol.magnifyingglass', '搜索', () => { this.openSearchInChat(); });
+          if (this.canManageVideoChats) {
+            this.liveButton();
+          }
+        }
+      }.width('100%');
+      if (this.chatId !== 0) {
+        Row({ space: 8 }) {
+          if (!this.isChannel) {
+            this.actionButton('sys.symbol.paintpalette', '主题', () => {
+              const params: Record<string, Object> = { 'chatId': this.chatId };
+              router.pushUrl({ url: 'pages/main/ChatThemePage', params })
+                .catch((error: Error): void => {
+                  console.error(`ChatProfilePage.openTheme failed: ${error.message}`);
+                });
+            });
+          }
+          // Only creators / admins with real rights see the management entry.
+          if (this.canManageChat) {
+            this.actionButton('sys.symbol.gearshape', '管理', () => {
+              const params: Record<string, Object> = { 'chatId': this.chatId };
+              router.pushUrl({ url: 'pages/main/GroupAdminPage', params })
+                .catch((error: Error): void => {
+                  console.error(`ChatProfilePage.openAdmin failed: ${error.message}`);
+                });
+            });
+          }
+          this.actionButton('sys.symbol.bolt', '助力', () => { this.boostChat(); });
+          this.actionButton('sys.symbol.flag', '举报', () => { this.reportChat(''); });
+        }.width('100%');
       }
     }
     .width('100%').padding({ left: 12, right: 12, top: 14 });
@@ -828,9 +1055,11 @@ struct ChatProfilePage {
       });
     }
     .height(DETAIL_TAB_BAR_HEIGHT)
+    .width(this.detailTabBarWidth())
     .backgroundColor(CARD_BG)
     .borderRadius(DETAIL_TAB_BAR_HEIGHT / 2)
     .clip(true)
+    .alignSelf(ItemAlign.Center)
     .margin({ left: 8, right: 8, bottom: 6 });
   }
 

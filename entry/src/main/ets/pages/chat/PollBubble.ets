@@ -30,7 +30,7 @@ export struct PollBubble {
   }
 
   private onRevisionChanged(): void {
-    if (!this.pending) {
+    if (!this.submitting()) {
       this.resetDraft();
     }
   }
@@ -87,10 +87,16 @@ export struct PollBubble {
   }
 
   private interactive(): boolean {
-    if (this.unavailable() || this.pending || this.isClosed || this.expired()) {
+    if (this.unavailable() || this.submitting() || this.isClosed || this.expired()) {
       return false;
     }
     return !(this.isQuiz && this.hasVoted());
+  }
+
+  private submitting(): boolean {
+    return this.pending || this.options.some(
+      (option: PollOptionInfo): boolean => option.isBeingChosen
+    );
   }
 
   private resultsVisible(): boolean {
@@ -98,8 +104,15 @@ export struct PollBubble {
   }
 
   private selected(index: number): boolean {
-    if (this.allowMultiple && this.draftChanged) {
+    if (this.draftChanged) {
       return this.draftIds.indexOf(index) >= 0;
+    }
+    // MessageStore marks the submitted target set with isBeingChosen while
+    // TDLib is processing the request. Message rows are keyed by that mutable
+    // state and may be rebuilt, so the pending flag must itself render as the
+    // active selection instead of relying only on this component's local draft.
+    if (this.submitting()) {
+      return this.options[index]?.isBeingChosen ?? false;
     }
     return this.options[index]?.isChosen ?? false;
   }
@@ -110,7 +123,13 @@ export struct PollBubble {
     }
     if (!this.allowMultiple) {
       const wasChosen = this.options[index].isChosen;
-      this.onVote(this.messageId, wasChosen && !this.isQuiz ? [] : [index]);
+      const next = wasChosen && !this.isQuiz ? [] : [index];
+      // Give a single-choice poll immediate visual feedback. The authoritative
+      // update still comes from TDLib; on failure the revision watcher resets
+      // this draft to the server-backed option state.
+      this.draftIds = next;
+      this.draftChanged = true;
+      this.onVote(this.messageId, next);
       return;
     }
     const base = this.draftChanged ? this.draftIds.slice() : this.chosenIds();
@@ -178,13 +197,16 @@ export struct PollBubble {
 
   @Builder
   private optionRow(option: PollOptionInfo, index: number) {
-    Stack({ alignContent: Alignment.Start }) {
-      Row()
-        .width(this.resultsVisible() ? `${option.votePercentage}%` : '0%')
-        .height('100%')
-        .backgroundColor(this.optionFill(index))
-        .borderRadius(9)
-        .animation({ duration: 180, curve: Curve.EaseOut });
+    Stack({ alignContent: Alignment.BottomStart }) {
+      if (this.resultsVisible() && option.votePercentage > 0) {
+        Row()
+          .width(`${option.votePercentage}%`)
+          .height(3)
+          .backgroundColor(this.optionAccent(index))
+          .borderRadius(1.5)
+          .opacity(0.5)
+          .animation({ duration: 180, curve: Curve.EaseOut });
+      }
       Row({ space: 8 }) {
         Stack() {
           Circle({ width: 20, height: 20 })
@@ -202,7 +224,8 @@ export struct PollBubble {
           .fontSize(13.5)
           .fontWeight(this.selected(index) ? FontWeight.Medium : FontWeight.Regular)
           .fontColor(option.text.trim() !== '' ? COLOR_TEXT_PRIMARY : COLOR_TEXT_SECONDARY)
-          .maxLines(3)
+          .lineHeight(18)
+          .maxLines(2)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
         if (this.resultsVisible()) {
           Text(`${option.votePercentage}%`)
@@ -213,11 +236,12 @@ export struct PollBubble {
         }
       }
       .width('100%')
-      .padding({ left: 9, right: 9, top: 8, bottom: 8 });
+      .alignItems(VerticalAlign.Center)
+      .padding({ left: 9, right: 9, top: 7, bottom: 7 });
     }
     .width('100%')
-    .constraintSize({ minHeight: 38 })
-    .backgroundColor('#09000000')
+    .constraintSize({ minHeight: 40, maxHeight: 58 })
+    .backgroundColor(this.optionFill(index))
     .border({ width: 1, color: this.selected(index) ? this.optionAccent(index) : '#16000000' })
     .borderRadius(10)
     .clip(true)
@@ -258,7 +282,8 @@ export struct PollBubble {
           ForEach(this.options, (option: PollOptionInfo, index: number) => {
             this.optionRow(option, index);
           }, (option: PollOptionInfo, index: number) =>
-            `poll_option_${index}_${option.text}_${option.votePercentage}_${option.isChosen}`);
+            `poll_option_${index}_${option.text}_${option.votePercentage}` +
+              `_${option.isChosen}_${option.isBeingChosen}`);
         }.width('100%');
       } else {
         Row({ space: 7 }) {
@@ -309,20 +334,32 @@ export struct PollBubble {
         .borderRadius(9);
       }
 
-      Row() {
-        Text(this.voterText()).fontSize(10.5).fontColor(COLOR_TEXT_SECONDARY);
-        Blank();
-        if (this.pending) {
-          Row({ space: 5 }) {
-            LoadingProgress().width(13).height(13).color(COLOR_PRIMARY);
-            Text('正在提交').fontSize(10.5).fontColor(COLOR_PRIMARY);
-          }
-        } else if (this.errorText.trim() !== '') {
-          Text('提交失败，可重试').fontSize(10.5).fontColor('#D9514E');
+      if (this.errorText.trim() !== '') {
+        Row({ space: 6 }) {
+          SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+            .fontSize(14).fontColor(['#D9514E']);
+          Text(this.errorText)
+            .layoutWeight(1)
+            .fontSize(10.5).lineHeight(15).fontColor('#D9514E')
+            .maxLines(3).textOverflow({ overflow: TextOverflow.Ellipsis });
         }
+        .width('100%')
+        .alignItems(VerticalAlign.Top)
+        .padding({ right: 62, bottom: 10 });
+      } else {
+        Row() {
+          Text(this.voterText()).fontSize(10.5).fontColor(COLOR_TEXT_SECONDARY);
+          Blank();
+          if (this.submitting()) {
+            Row({ space: 5 }) {
+              LoadingProgress().width(13).height(13).color(COLOR_PRIMARY);
+              Text('正在提交').fontSize(10.5).fontColor(COLOR_PRIMARY);
+            }
+          }
+        }
+        .width('100%')
+        .padding({ right: 62, bottom: 10 });
       }
-      .width('100%')
-      .padding({ right: 62, bottom: 10 });
     }
     .width(Math.max(220, Math.min(278, this.maxWidth)))
     .alignItems(HorizontalAlign.Start)

@@ -48,6 +48,10 @@ export struct ChatListPage {
   @State searchOpening: boolean = false;
   private savedMessagesOpening: boolean = false;
   private folderLayoutPending: boolean = false;
+  // Keep the SDK-provided position locally so a position-only update can be
+  // reconciled just like a folder reorder. Reading the store directly from
+  // tabs() made both the "before" and "after" snapshots use the new value.
+  private mainListPosition: number = 0;
   private clockTimer: number = -1;
   private searchOpeningTimer: number = -1;
 
@@ -125,13 +129,17 @@ export struct ChatListPage {
     this.searchOpening = false;
     this.savedMessagesOpening = false;
     this.folders = getFolderStore().getFolders();
+    this.mainListPosition = getFolderStore().getMainChatListPosition();
     this.ensureFolderLoads(this.folders);
     this.refreshUnread();
     this.unsubFolders = getFolderStore().subscribe((f: FolderInfo[]) => {
       const previousTabs = this.tabs();
       const selectedKey = previousTabs[this.selectedIndex]?.key ?? 'main';
-      const foldersChanged = this.folderSignature(this.folders) !== this.folderSignature(f);
+      const nextMainListPosition = getFolderStore().getMainChatListPosition();
+      const foldersChanged = this.folderSignature(this.folders) !== this.folderSignature(f)
+        || this.mainListPosition !== nextMainListPosition;
       this.folders = f;
+      this.mainListPosition = nextMainListPosition;
       if (foldersChanged) {
         this.reconcileSelectedFolder(selectedKey, previousTabs);
       }
@@ -165,7 +173,8 @@ export struct ChatListPage {
     });
     const specs = this.tabs();
     const matchedIndex = specs.findIndex((spec: TabSpec): boolean => spec.key === selectedKey);
-    const nextIndex = matchedIndex >= 0 ? matchedIndex : 0;
+    const mainIndex = specs.findIndex((spec: TabSpec): boolean => spec.key === 'main');
+    const nextIndex = matchedIndex >= 0 ? matchedIndex : Math.max(0, mainIndex);
     // Preserve known frames by stable folder id. Tabs whose geometry did not
     // change may not emit onAreaChange again after an item is appended.
     this.tabXs = specs.map((spec: TabSpec): number => xByKey.get(spec.key) ?? 0);
@@ -236,10 +245,12 @@ export struct ChatListPage {
   }
 
   private tabs(): TabSpec[] {
-    const specs: TabSpec[] = [{ key: 'main', title: '所有' }];
+    const specs: TabSpec[] = [];
     for (const f of this.folders) {
       specs.push({ key: `folder:${f.id}`, title: f.title });
     }
+    const position = Math.max(0, Math.min(specs.length, this.mainListPosition));
+    specs.splice(position, 0, { key: 'main', title: '所有' });
     return specs;
   }
 
@@ -503,7 +514,7 @@ export struct ChatListPage {
           Row() {
             ForEach(this.tabs(), (spec: TabSpec, index: number) => {
               this.pill(spec, index);
-            }, (spec: TabSpec) => `${spec.key}_${spec.title}`);
+            }, (spec: TabSpec) => spec.key);
           }.padding({ left: 8, right: 8 }).height(FOLDER_BAR_HEIGHT);
         }
       }
@@ -516,10 +527,15 @@ export struct ChatListPage {
         this.ensureTabVisible(this.selectedIndex);
       });
     }
-    .backgroundColor($r('app.color.surface'))
+    // Frosted material: translucent tint + backdrop blur, same recipe as the
+    // bottom dock. The list scrolls underneath and shows through.
+    .backgroundColor($r('app.color.dock_glass'))
+    .backdropBlur(22)
     .borderRadius(FOLDER_BAR_HEIGHT / 2)
     .clip(true)
-    .margin({ left: 8, right: 8, bottom: 6 })
+    .border({ width: 0.5, color: $r('app.color.divider') })
+    .shadow({ radius: 12, color: '#1F000000', offsetX: 0, offsetY: 4 })
+    .margin({ left: 8, right: 8, top: 2 })
     .transition(
       TransitionEffect.OPACITY
         .combine(TransitionEffect.translate({ y: -4 }))
@@ -533,10 +549,8 @@ export struct ChatListPage {
   build() {
     Column() {
       this.topBar();
-      if (this.folders.length > 0) {
-        this.tabBar();
-      }
-      Tabs({ controller: this.controller }) {
+      Stack({ alignContent: Alignment.Top }) {
+        Tabs({ controller: this.controller }) {
         ForEach(this.tabs(), (spec: TabSpec) => {
           TabContent() {
             // TabContent centers a content-sized child, so a short chat list
@@ -545,13 +559,15 @@ export struct ChatListPage {
             // the body's layoutWeight(1) actually stretch.
             Column() {
               if (spec.key === 'main') {
-                MainTabBody();
+                MainTabBody({ reserveFolderBarSpace: this.folders.length > 0 });
               } else {
-                ChatListView({ listKey: spec.key });
+                ChatListView({
+                  listKey: spec.key, reserveFolderBarSpace: this.folders.length > 0
+                });
               }
             }.width('100%').height('100%')
           }
-        }, (spec: TabSpec) => `${spec.key}_${spec.title}`);
+        }, (spec: TabSpec) => spec.key);
       }
       .barHeight(0)
       .animationDuration(powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, FOLDER_SWITCH_DURATION))
@@ -588,8 +604,14 @@ export struct ChatListPage {
         }
         this.ensureTabVisible(index);
       })
-      .layoutWeight(1)
+      .width('100%').height('100%')
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM]);
+
+        if (this.folders.length > 0) {
+          this.tabBar();
+        }
+      }
+      .layoutWeight(1).width('100%');
     }
     .width('100%').height('100%')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])

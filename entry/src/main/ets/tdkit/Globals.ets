@@ -7,6 +7,14 @@ import { ChatEntry } from '../store/ChatEntry';
 import { FileService } from '../services/FileService';
 import { FolderStore } from '../store/FolderStore';
 import { UnreadCountStore } from '../store/UnreadCountStore';
+import { ChatThemeStore } from '../store/ChatThemeStore';
+import { AccentColorStore } from '../store/AccentColorStore';
+import { CallSession, setCallLibraryVersions } from '../services/CallSession';
+import { NativeCallMedia, nativeCallVersionsJson } from '../services/NativeCallMedia';
+import { NotificationService } from '../services/NotificationService';
+import { SystemNotificationPublisher } from '../services/SystemNotificationPublisher';
+import { registerMessageSyncWork } from '../services/MessageSyncWork';
+import { StoryStore } from '../store/StoryStore';
 import { common } from '@kit.AbilityKit';
 import { TdObject, TdRequest } from './TdTypes';
 import {
@@ -21,6 +29,12 @@ let chats: ChatStore | undefined = undefined;
 let files: FileService | undefined = undefined;
 let folders: FolderStore | undefined = undefined;
 let unread: UnreadCountStore | undefined = undefined;
+let chatThemes: ChatThemeStore | undefined = undefined;
+let accentColors: AccentColorStore | undefined = undefined;
+let callSession: CallSession | undefined = undefined;
+let storyStore: StoryStore | undefined = undefined;
+let notifications: NotificationService | undefined = undefined;
+let appBundleName: string = '';
 let baseFilesDir: string = '';
 let activeTdFilesDirectory: string = '';
 let switchInFlight: Promise<void> | null = null;
@@ -32,6 +46,7 @@ export function initTdKit(context: common.Context): void {
     return;
   }
   baseFilesDir = context.filesDir;
+  appBundleName = context.applicationInfo.name;
   accountRegistry.init(context);
   createRuntime(accountRegistry.activeSlotId());
 }
@@ -47,6 +62,23 @@ function createRuntime(slotId: string): void {
   files = new FileService(client, chats);
   folders = new FolderStore(client);
   unread = new UnreadCountStore(client);
+  chatThemes = new ChatThemeStore(client);
+  accentColors = new AccentColorStore(client);
+  try {
+    setCallLibraryVersions(JSON.parse(nativeCallVersionsJson()) as string[]);
+  } catch (e) {
+    console.error('call versions parse failed, using fallback list');
+  }
+  callSession = new CallSession(client, users, new NativeCallMedia());
+  storyStore = new StoryStore(client);
+  // 本地通知：应用后台但进程存活时，新消息/来电经系统通知触达。
+  if (notifications !== undefined) {
+    notifications.close();
+  }
+  notifications = new NotificationService(
+    client, chats, new SystemNotificationPublisher(appBundleName, 'EntryAbility'),
+    (): boolean => AppStorage.get<boolean>('appIsForeground') ?? true);
+  notifications.attachCallSession(callSession);
   const fileService = files;
   const chatStore = chats;
   // Request avatars for EVERY cached chat, not just the main list — otherwise
@@ -63,6 +95,9 @@ function createRuntime(slotId: string): void {
   runtimeAuth.onStageChange((stage: AuthStage): void => {
     if (stage === AuthStage.Ready && client === runtimeClient && auth === runtimeAuth) {
       runtimeReady = true;
+      registerMessageSyncWork(appBundleName);
+      notifications!.enable();
+      storyStore!.open();
       applyDesiredOnlineState(runtimeClient);
       refreshActiveAccountSummary(runtimeClient);
     } else if (client === runtimeClient && auth === runtimeAuth && stage !== AuthStage.Init) {
@@ -381,4 +416,31 @@ export function getUnreadCountStore(): UnreadCountStore {
 
 export function getUserStore(): UserStore {
   return users!;
+}
+
+export function getChatThemeStore(): ChatThemeStore {
+  return chatThemes!;
+}
+
+export function getAccentColorStore(): AccentColorStore {
+  return accentColors!;
+}
+
+export function getCallSession(): CallSession {
+  return callSession!;
+}
+
+export function getStoryStore(): StoryStore {
+  return storyStore!;
+}
+
+// 供无 UI 上下文的服务（后台任务申请等）使用；EntryAbility 启动时写入。
+let uiAbilityContext: common.UIAbilityContext | null = null;
+
+export function setUiAbilityContext(context: common.UIAbilityContext): void {
+  uiAbilityContext = context;
+}
+
+export function getUiAbilityContext(): common.UIAbilityContext | null {
+  return uiAbilityContext;
 }

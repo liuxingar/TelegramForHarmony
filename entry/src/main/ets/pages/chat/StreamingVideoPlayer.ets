@@ -8,7 +8,9 @@ import {
   OnVideoSizeChangedListener
 } from '@ohos/ijkplayer';
 import { audio } from '@kit.AudioKit';
-import { getTdClient } from '../../tdkit/Globals';
+import { getTdClient, getUiAbilityContext } from '../../tdkit/Globals';
+import { mediaPlaybackKeepAlive } from '../../services/MediaPlaybackKeepAlive';
+import { KEY_BG_PLAY_VIDEO } from '../../store/AppSettings';
 import { VideoRangeServer } from '../../services/VideoRangeServer';
 import { VideoStreamSession } from '../../services/VideoStreamSession';
 
@@ -100,7 +102,7 @@ export struct StreamingVideoPlayer {
   @State downloadSpeed: number = 0;
   private lastBufferedBytes: number = 0;
   private lastSpeedSampleMs: number = 0;
-  @State isPlaying: boolean = false;
+  @State @Watch('onPlayingChanged') isPlaying: boolean = false;
   @State currentTimeMs: number = 0;
   @State durationMs: number = 0;
   @State dragging: boolean = false;
@@ -129,7 +131,21 @@ export struct StreamingVideoPlayer {
 
   aboutToDisappear(): void {
     this.active = false;
+    mediaPlaybackKeepAlive.release('video');
     this.release();
+  }
+
+  // 播放状态变化时同步"视频后台播放"保活（开关关闭则不挂任务，
+  // 切后台由系统正常挂起）。
+  onPlayingChanged(): void {
+    if (this.isPlaying && (AppStorage.get<boolean>(KEY_BG_PLAY_VIDEO) ?? false)) {
+      const context = getUiAbilityContext();
+      if (context !== null) {
+        mediaPlaybackKeepAlive.acquire(context, 'video');
+      }
+      return;
+    }
+    mediaPlaybackKeepAlive.release('video');
   }
 
   // Pause when a headset (wired or Bluetooth) disconnects, per platform convention.

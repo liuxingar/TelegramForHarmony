@@ -25,6 +25,8 @@ export struct TgsStickerView {
   @Prop boxWidth: number = 160;
   @Prop boxHeight: number = 160;
   @Prop powerCategory: string = 'sticker';
+  // 播一次并定格在最后一帧（骰子/老虎机结果动画的官方语义），不循环。
+  @Prop playOnce: boolean = false;
   onFailed: () => void = (): void => {};
   @StorageProp(KEY_POWER_ACTIVE) @Watch('onPowerChanged') powerSaving: boolean = false;
   @StorageProp(KEY_POWER_STICKERS) @Watch('onPowerChanged') stickersEnabled: boolean = true;
@@ -113,7 +115,7 @@ export struct TgsStickerView {
       this.anim = lottie.loadAnimation({
         container: this.ctx,
         renderer: 'canvas', // the only supported renderer
-        loop: this.powerCategory === 'sticker' ? this.stickerLoop : true,
+        loop: this.playOnce ? false : (this.powerCategory === 'sticker' ? this.stickerLoop : true),
         autoplay: true,
         animationData: JSON.parse(json),
         contentMode: 'Contain'

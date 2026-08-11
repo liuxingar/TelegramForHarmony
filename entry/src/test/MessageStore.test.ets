@@ -272,6 +272,42 @@ export default function messageStoreTest() {
       expect(ids(store.getMessages()).join(',')).assertEqual('10,20,30');
       expect(store.getInitialHistoryState()).assertEqual('ready');
     });
+    it('sole_local_join_notice_is_injected_and_read', 0, async () => {
+      const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
+      store.open();
+      let extra = '';
+      for (const json of b.sent) {
+        const request = JSON.parse(json) as TdObject;
+        if (request['@type'] === 'getChat') { extra = extraOf(json); }
+      }
+      const sender: TdObject = { '@type': 'messageSenderUser' };
+      sender['user_id'] = 7;
+      const content: TdObject = { '@type': 'messageChatJoinByLink' };
+      const join: TdObject = { '@type': 'message' };
+      join['id'] = 100;
+      join['chat_id'] = 5;
+      join['sender_id'] = sender;
+      join['is_outgoing'] = true;
+      join['date'] = 100;
+      join['content'] = content;
+      const chat: TdObject = { '@type': 'chat' };
+      chat['id'] = 5;
+      chat['unread_count'] = 1;
+      chat['last_read_inbox_message_id'] = 90;
+      chat['last_message'] = join;
+      chat['@extra'] = extra;
+      b.onReceive(JSON.stringify(chat));
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      feedHistory(b, []); // TDLib omits the LOCAL service message from history.
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      expect(ids(store.getMessages()).join(',')).assertEqual('100');
+      expect(store.getMessages()[0].placeholderLabel).assertEqual('您已加入此群组');
+      const view = b.sent.map((json: string): TdObject => JSON.parse(json) as TdObject)
+        .find((request: TdObject): boolean => request['@type'] === 'viewMessages');
+      expect(view !== undefined).assertTrue();
+      expect(((view!['message_ids'] as number[] | undefined) ?? []).join(',')).assertEqual('100');
+      expect(view!['force_read']).assertEqual(true);
+    });
     it('empty_history_is_ready_and_stops_older_paging', 0, async () => {
       const arr = setup(5, 2); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
       store.open();
@@ -329,6 +365,50 @@ export default function messageStoreTest() {
       const atEnd = requestCount(b, 'getChatHistory');
       expect(store.loadOlder()).assertFalse();
       expect(requestCount(b, 'getChatHistory')).assertEqual(atEnd);
+    });
+    it('older_page_merges_without_duplicates_and_stays_sorted', 0, async () => {
+      const arr = setup(5, 2); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
+      store.open();
+      feedChat(b, 5);
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      feedHistory(b, [textMessage(30, 5, false, 'c'), textMessage(20, 5, false, 'b')]);
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      expect(store.loadOlder()).assertTrue();
+      // TDLib pages may overlap at the seam: the anchor message returns again.
+      feedHistory(b, [textMessage(20, 5, false, 'b'), textMessage(10, 5, false, 'a')]);
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      expect(ids(store.getMessages()).join(',')).assertEqual('10,20,30');
+    });
+    it('sender_name_backfill_publishes_once_not_per_message', 0, async () => {
+      const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
+      store.open();
+      feedChat(b, 5);
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      const msgs: TdObject[] = [];
+      for (let i = 5; i >= 1; i--) {
+        const m = textMessage(i * 10, 5, false, `m${i}`);
+        const sender: TdObject = { '@type': 'messageSenderUser' };
+        sender['user_id'] = 42;
+        m['sender_id'] = sender;
+        msgs.push(m);
+      }
+      feedHistory(b, msgs);
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      let notifies = 0;
+      const unsub = store.subscribe((): void => { notifies++; });
+      const baseline = notifies;
+      const user: TdObject = { '@type': 'user' };
+      user['id'] = 42; user['first_name'] = 'Bob';
+      const upd: TdObject = { '@type': 'updateUser' };
+      upd['user'] = user;
+      b.onReceive(JSON.stringify(upd));
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      const named = store.getMessages()
+        .filter((m: MessageEntry): boolean => m.senderName === 'Bob').length;
+      expect(named).assertEqual(5);
+      // One coalesced publish for the whole backfill, not one per message.
+      expect(notifies - baseline).assertEqual(1);
+      unsub();
     });
     it('new_message_appends', 0, () => {
       const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
@@ -562,6 +642,18 @@ export default function messageStoreTest() {
       expect((voteRequests[0]['option_ids'] as number[])[0]).assertEqual(1);
       expect(store.getMessages()[0].pollVotePending).assertTrue();
 
+      // TDLib can publish an intermediate updatePoll with is_being_chosen
+      // before setPollAnswer resolves. Keep that option visibly pending and
+      // block a second answer until the authoritative result arrives.
+      const pendingPoll = pollObject();
+      const pendingOptions = pendingPoll['options'] as TdObject[];
+      pendingOptions[1]['is_being_chosen'] = true;
+      const pendingUpdate: TdObject = { '@type': 'updatePoll' };
+      pendingUpdate['poll'] = pendingPoll;
+      b.onReceive(JSON.stringify(pendingUpdate));
+      expect(store.getMessages()[0].pollVotePending).assertTrue();
+      expect(store.getMessages()[0].pollOptions[1].isBeingChosen).assertTrue();
+
       const ok: TdObject = { '@type': 'ok' };
       ok['@extra'] = voteRequests[0]['@extra'];
       b.onReceive(JSON.stringify(ok));
@@ -578,6 +670,26 @@ export default function messageStoreTest() {
       expect(store.getMessages()[0].pollOptions[1].votePercentage).assertEqual(100);
       expect(store.getMessages()[0].pollOptions[1].isChosen).assertTrue();
     });
+    it('poll_member_restriction_rolls_back_and_explains_subscriber_rule', 0, async () => {
+      const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
+      store.open();
+      pushNewMessage(b, pollMessage(88, 5));
+      let callbackError = '';
+      store.votePoll(88, [0], (_ok: boolean, error: string): void => {
+        callbackError = error;
+      });
+      expect(store.getMessages()[0].pollVotePending).assertTrue();
+      feedRequestError(b, 'setPollAnswer', 406, 'POLL_MEMBER_RESTRICTED');
+      await new Promise<void>((resolve: (value: undefined) => void) =>
+        setTimeout(() => resolve(undefined), 0));
+      const updated = store.getMessages()[0];
+      expect(updated.pollVotePending).assertFalse();
+      expect(updated.pollOptions[0].isChosen).assertFalse();
+      expect(updated.pollVoteError).assertEqual(
+        '该投票仅限符合条件的订阅成员参与（加入需满 24 小时）'
+      );
+      expect(callbackError).assertEqual(updated.pollVoteError);
+    });
     it('send_optimistically_adds_and_requests', 0, async () => {
       const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
       store.open();
@@ -585,6 +697,110 @@ export default function messageStoreTest() {
       store.send('hello');
       const sentTypes = b.sent.slice(before).map((s: string) => (JSON.parse(s) as TdObject)['@type']);
       expect(sentTypes.includes('sendMessage')).assertTrue();
+    });
+    it('edit_text_sends_request_and_applies_result', 0, async () => {
+      const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
+      store.open();
+      feedChat(b, 5);
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      const original = textMessage(90, 5, true, 'old text');
+      feedHistory(b, [original]);
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      const before = b.sent.length;
+      const pending = store.editTextAsync(90, 'new text');
+      const sent = b.sent.slice(before)
+        .map((s: string): TdObject => JSON.parse(s) as TdObject)
+        .find((o: TdObject): boolean => o['@type'] === 'editMessageText');
+      expect(sent !== undefined).assertTrue();
+      expect(sent?.['message_id'] as number).assertEqual(90);
+      const edited = textMessage(90, 5, true, 'new text');
+      edited['edit_date'] = 200;
+      edited['@extra'] = (sent?.['@extra'] as string | undefined) ?? '';
+      b.onReceive(JSON.stringify(edited));
+      await pending;
+      expect(store.getMessages()[0].text).assertEqual('new text');
+      expect(store.getMessages()[0].editDate).assertEqual(200);
+    });
+    it('edit_caption_sends_request_and_applies_result', 0, async () => {
+      const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
+      store.open();
+      feedChat(b, 5);
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      feedHistory(b, [videoMessage(91, 5, 300, 301)]);
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      const before = b.sent.length;
+      const pending = store.editCaptionAsync(91, 'new caption');
+      const sent = b.sent.slice(before)
+        .map((s: string): TdObject => JSON.parse(s) as TdObject)
+        .find((o: TdObject): boolean => o['@type'] === 'editMessageCaption');
+      expect(sent !== undefined).assertTrue();
+      expect(sent?.['message_id'] as number).assertEqual(91);
+      const edited = videoMessage(91, 5, 300, 301);
+      const cap: TdObject = { '@type': 'formattedText' }; cap['text'] = 'new caption';
+      (edited['content'] as TdObject)['caption'] = cap;
+      edited['edit_date'] = 300;
+      edited['@extra'] = (sent?.['@extra'] as string | undefined) ?? '';
+      b.onReceive(JSON.stringify(edited));
+      await pending;
+      expect(store.getMessages()[0].text).assertEqual('new caption');
+    });
+    it('send_poll_regular_and_quiz', 0, () => {
+      const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
+      store.open();
+      store.sendPoll('喝什么', ['茶', '咖啡'], true, false, 0);
+      let req = b.sent.map((json: string): TdObject => JSON.parse(json) as TdObject)
+        .filter((o: TdObject): boolean => o['@type'] === 'sendMessage').pop();
+      expect(req !== undefined).assertTrue();
+      let content = req!['input_message_content'] as TdObject;
+      expect(content['@type']).assertEqual('inputMessagePoll');
+      expect(((content['question'] as TdObject)['text'] as string)).assertEqual('喝什么');
+      expect((content['options'] as TdObject[])
+        .map((o: TdObject): string => (o['text'] as string | undefined) ?? '').join(','))
+        .assertEqual('茶,咖啡');
+      expect(content['is_anonymous']).assertEqual(true);
+      expect((content['type'] as TdObject)['@type']).assertEqual('pollTypeRegular');
+      store.sendPoll('1+1=?', ['2', '3'], false, true, 0);
+      req = b.sent.map((json: string): TdObject => JSON.parse(json) as TdObject)
+        .filter((o: TdObject): boolean => o['@type'] === 'sendMessage').pop();
+      content = req!['input_message_content'] as TdObject;
+      const quizType = content['type'] as TdObject;
+      expect(quizType['@type']).assertEqual('pollTypeQuiz');
+      expect(quizType['correct_option_id']).assertEqual(0);
+      expect(content['is_anonymous']).assertEqual(false);
+    });
+    it('send_location_contact_audio_dice', 0, () => {
+      const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
+      store.open();
+      const lastContent = (): TdObject => {
+        const req = b.sent.map((json: string): TdObject => JSON.parse(json) as TdObject)
+          .filter((o: TdObject): boolean => o['@type'] === 'sendMessage').pop();
+        return req!['input_message_content'] as TdObject;
+      };
+      store.sendLocation(31.23, 121.47);
+      let content = lastContent();
+      expect(content['@type']).assertEqual('inputMessageLocation');
+      const location = content['location'] as TdObject;
+      expect(location['latitude']).assertEqual(31.23);
+      expect(location['longitude']).assertEqual(121.47);
+      store.sendContact('8613800138000', '张', '三', 42);
+      content = lastContent();
+      expect(content['@type']).assertEqual('inputMessageContact');
+      const contact = content['contact'] as TdObject;
+      expect(contact['phone_number']).assertEqual('8613800138000');
+      expect(contact['first_name']).assertEqual('张');
+      expect(contact['user_id']).assertEqual(42);
+      store.sendAudio('/cache/a.mp3', '好歌');
+      content = lastContent();
+      expect(content['@type']).assertEqual('inputMessageAudio');
+      // 新版 td_api：audio 字段是 inputAudio 包装，内部才是 InputFile。
+      const audioWrapper = content['audio'] as TdObject;
+      expect(audioWrapper['@type']).assertEqual('inputAudio');
+      expect(((audioWrapper['audio'] as TdObject)['path'] as string)).assertEqual('/cache/a.mp3');
+      expect(((content['caption'] as TdObject)['text'] as string)).assertEqual('好歌');
+      store.sendDice('🎯');
+      content = lastContent();
+      expect(content['@type']).assertEqual('inputMessageDice');
+      expect(content['emoji']).assertEqual('🎯');
     });
     it('close_unsubscribes', 0, () => {
       const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;

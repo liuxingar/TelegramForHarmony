@@ -1,17 +1,28 @@
-import { router, promptAction } from '@kit.ArkUI';
+import { promptAction, router } from '@kit.ArkUI';
 import { TdError } from '../../tdkit/TdTypes';
 import { getFolderStore } from '../../tdkit/Globals';
 import { FolderInfo } from '../../store/FolderStore';
-import { FolderData, getFolder, deleteFolder, reorderFolders, folderChatCount } from '../../store/FolderApi';
+import {
+  FolderChatSummary, FolderData, FolderLimits, RecommendedFolder,
+  deleteFolder, folderChatCount, getFolder, getFolderChatsToLeave,
+  getFolderChatSummaries, getFolderLimits, getRecommendedFolders,
+  reorderFolders, saveFolder, setFolderTagsEnabled
+} from '../../store/FolderApi';
 import { FolderEditParams } from './FolderEditPage';
-import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import { AvatarView } from '../chatlist/AvatarView';
+import {
+  KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration
+} from '../../store/AppSettings';
+import { folderColor, folderSymbol } from '../../util/FolderVisuals';
+import {
+  COLOR_DIVIDER, COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE,
+  COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
+} from '../../util/theme';
 
 const CARD_RADIUS: number = 14;
-const DANGER: string = '#E53935';
+const DANGER: string = '#E64646';
+const ROW_HEIGHT: number = 66;
 
-// 聊天文件夹: the folder list behind the chat-list tabs. Reordering is done with
-// 上移/下移 rather than drag handles — the same reorderChatFolders call, without
-// a drag gesture fighting the list's scroll.
 @Entry
 @Component
 struct ChatFoldersPage {
@@ -19,169 +30,502 @@ struct ChatFoldersPage {
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @State folders: FolderInfo[] = [];
   @State counts: Map<number, number> = new Map();
-  private unsub: (() => void) | null = null;
+  @State loading: boolean = true;
+  @State loadError: boolean = false;
+  @State tagsEnabled: boolean = false;
+  @State operationKey: string = '';
+  @State recommendations: RecommendedFolder[] = [];
+  @State recommendationState: string = 'loading';
+  @State limits: FolderLimits = { folderCount: 10, chosenChatCount: 100 };
+  @State deleteSheetOpen: boolean = false;
+  @State deleteTargetId: number = 0;
+  @State deleteTargetTitle: string = '';
+  @State leaveChoices: FolderChatSummary[] = [];
+  @State leaveSelected: number[] = [];
+  private unsubscribe: (() => void) | null = null;
+  private active: boolean = false;
+  private initialTimer: number = -1;
+  private countEpoch: number = 0;
+
+  @Styles
+  pressNormal() {
+    .opacity(1).scale({ x: 1, y: 1 }).backgroundColor(Color.Transparent)
+  }
+
+  @Styles
+  pressDown() {
+    .opacity(0.7).scale({ x: 0.97, y: 0.97 }).backgroundColor($r('app.color.surface_alt'))
+  }
 
   aboutToAppear(): void {
-    this.unsub = getFolderStore().subscribe((list: FolderInfo[]) => {
-      this.folders = list;
-      for (const f of list) {
-        this.loadCount(f.id);
+    this.active = true;
+    if (this.unsubscribe !== null) { this.unsubscribe(); }
+    const store = getFolderStore();
+    this.folders = store.getFolders();
+    this.tagsEnabled = store.areTagsEnabled();
+    this.loading = !store.isReady();
+    this.loadError = false;
+    this.unsubscribe = store.subscribe((folders: FolderInfo[]): void => {
+      if (!this.active) { return; }
+      this.folders = folders;
+      this.tagsEnabled = store.areTagsEnabled();
+      if (store.isReady()) {
+        this.loading = false;
+        this.loadError = false;
+        this.clearInitialTimer();
       }
+      this.refreshCounts(folders);
+    });
+    if (!store.isReady()) { this.armInitialTimer(); }
+    this.loadRecommendations();
+    getFolderLimits().then((limits: FolderLimits): void => {
+      if (this.active) { this.limits = limits; }
     });
   }
 
   aboutToDisappear(): void {
-    if (this.unsub !== null) {
-      this.unsub();
-      this.unsub = null;
+    this.active = false;
+    this.clearInitialTimer();
+    this.countEpoch++;
+    if (this.unsubscribe !== null) { this.unsubscribe(); this.unsubscribe = null; }
+  }
+
+  private clearInitialTimer(): void {
+    if (this.initialTimer !== -1) { clearTimeout(this.initialTimer); this.initialTimer = -1; }
+  }
+
+  private armInitialTimer(): void {
+    this.clearInitialTimer();
+    this.initialTimer = setTimeout((): void => {
+      this.initialTimer = -1;
+      if (this.active && !getFolderStore().isReady()) {
+        this.loading = false;
+        this.loadError = true;
+      }
+    }, 4000);
+  }
+
+  private retryInitial(): void {
+    if (getFolderStore().isReady()) {
+      this.loading = false; this.loadError = false; this.folders = getFolderStore().getFolders();
+      return;
+    }
+    this.loading = true;
+    this.loadError = false;
+    this.armInitialTimer();
+  }
+
+  private refreshCounts(folders: FolderInfo[]): void {
+    const epoch = ++this.countEpoch;
+    const ids = folders.map((folder: FolderInfo): number => folder.id);
+    const clean = new Map<number, number>();
+    this.counts.forEach((value: number, id: number): void => {
+      if (ids.indexOf(id) >= 0) { clean.set(id, value); }
+    });
+    this.counts = clean;
+    for (const folder of folders) {
+      getFolder(folder.id).then((data: FolderData): Promise<number> => folderChatCount(data))
+        .then((count: number): void => {
+          if (!this.active || epoch !== this.countEpoch) { return; }
+          const next = new Map(this.counts);
+          next.set(folder.id, count);
+          this.counts = next;
+        }).catch((error: TdError): void => {
+          console.warn(`ChatFoldersPage.count(${folder.id}) failed: ${error.message}`);
+        });
     }
   }
 
-  private loadCount(id: number): void {
-    getFolder(id).then((f: FolderData) => folderChatCount(f)).then((n: number) => {
-      const next: Map<number, number> = new Map(this.counts);
-      next.set(id, n);
-      this.counts = next; // new map — @State only re-renders on assignment
-    }).catch((e: TdError) => {
-      console.error(`ChatFoldersPage.count(${id}) failed: ${e.message}`);
+  private loadRecommendations(): void {
+    this.recommendationState = 'loading';
+    getRecommendedFolders().then((rows: RecommendedFolder[]): void => {
+      if (!this.active) { return; }
+      this.recommendations = rows;
+      this.recommendationState = rows.length > 0 ? 'ready' : 'empty';
+    }).catch((error: TdError): void => {
+      if (!this.active) { return; }
+      this.recommendationState = 'error';
+      console.warn(`ChatFoldersPage.recommendations failed: ${error.message}`);
     });
   }
 
   private countLabel(id: number): string {
-    const n = this.counts.get(id);
-    return n === undefined ? '' : `${n} 个聊天`;
+    const value = this.counts.get(id);
+    return value === undefined ? '正在统计…' : `约 ${value} 个聊天`;
   }
 
-  private edit(id: number): void {
+  private openEditor(id: number): void {
+    if (this.operationKey !== '') { return; }
     const params: FolderEditParams = { folderId: id };
     router.pushUrl({ url: 'pages/main/FolderEditPage', params });
   }
 
-  private move(index: number, delta: number): void {
-    const target = index + delta;
-    if (target < 0 || target >= this.folders.length) {
-      return;
-    }
-    const next: FolderInfo[] = [...this.folders];
-    const moved = next[index];
-    next[index] = next[target];
-    next[target] = moved;
-    this.folders = next; // optimistic; updateChatFolders will confirm
-    reorderFolders(next.map((f: FolderInfo) => f.id)).catch((e: TdError) => {
-      console.error(`ChatFoldersPage.reorder failed: ${e.message}`);
-      promptAction.showToast({ message: '排序失败，请重试', duration: 1500 });
+  private moveFolder(from: number, to: number): void {
+    if (this.operationKey !== '' || from === to || from < 0 || to < 0 ||
+      from >= this.folders.length || to >= this.folders.length) { return; }
+    const previous = this.folders.slice();
+    const next = this.folders.slice();
+    const moved = next.splice(from, 1)[0];
+    next.splice(to, 0, moved);
+    this.folders = next;
+    this.operationKey = 'reorder';
+    reorderFolders(next.map((folder: FolderInfo): number => folder.id),
+      getFolderStore().getMainChatListPosition()).then((): void => {
+      if (this.active) { this.operationKey = ''; }
+    }).catch((error: TdError): void => {
+      if (!this.active) { return; }
+      this.operationKey = '';
+      this.folders = previous;
+      getFolderStore().applyLocalOrder(previous.map((folder: FolderInfo): number => folder.id),
+        getFolderStore().getMainChatListPosition());
+      promptAction.showToast({ message: '排序失败，已恢复原顺序', duration: 1800 });
+      console.error(`ChatFoldersPage.reorder failed: ${error.message}`);
     });
   }
 
-  private confirmDelete(f: FolderInfo): void {
+  private toggleTags(next: boolean): void {
+    if (this.operationKey !== '') { return; }
+    const previous = this.tagsEnabled;
+    this.tagsEnabled = next;
+    this.operationKey = 'tags';
+    setFolderTagsEnabled(next).then((): void => {
+      if (this.active) { this.operationKey = ''; }
+    }).catch((error: TdError): void => {
+      if (!this.active) { return; }
+      this.tagsEnabled = previous;
+      this.operationKey = '';
+      promptAction.showToast({ message: '文件夹标签设置失败', duration: 1800 });
+      console.error(`ChatFoldersPage.tags failed: ${error.message}`);
+    });
+  }
+
+  private prepareDelete(folder: FolderInfo): void {
+    if (this.operationKey !== '') { return; }
+    this.operationKey = `delete_prepare_${folder.id}`;
+    getFolderChatsToLeave(folder.id).then((ids: number[]): Promise<FolderChatSummary[]> => {
+      if (ids.length === 0) { return Promise.resolve([]); }
+      return getFolderChatSummaries(ids);
+    }).then((rows: FolderChatSummary[]): void => {
+      if (!this.active) { return; }
+      this.operationKey = '';
+      if (rows.length === 0) {
+        this.confirmSimpleDelete(folder);
+      } else {
+        this.deleteTargetId = folder.id;
+        this.deleteTargetTitle = folder.title;
+        this.leaveChoices = rows;
+        this.leaveSelected = [];
+        this.deleteSheetOpen = true;
+      }
+    }).catch((error: TdError): void => {
+      if (!this.active) { return; }
+      this.operationKey = '';
+      // Failure to calculate optional leave choices must not make the folder
+      // impossible to remove; default to keeping all chats.
+      console.warn(`ChatFoldersPage.getChatsToLeave failed: ${error.message}`);
+      this.confirmSimpleDelete(folder);
+    });
+  }
+
+  private confirmSimpleDelete(folder: FolderInfo): void {
     promptAction.showDialog({
       title: '删除文件夹',
-      message: `确定要删除「${f.title}」吗？文件夹里的聊天不会被删除。`,
+      message: `确定删除「${folder.title}」吗？聊天本身会保留。`,
       buttons: [
         { text: '取消', color: COLOR_TEXT_SECONDARY as string },
         { text: '删除', color: DANGER }
       ]
-    }).then((res: promptAction.ShowDialogSuccessResponse) => {
-      if (res.index !== 1) {
-        return;
-      }
-      deleteFolder(f.id).then(() => {
-        promptAction.showToast({ message: '文件夹已删除', duration: 1500 });
-      }).catch((e: TdError) => {
-        console.error(`ChatFoldersPage.deleteFolder failed: ${e.message}`);
-        promptAction.showToast({ message: '删除失败，请重试', duration: 1500 });
-      });
-    }).catch((e: Object) => {
-      console.error(`ChatFoldersPage.showDialog failed: ${JSON.stringify(e)}`);
+    }).then((result: promptAction.ShowDialogSuccessResponse): void => {
+      if (result.index === 1) { this.deleteNow(folder.id, []); }
+    }).catch((): void => {});
+  }
+
+  private toggleLeave(id: number): void {
+    this.leaveSelected = this.leaveSelected.indexOf(id) >= 0
+      ? this.leaveSelected.filter((value: number): boolean => value !== id)
+      : [...this.leaveSelected, id];
+  }
+
+  private deleteNow(id: number, leaveIds: number[]): void {
+    if (this.operationKey !== '') { return; }
+    this.operationKey = `delete_${id}`;
+    deleteFolder(id, leaveIds).then((): void => {
+      if (!this.active) { return; }
+      this.operationKey = '';
+      this.deleteSheetOpen = false;
+      promptAction.showToast({ message: '文件夹已删除', duration: 1500 });
+    }).catch((error: TdError): void => {
+      if (!this.active) { return; }
+      this.operationKey = '';
+      promptAction.showToast({ message: '删除失败，请重试', duration: 1800 });
+      console.error(`ChatFoldersPage.delete failed: ${error.message}`);
+    });
+  }
+
+  private addRecommendation(index: number): void {
+    if (this.operationKey !== '' || index < 0 || index >= this.recommendations.length ||
+      this.folders.length >= this.limits.folderCount) { return; }
+    const template = this.recommendations[index].folder;
+    this.operationKey = `recommend_${index}`;
+    const next: FolderData = {
+      id: 0, name: template.name, nameEntities: template.nameEntities.slice(),
+      animateCustomEmoji: template.animateCustomEmoji, iconName: template.iconName,
+      colorId: template.colorId, isShareable: false,
+      pinnedChatIds: template.pinnedChatIds.slice(), includedChatIds: template.includedChatIds.slice(),
+      excludedChatIds: template.excludedChatIds.slice(), excludeMuted: template.excludeMuted,
+      excludeRead: template.excludeRead, excludeArchived: template.excludeArchived,
+      includeContacts: template.includeContacts, includeNonContacts: template.includeNonContacts,
+      includeBots: template.includeBots, includeGroups: template.includeGroups,
+      includeChannels: template.includeChannels
+    };
+    saveFolder(next).then((): void => {
+      if (!this.active) { return; }
+      this.operationKey = '';
+      promptAction.showToast({ message: `已创建「${next.name}」`, duration: 1600 });
+    }).catch((error: TdError): void => {
+      if (!this.active) { return; }
+      this.operationKey = '';
+      promptAction.showToast({ message: '创建失败，请重试', duration: 1800 });
+      console.error(`ChatFoldersPage.addRecommendation failed: ${error.message}`);
     });
   }
 
   @Builder
   header() {
-    Row({ space: 16 }) {
-      SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(26).fontColor([COLOR_TEXT_PRIMARY])
-        .onClick(() => { router.back(); });
-      Text('聊天文件夹').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
-        .layoutWeight(1);
-    }
-    .width('100%').height(48).padding({ left: 16, right: 16 })
-    .alignItems(VerticalAlign.Center);
+    Row({ space: 6 }) {
+      Row() { SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(25).fontColor([COLOR_TEXT_PRIMARY]); }
+        .width(44).height(44).borderRadius(22).justifyContent(FlexAlign.Center)
+        .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
+        .onClick((): void => router.back());
+      Column({ space: 1 }) {
+        Text('聊天文件夹').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
+        Text(this.loading ? '正在同步…' : `${this.folders.length}/${this.limits.folderCount} 个文件夹`)
+          .fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+      if (this.operationKey !== '') {
+        LoadingProgress().width(19).height(19).color(COLOR_PRIMARY).margin({ right: 13 });
+      }
+    }.width('100%').height(56).padding({ left: 8, right: 8 }).alignItems(VerticalAlign.Center);
   }
 
   @Builder
-  rowMenu(f: FolderInfo, index: number) {
+  skeleton() {
+    Column({ space: 12 }) {
+      ForEach([0, 1, 2], (skeletonIndex: number) => {
+        Row({ space: 12 }) {
+          Row().width(42).height(42).borderRadius(14).backgroundColor($r('app.color.surface_alt'));
+          Column({ space: 8 }) {
+            Row().width('46%').height(13).borderRadius(7).backgroundColor($r('app.color.surface_alt'));
+            Row().width('30%').height(10).borderRadius(5).backgroundColor($r('app.color.surface_alt'));
+          }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+        }.height(66).padding({ left: 14, right: 14 }).backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
+      }, (skeletonIndex: number): string => `folder_skeleton_${skeletonIndex}`);
+    }.padding({ left: 12, right: 12, top: 12 });
+  }
+
+  @Builder
+  errorState() {
+    Column({ space: 12 }) {
+      Text('📁').fontSize(44);
+      Text('文件夹暂时无法同步').fontSize(18).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+      Text('网络恢复后可以重试，现有聊天不会受影响').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+      Text('重新加载').fontSize(15).fontColor(Color.White).fontWeight(FontWeight.Medium)
+        .padding({ left: 22, right: 22, top: 10, bottom: 10 })
+        .backgroundColor(COLOR_PRIMARY).borderRadius(18)
+        .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
+        .onClick((): void => this.retryInitial());
+    }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
+  }
+
+  @Builder
+  folderIcon(folder: FolderInfo) {
+    Row() {
+      SymbolGlyph(folderSymbol(folder.iconName)).fontSize(21)
+        .fontColor([folderColor(folder.colorId)]);
+    }.width(42).height(42).borderRadius(14)
+      .justifyContent(FlexAlign.Center)
+      .backgroundColor(`${folderColor(folder.colorId)}20`);
+  }
+
+  @Builder
+  folderMenu(folder: FolderInfo, index: number) {
     Menu() {
-      MenuItem({ content: '编辑文件夹' }).onClick(() => { this.edit(f.id); });
-      MenuItem({ content: '上移' })
-        .enabled(index > 0)
-        .onClick(() => { this.move(index, -1); });
-      MenuItem({ content: '下移' })
-        .enabled(index < this.folders.length - 1)
-        .onClick(() => { this.move(index, 1); });
-      MenuItem({ content: '删除文件夹' }).onClick(() => { this.confirmDelete(f); });
+      MenuItem({ content: '编辑文件夹' }).onClick((): void => this.openEditor(folder.id));
+      MenuItem({ content: '上移' }).enabled(index > 0)
+        .onClick((): void => this.moveFolder(index, index - 1));
+      MenuItem({ content: '下移' }).enabled(index < this.folders.length - 1)
+        .onClick((): void => this.moveFolder(index, index + 1));
+      MenuItem({ content: '删除文件夹' }).onClick((): void => this.prepareDelete(folder));
     }
+  }
+
+  @Builder
+  folderRow(folder: FolderInfo, index: number) {
+    Row({ space: 12 }) {
+      this.folderIcon(folder);
+      Column({ space: 3 }) {
+        Row({ space: 6 }) {
+          Text(folder.title).fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY)
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
+          if (folder.isShareable) {
+            Text('共享').fontSize(10).fontColor(COLOR_PRIMARY)
+              .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+              .backgroundColor('#185B8FF9').borderRadius(7);
+          }
+        }
+        Text(this.countLabel(folder.id)).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start).onClick((): void => this.openEditor(folder.id));
+      Row() { SymbolGlyph($r('sys.symbol.line_3_horizontal')).fontSize(19).fontColor([COLOR_TEXT_SECONDARY]); }
+        .width(40).height(40).borderRadius(20).justifyContent(FlexAlign.Center)
+        .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
+        .bindMenu(this.folderMenu(folder, index));
+    }.width('100%').height(ROW_HEIGHT).padding({ left: 14, right: 8 })
+      .alignItems(VerticalAlign.Center)
+      .transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: -5 }))
+        .animation({ duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180), curve: Curve.EaseOut }));
+  }
+
+  @Builder
+  folderCard() {
+    Column() {
+      Row({ space: 12 }) {
+        Row() { Text('💬').fontSize(20); }.width(42).height(42).borderRadius(14)
+          .justifyContent(FlexAlign.Center).backgroundColor($r('app.color.surface_alt'));
+        Column({ space: 2 }) {
+          Text('全部聊天').fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+          Text('系统默认列表').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+        }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+        Text('默认').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+      }.width('100%').height(ROW_HEIGHT).padding({ left: 14, right: 14 });
+      ForEach(this.folders, (folder: FolderInfo, index: number) => {
+        Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 68 });
+        this.folderRow(folder, index);
+      }, (folder: FolderInfo): string => `folder_${folder.id}`);
+      Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
+      Row({ space: 10 }) {
+        SymbolGlyph($r('sys.symbol.plus_circle')).fontSize(20).fontColor([COLOR_PRIMARY]);
+        Text(this.folders.length >= this.limits.folderCount ? '已达到文件夹数量上限' : '创建新文件夹')
+          .fontSize(16).fontColor(this.folders.length >= this.limits.folderCount ? COLOR_TEXT_SECONDARY : COLOR_PRIMARY)
+          .layoutWeight(1);
+      }.width('100%').height(54).padding({ left: 16, right: 16 })
+        .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
+        .enabled(this.folders.length < this.limits.folderCount && this.operationKey === '')
+        .onClick((): void => this.openEditor(0));
+    }.width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS).clip(true);
+  }
+
+  @Builder
+  tagsCard() {
+    Row({ space: 12 }) {
+      Row() { Text('🏷️').fontSize(20); }.width(42).height(42).borderRadius(14)
+        .justifyContent(FlexAlign.Center).backgroundColor('#169270CA');
+      Column({ space: 3 }) {
+        Text('文件夹标签').fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+        Text('在聊天列表中显示所属文件夹').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+      Toggle({ type: ToggleType.Switch, isOn: this.tagsEnabled }).selectedColor(COLOR_PRIMARY)
+        .enabled(this.operationKey === '')
+        .onChange((value: boolean): void => this.toggleTags(value));
+    }.width('100%').padding(14).backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
+  }
+
+  @Builder
+  recommendedCard(row: RecommendedFolder, index: number) {
+    Row({ space: 12 }) {
+      Row() {
+        SymbolGlyph(folderSymbol(row.folder.iconName)).fontSize(21).fontColor(['#5B8FF9']);
+      }.width(42).height(42).borderRadius(14)
+        .justifyContent(FlexAlign.Center).backgroundColor('#165B8FF9');
+      Column({ space: 3 }) {
+        Text(row.folder.name).fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+        Text(row.description).fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
+          .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis });
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+      if (this.operationKey === `recommend_${index}`) {
+        LoadingProgress().width(18).height(18).color(COLOR_PRIMARY);
+      } else {
+        Text('添加').fontSize(14).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
+          .padding({ left: 12, right: 12, top: 7, bottom: 7 }).borderRadius(14)
+          .backgroundColor('#145B8FF9').stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
+          .onClick((): void => this.addRecommendation(index));
+      }
+    }.width('100%').padding(14).backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
+  }
+
+  @Builder
+  content() {
+    Scroll() {
+      Column({ space: 14 }) {
+        Text('把聊天按用途整理，首页顶部会实时同步这些文件夹。')
+          .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).width('100%')
+          .textAlign(TextAlign.Center).padding({ left: 18, right: 18, top: 2 });
+        this.folderCard();
+        this.tagsCard();
+        if (this.folders.length === 0) {
+          Column({ space: 5 }) {
+            Text('还没有自定义文件夹').fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+            Text('可以从推荐模板开始，也可以自己设置包含与排除规则。')
+              .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center);
+          }.width('100%').padding({ top: 8, bottom: 2 });
+        }
+        if (this.recommendationState === 'ready') {
+          Text('推荐文件夹').fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_SECONDARY)
+            .width('100%').padding({ left: 4, top: 2 });
+          ForEach(this.recommendations, (row: RecommendedFolder, index: number) => {
+            if (!this.folders.some((folder: FolderInfo): boolean => folder.title === row.folder.name)) {
+              this.recommendedCard(row, index);
+            }
+          }, (row: RecommendedFolder, index: number): string => `recommended_${index}_${row.folder.name}`);
+        } else if (this.recommendationState === 'error') {
+          Row({ space: 8 }) {
+            Text('推荐模板暂时加载失败').fontSize(12).fontColor(COLOR_TEXT_SECONDARY).layoutWeight(1);
+            Text('重试').fontSize(13).fontColor(COLOR_PRIMARY).onClick((): void => this.loadRecommendations());
+          }.width('100%').padding(14).backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
+        }
+      }.width('100%').padding({ left: 12, right: 12, top: 6, bottom: this.bottomSafe + 24 });
+    }.layoutWeight(1).width('100%').scrollBar(BarState.Off).align(Alignment.Top);
+  }
+
+  @Builder
+  leaveSheet() {
+    Column() {
+      Text('删除文件夹').fontSize(19).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
+        .padding({ top: 14, bottom: 4 });
+      Text(`「${this.deleteTargetTitle}」中的聊天会保留。需要同时退出的聊天可在下面选择。`)
+        .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center)
+        .padding({ left: 24, right: 24, bottom: 8 });
+      List() {
+        ForEach(this.leaveChoices, (chat: FolderChatSummary) => {
+          ListItem() {
+            Row({ space: 12 }) {
+              AvatarView({ avatarPath: chat.avatarPath, initials: chat.initials, colorSeed: chat.id, avatarSize: 38 });
+              Text(chat.title).fontSize(16).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1)
+                .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
+              Toggle({ type: ToggleType.Checkbox, isOn: this.leaveSelected.indexOf(chat.id) >= 0 })
+                .selectedColor(DANGER).onChange((): void => this.toggleLeave(chat.id));
+            }.width('100%').padding({ left: 16, right: 16, top: 8, bottom: 8 });
+          }
+        }, (chat: FolderChatSummary): string => `leave_${chat.id}`);
+      }.layoutWeight(1).width('100%').scrollBar(BarState.Off);
+      Text(this.leaveSelected.length > 0 ? `删除并退出 ${this.leaveSelected.length} 个聊天` : '只删除文件夹')
+        .fontSize(16).fontWeight(FontWeight.Medium).fontColor(Color.White).textAlign(TextAlign.Center)
+        .width('100%').padding({ top: 12, bottom: 12 }).backgroundColor(DANGER).borderRadius(12)
+        .margin({ left: 16, right: 16, top: 8, bottom: this.bottomSafe + 10 })
+        .onClick((): void => this.deleteNow(this.deleteTargetId, this.leaveSelected));
+    }.width('100%').height('100%');
   }
 
   build() {
     Column() {
       this.header();
-      Scroll() {
-        Column({ space: 14 }) {
-          Text('把聊天分到不同的文件夹里，在聊天列表顶部快速切换。')
-            .fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
-            .width('100%').textAlign(TextAlign.Center)
-            .padding({ left: 24, right: 24, top: 6, bottom: 2 });
-
-          Column() {
-            Row() {
-              Text('全部聊天').fontSize(16).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
-              Text('默认').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
-            }
-            .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 12 });
-
-            ForEach(this.folders, (f: FolderInfo, idx: number) => {
-              Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 16 });
-              Row({ space: 10 }) {
-                Column({ space: 2 }) {
-                  Text(f.title).fontSize(16).fontColor(COLOR_TEXT_PRIMARY)
-                    .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
-                  if (this.countLabel(f.id) !== '') {
-                    Text(this.countLabel(f.id)).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
-                  }
-                }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-                .onClick(() => { this.edit(f.id); });
-                SymbolGlyph($r('sys.symbol.dot_grid_1x2')).fontSize(20).fontColor([COLOR_TEXT_SECONDARY])
-                  .bindMenu(this.rowMenu(f, idx));
-              }
-              .width('100%').padding({ left: 16, right: 16, top: 10, bottom: 10 })
-              .alignItems(VerticalAlign.Center);
-            }, (f: FolderInfo) => `f_${f.id}_${f.title}_${this.counts.get(f.id) ?? -1}`);
-
-            Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 16 });
-            Row({ space: 10 }) {
-              SymbolGlyph($r('sys.symbol.plus_circle')).fontSize(20).fontColor([COLOR_PRIMARY]);
-              Text('创建新文件夹').fontSize(16).fontColor(COLOR_PRIMARY).layoutWeight(1);
-            }
-            .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 12 })
-            .alignItems(VerticalAlign.Center)
-            .onClick(() => { this.edit(0); });
-          }
-          .width('100%').backgroundColor($r('app.color.surface')).borderRadius(CARD_RADIUS);
-
-          Text('点击文件夹可编辑名称与包含的聊天；右侧菜单可以调整顺序或删除。')
-            .fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
-            .width('100%').padding({ left: 16, right: 16, top: 4 });
-        }
-        .width('100%')
-        .padding({ left: 12, right: 12, top: 8, bottom: this.bottomSafe + 24 });
-      }
-      .layoutWeight(1).width('100%')
-      .align(Alignment.Top)
-      .scrollBar(BarState.Off);
-    }
-    .width('100%').height('100%')
-    .backgroundColor($r('app.color.page_bg'))
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
-    .padding({ top: this.topSafe });
+      if (this.loading) { this.skeleton(); }
+      else if (this.loadError) { this.errorState(); }
+      else { this.content(); }
+    }.width('100%').height('100%').backgroundColor(COLOR_PAGE_BG)
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+      .padding({ top: this.topSafe })
+      .bindSheet($$this.deleteSheetOpen, this.leaveSheet(), {
+        height: '72%', backgroundColor: COLOR_SURFACE, dragBar: true
+      });
   }
 }

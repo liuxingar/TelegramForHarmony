@@ -1,7 +1,8 @@
 import { promptAction } from '@kit.ArkUI';
-import { getTdClient } from '../tdkit/Globals';
+import { getFolderStore, getTdClient } from '../tdkit/Globals';
 import { TdObject, TdRequest, TdError } from '../tdkit/TdTypes';
 import { chatListOf } from './ListKey';
+import { serializeFolderMutation } from './FolderApi';
 import { ChatKind } from './ChatEntry';
 
 // Every chat-list context-menu action, as a plain TDLib call. The UI never
@@ -79,27 +80,32 @@ export function setArchived(chatId: number, archived: boolean): void {
 // TDLib has no "add chat to folder" call: the whole folder must be read,
 // edited and written back.
 export async function setInFolder(folderId: number, chatId: number, include: boolean): Promise<void> {
-  const client = getTdClient();
   try {
-    const get: TdRequest = { '@type': 'getChatFolder' };
-    get['chat_folder_id'] = folderId;
-    const folder = await client.send(get);
-    const included = (folder['included_chat_ids'] as number[] | undefined) ?? [];
-    const next = include
-      ? (included.includes(chatId) ? included : [...included, chatId])
-      : included.filter((id: number) => id !== chatId);
-    // Removing a chat also has to drop it from the pinned list, or TDLib
-    // rejects the edit (a pinned chat must be an included one).
-    const pinned = (folder['pinned_chat_ids'] as number[] | undefined) ?? [];
-    const nextFolder: TdObject = folder;
-    nextFolder['included_chat_ids'] = next;
-    if (!include) {
-      nextFolder['pinned_chat_ids'] = pinned.filter((id: number) => id !== chatId);
-    }
-    const edit: TdRequest = { '@type': 'editChatFolder' };
-    edit['chat_folder_id'] = folderId;
-    edit['folder'] = nextFolder;
-    await client.send(edit);
+    await serializeFolderMutation(async (): Promise<void> => {
+      const client = getTdClient();
+      const get: TdRequest = { '@type': 'getChatFolder' };
+      get['chat_folder_id'] = folderId;
+      const folder = await client.send(get);
+      const included = (folder['included_chat_ids'] as number[] | undefined) ?? [];
+      const next = include
+        ? (included.includes(chatId) ? included : [...included, chatId])
+        : included.filter((id: number) => id !== chatId);
+      const pinned = (folder['pinned_chat_ids'] as number[] | undefined) ?? [];
+      const excluded = (folder['excluded_chat_ids'] as number[] | undefined) ?? [];
+      const nextFolder: TdObject = folder;
+      nextFolder['included_chat_ids'] = next;
+      // Explicit inclusion and exclusion are mutually exclusive.
+      if (include) {
+        nextFolder['excluded_chat_ids'] = excluded.filter((id: number) => id !== chatId);
+      } else {
+        nextFolder['pinned_chat_ids'] = pinned.filter((id: number) => id !== chatId);
+      }
+      const edit: TdRequest = { '@type': 'editChatFolder' };
+      edit['chat_folder_id'] = folderId;
+      edit['folder'] = nextFolder;
+      const info = await client.send(edit);
+      getFolderStore().applyServerFolderInfo(info);
+    });
     promptAction.showToast({ message: include ? '已添加到文件夹' : '已移出文件夹', duration: 1500 });
   } catch (e) {
     fail('setInFolder', e as TdError);

@@ -7,6 +7,7 @@ export class UserStore {
   private client: TdClient;
   private names: Map<number, string> = new Map();
   private photos: Map<number, number> = new Map();
+  private accents: Map<number, number> = new Map(); // accent_color_id per user
   private requested: Set<number> = new Set();  // getUser sent
 
   constructor(client: TdClient) {
@@ -25,6 +26,11 @@ export class UserStore {
 
   knows(userId: number): boolean {
     return this.names.has(userId);
+  }
+
+  // Telegram name accent color id (-1 when the user isn't known yet).
+  accentColorId(userId: number): number {
+    return this.accents.get(userId) ?? -1;
   }
 
   // TDLib only pushes updateUser for users it has surfaced to us. Senders in a
@@ -68,5 +74,6 @@ export class UserStore {
     const last = (user['last_name'] as string | undefined) ?? '';
     this.names.set(id, `${first} ${last}`.trim());
     this.photos.set(id, this.smallFileId(user['profile_photo'] as TdObject | undefined));
+    this.accents.set(id, (user['accent_color_id'] as number | undefined) ?? -1);
   }
 }

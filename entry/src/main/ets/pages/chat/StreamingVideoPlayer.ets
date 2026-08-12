@@ -657,7 +657,8 @@ export struct StreamingVideoPlayer {
       .scale({
         x: this.seekFeedbackVisible && this.seekFeedbackSide < 0 ? 1 : 0.82,
         y: this.seekFeedbackVisible && this.seekFeedbackSide < 0 ? 1 : 0.82
-      });
+      })
+      .hitTestBehavior(HitTestMode.None);
       Blank().layoutWeight(1);
       Column({ space: 3 }) {
         if (this.seekFeedbackSide < 0) {
@@ -681,7 +682,8 @@ export struct StreamingVideoPlayer {
       .scale({
         x: this.seekFeedbackVisible && this.seekFeedbackSide > 0 ? 1 : 0.82,
         y: this.seekFeedbackVisible && this.seekFeedbackSide > 0 ? 1 : 0.82
-      });
+      })
+      .hitTestBehavior(HitTestMode.None);
     }
     .width('100%')
     .padding({ left: 24, right: 24 })
@@ -775,6 +777,10 @@ export struct StreamingVideoPlayer {
           this.release();
           this.surfaceContext = null;
         });
+      // 纯装饰的 seek 反馈必须位于 tapZone 之下：它用 opacity 隐藏（始终在树上），
+      // 而 HitTestMode.None 只让自身不响应、子节点仍参与命中测试，叠在上面时
+      // 会永久吞掉左右两块圆形区域的点击（表现为"单击唤起控制器没反应"）。
+      this.seekFeedback();
       // Controls hidden → both halves remain interactive. Exclusive recognition
       // delays the single tap just enough to distinguish the double-tap seek.
       if (!this.showControls) {
@@ -848,7 +854,6 @@ export struct StreamingVideoPlayer {
           .combine(TransitionEffect.scale({ x: 0.9, y: 0.9 }))
           .animation({ duration: 180, curve: Curve.EaseOut }));
       }
-      this.seekFeedback();
       if (this.speedFeedbackVisible) {
         Row() {
           Text(this.speedFeedbackText)

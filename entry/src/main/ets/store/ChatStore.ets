@@ -1,7 +1,7 @@
 import { TdClient } from '../tdkit/TdClient';
 import { TdObject, TdRequest, TdError } from '../tdkit/TdTypes';
 import { UserStore } from './UserStore';
-import { ChatEntry, PositionInfo, cloneEntry, computeInitials, compareOrderDesc, isMutedFrom, chatKindOf } from './ChatEntry';
+import { ChatEntry, PositionInfo, cloneEntry, computeInitials, compareOrderDesc, isMutedFrom, usesDefaultMuteFrom, chatKindOf } from './ChatEntry';
 import { listKeyOf, chatListOf } from './ListKey';
 import { formatPreview } from '../util/formatPreview';
 
@@ -404,6 +404,7 @@ export class ChatStore {
       revision: previous !== undefined ? previous.revision + 1 : 0,
       title,
       isMuted: isMutedFrom(chat['notification_settings'] as TdObject | undefined),
+      usesDefaultMute: usesDefaultMuteFrom(chat['notification_settings'] as TdObject | undefined),
       unreadCount: ChatStore.effectiveUnread(
         (chat['unread_count'] as number | undefined) ?? 0,
         (chat['last_read_inbox_message_id'] as number | undefined) ?? 0,
@@ -514,7 +515,9 @@ export class ChatStore {
       return;
     }
     const c = cloneEntry(e);
-    c.isMuted = isMutedFrom(update['notification_settings'] as TdObject | undefined);
+    const ns = update['notification_settings'] as TdObject | undefined;
+    c.isMuted = isMutedFrom(ns);
+    c.usesDefaultMute = usesDefaultMuteFrom(ns);
     this.chats.set(id, c);
     this.notify(id);
   }

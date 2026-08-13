@@ -1,6 +1,7 @@
 import { notificationManager } from '@kit.NotificationKit';
 import { wantAgent } from '@kit.AbilityKit';
 import { NotificationPublisher, LocalNotice } from './NotificationService';
+import { avatarPixelMap } from '../util/avatarPixelMap';
 
 // NotificationPublisher 的系统实现：Notification Kit 文本通知。
 // 点击经 wantAgent 拉起 EntryAbility 并携带 notifyChatId（Index 消费路由）。
@@ -28,9 +29,16 @@ export class SystemNotificationPublisher implements NotificationPublisher {
         },
         wantAgent: agent
       };
+      // 会话头像：largeIcon 是展开态右侧大图标，overlayIcon 是横幅上叠加在
+      // 应用图标处的会话头像（IM 类通知的常见样式）。两者都设，覆盖顶部弹出
+      // 横幅与通知中心两种形态；无头像时留空，系统回退应用图标。
+      const avatar = avatarPixelMap(notice.avatarPath);
+      if (avatar !== undefined) {
+        request.largeIcon = avatar;
+        request.overlayIcon = avatar;
+      }
       return notificationManager.publish(request);
     }).then((): void => {
-      console.info(`[NotifDiag] system publish ok id=${notice.id} "${notice.title}"`);
     }).catch((e: Error): void => {
       console.error(`SystemNotificationPublisher.publish(${notice.id}) failed: ${e.message}`);
     });

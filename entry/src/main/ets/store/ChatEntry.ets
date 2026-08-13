@@ -11,6 +11,8 @@ export interface ChatEntry {
   revision: number;
   title: string;
   isMuted: boolean;
+  // 是否跟随作用域默认静音设置（见 effectiveMuted）。
+  usesDefaultMute: boolean;
   unreadCount: number;
   lastMessageText: string;
   lastMessageDate: number;
@@ -35,7 +37,8 @@ export interface ChatEntry {
 export function cloneEntry(e: ChatEntry): ChatEntry {
   return {
     id: e.id, revision: e.revision + 1,
-    title: e.title, isMuted: e.isMuted, unreadCount: e.unreadCount,
+    title: e.title, isMuted: e.isMuted, usesDefaultMute: e.usesDefaultMute,
+    unreadCount: e.unreadCount,
     lastMessageText: e.lastMessageText, lastMessageDate: e.lastMessageDate,
     lastMessageId: e.lastMessageId,
     lastSenderName: e.lastSenderName, photoFileId: e.photoFileId,
@@ -98,4 +101,18 @@ export function isMutedFrom(notificationSettings: TdObject | undefined): boolean
   }
   const muteFor = (notificationSettings['mute_for'] as number | undefined) ?? 0;
   return muteFor > 0;
+}
+
+// 该会话是否跟随作用域默认值。为 true 时 mute_for 不代表真实状态 —— 必须去看
+// 私聊/群组/频道的默认设置，否则跟随默认且默认为静音的会话会被当成未静音。
+export function usesDefaultMuteFrom(notificationSettings: TdObject | undefined): boolean {
+  if (notificationSettings === undefined) {
+    return true;
+  }
+  return (notificationSettings['use_default_mute_for'] as boolean | undefined) ?? true;
+}
+
+// 会话最终是否静音：自身设置优先，否则回落到作用域默认。
+export function effectiveMuted(entry: ChatEntry, scopeMuted: boolean): boolean {
+  return entry.usesDefaultMute ? scopeMuted : entry.isMuted;
 }

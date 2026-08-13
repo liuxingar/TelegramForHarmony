@@ -14,7 +14,12 @@ import { NativeCallMedia, nativeCallVersionsJson } from '../services/NativeCallM
 import { NotificationService } from '../services/NotificationService';
 import { SystemNotificationPublisher } from '../services/SystemNotificationPublisher';
 import { registerMessageSyncWork } from '../services/MessageSyncWork';
+import { WebPushConfig, registerWebPush, validateWebPushConfig } from '../services/WebPushRegistration';
+import {
+  KEY_WEBPUSH_AUTH, KEY_WEBPUSH_ENABLED, KEY_WEBPUSH_ENDPOINT, KEY_WEBPUSH_P256DH
+} from '../store/AppSettings';
 import { StoryStore } from '../store/StoryStore';
+import { systemCallUi } from '../services/SystemCallUi';
 import { common } from '@kit.AbilityKit';
 import { TdObject, TdRequest } from './TdTypes';
 import {
@@ -70,6 +75,14 @@ function createRuntime(slotId: string): void {
     console.error('call versions parse failed, using fallback list');
   }
   callSession = new CallSession(client, users, new NativeCallMedia());
+  // 系统来电界面上的接听/拒接/挂断/静音回传到通话会话。
+  const session = callSession;
+  systemCallUi.bindActions({
+    accept: (): void => session.accept(),
+    decline: (): void => session.decline(),
+    hangup: (): void => session.hangup(),
+    setMuted: (muted: boolean): void => session.setMuted(muted)
+  });
   storyStore = new StoryStore(client);
   // 本地通知：应用后台但进程存活时，新消息/来电经系统通知触达。
   if (notifications !== undefined) {
@@ -97,6 +110,7 @@ function createRuntime(slotId: string): void {
       runtimeReady = true;
       registerMessageSyncWork(appBundleName);
       notifications!.enable();
+      reregisterWebPush(runtimeClient);
       storyStore!.open();
       applyDesiredOnlineState(runtimeClient);
       refreshActiveAccountSummary(runtimeClient);
@@ -105,6 +119,27 @@ function createRuntime(slotId: string): void {
     }
   });
   client.start();
+}
+
+// device token 是按账号注册的：切账号或重启后都要对当前账号重新注册一次，
+// 否则新账号根本没订阅，用户却看到开关是开着的。
+function reregisterWebPush(client: TdClient): void {
+  if (!(AppStorage.get<boolean>(KEY_WEBPUSH_ENABLED) ?? false)) {
+    return;
+  }
+  const config: WebPushConfig = {
+    endpoint: AppStorage.get<string>(KEY_WEBPUSH_ENDPOINT) ?? '',
+    p256dh: AppStorage.get<string>(KEY_WEBPUSH_P256DH) ?? '',
+    auth: AppStorage.get<string>(KEY_WEBPUSH_AUTH) ?? ''
+  };
+  if (!validateWebPushConfig(config).valid) {
+    return;
+  }
+  registerWebPush(client, config).then((receiverId: string): void => {
+    console.info(`WebPush re-registered, receiver id ${receiverId}`);
+  }).catch((e: Object): void => {
+    console.error(`WebPush re-register failed: ${JSON.stringify(e)}`);
+  });
 }
 
 async function stopRuntime(): Promise<void> {

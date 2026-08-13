@@ -36,6 +36,8 @@
     "pages/main/EmojiStatusPage",
     "pages/main/GroupAdminPage",
     "pages/main/NotificationSettingsPage",
+    "pages/main/GroupNotificationsPage",
+    "pages/main/WebPushPage",
     "pages/call/CallPage",
     "pages/main/BackgroundPlaybackPage",
     "pages/chat/ForumTopicsPage",

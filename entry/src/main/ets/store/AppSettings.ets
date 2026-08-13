@@ -126,6 +126,27 @@ const POWER_BOOLEAN_TRUE_EFFECT_DEFAULTS: string[] = [
   KEY_POWER_EFFECT_MENU
 ];
 
+// 本机通知开关（按会话类型）。优先级高于 TDLib 的服务端通知设置：
+// 这里关掉就不弹，不受服务端/其他设备影响；这里开着才继续看服务端静音状态。
+// 三项默认开启，由用户按需关闭。
+export const KEY_NOTIFY_PRIVATE: string = 'notifyPrivate';
+export const KEY_NOTIFY_GROUP: string = 'notifyGroup';
+export const KEY_NOTIFY_CHANNEL: string = 'notifyChannel';
+
+// 自定义 Web Push 中转通道。默认关闭，且必须先接受风险说明才能打开 ——
+// 这条链路会把消息预览明文交给用户自建的服务器，不能默默生效。
+export const KEY_WEBPUSH_ENABLED: string = 'webPushEnabled';
+export const KEY_WEBPUSH_ACCEPTED: string = 'webPushAccepted';
+export const KEY_WEBPUSH_ENDPOINT: string = 'webPushEndpoint';
+export const KEY_WEBPUSH_P256DH: string = 'webPushP256dh';
+export const KEY_WEBPUSH_AUTH: string = 'webPushAuth';
+
+const DATA_STRING_KEYS: string[] = [
+  KEY_WEBPUSH_ENDPOINT,
+  KEY_WEBPUSH_P256DH,
+  KEY_WEBPUSH_AUTH
+];
+
 // 后台播放：各媒体类别切后台是否继续播放（audioPlayback 长时任务）。
 export const KEY_BG_PLAY_MUSIC: string = 'bgPlayMusic';
 export const KEY_BG_PLAY_VOICE: string = 'bgPlayVoice';
@@ -133,6 +154,9 @@ export const KEY_BG_PLAY_VIDEO: string = 'bgPlayVideo';
 export const KEY_BG_PLAY_LIVE: string = 'bgPlayLive';
 
 const DATA_BOOLEAN_TRUE_DEFAULTS: string[] = [
+  KEY_NOTIFY_PRIVATE,
+  KEY_NOTIFY_GROUP,
+  KEY_NOTIFY_CHANNEL,
   // 音乐/语音/直播默认续播（符合平台惯例）；视频默认不续播。
   KEY_BG_PLAY_MUSIC,
   KEY_BG_PLAY_VOICE,
@@ -149,6 +173,8 @@ const DATA_BOOLEAN_TRUE_DEFAULTS: string[] = [
 ];
 
 const DATA_BOOLEAN_FALSE_DEFAULTS: string[] = [
+  KEY_WEBPUSH_ENABLED,
+  KEY_WEBPUSH_ACCEPTED,
   KEY_BG_PLAY_VIDEO,
   KEY_AUTO_MOBILE_FILE,
   KEY_AUTO_MOBILE_PRELOAD_VIDEO,
@@ -282,6 +308,9 @@ export async function initSettings(context: common.Context): Promise<void> {
     for (const item of DATA_NUMBER_DEFAULTS) {
       AppStorage.setOrCreate(item.key, await s.get(item.key, item.value) as number);
     }
+    for (const key of DATA_STRING_KEYS) {
+      AppStorage.setOrCreate(key, await s.get(key, '') as string);
+    }
     AppStorage.setOrCreate(KEY_CURRENT_NETWORK_TYPE, 'other');
     AppStorage.setOrCreate(KEY_POWER_ACTIVE, false);
     AppStorage.setOrCreate(KEY_BATTERY_PERCENT, 100);
@@ -317,6 +346,9 @@ export async function initSettings(context: common.Context): Promise<void> {
     }
     for (const item of DATA_NUMBER_DEFAULTS) {
       AppStorage.setOrCreate(item.key, item.value);
+    }
+    for (const key of DATA_STRING_KEYS) {
+      AppStorage.setOrCreate(key, '');
     }
     AppStorage.setOrCreate(KEY_CURRENT_NETWORK_TYPE, 'other');
     AppStorage.setOrCreate(KEY_POWER_ACTIVE, false);

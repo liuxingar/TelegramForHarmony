@@ -7,6 +7,7 @@ import {
 import { PhoneNumberPage } from './login/PhoneNumberPage';
 import { CodePage } from './login/CodePage';
 import { PasswordPage } from './login/PasswordPage';
+import { QrLoginPage } from './login/QrLoginPage';
 import { MainScreen } from './main/MainScreen';
 import { handleIncomingLink } from '../util/deepLink';
 import { COLOR_TEXT_PRIMARY } from '../util/theme';
@@ -117,6 +118,8 @@ struct Index {
           LoadingProgress().width(48).height(48)
         } else if (this.stage === AuthStage.WaitPhone) {
           PhoneNumberPage()
+        } else if (this.stage === AuthStage.WaitQrCode) {
+          QrLoginPage()
         } else if (this.stage === AuthStage.WaitCode) {
           CodePage()
         } else if (this.stage === AuthStage.WaitPassword) {

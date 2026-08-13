@@ -37,6 +37,13 @@ function pushNewChat(bridge: FakeBridge, id: number, title: string,
   bridge.onReceive(JSON.stringify(u));
 }
 
+// ChatStore 按 NOTIFY_COALESCE_MS(80ms) 合并订阅者通知，断言前需等窗口结束。
+function settleNotify(): Promise<void> {
+  return new Promise<void>((resolve: (v: void) => void): void => {
+    setTimeout((): void => resolve(), 140);
+  });
+}
+
 function pushPosition(bridge: FakeBridge, id: number, pos: TdObject): void {
   const u: TdObject = { '@type': 'updateChatPosition' };
   u['chat_id'] = id; u['position'] = pos;
@@ -171,28 +178,33 @@ export default function chatStoreTest() {
       b.onReceive(JSON.stringify(u));
       expect(store.getChats()[0].isMuted).assertEqual(true);
     });
-    it('subscribe_replays_and_notifies', 0, () => {
+    it('subscribe_replays_and_notifies', 0, async () => {
       const store = make();
       const b = bridgeOf(store);
       let calls = 0;
       const off = store.subscribe((_c: ChatEntry[]) => { calls += 1; });
       expect(calls).assertEqual(1); // replay
       pushNewChat(b, 1, 'A', [mainPos('100', false)], null, 0);
+      // 通知按 NOTIFY_COALESCE_MS 合并，等窗口过去再断言。
+      await settleNotify();
       expect(calls).assertEqual(2);
       off();
       pushNewChat(b, 2, 'B', [mainPos('200', false)], null, 0);
+      await settleNotify();
       expect(calls).assertEqual(2); // no more after unsubscribe
     });
-    it('subscribe_changes_replays_notifies_and_unsubscribes', 0, () => {
+    it('subscribe_changes_replays_notifies_and_unsubscribes', 0, async () => {
       const store = make();
       const b = bridgeOf(store);
       let calls = 0;
       const off = store.subscribeChanges((): void => { calls += 1; });
       expect(calls).assertEqual(1);
       pushNewChat(b, 1, 'A', [folderPos(5, '100', false)], null, 0);
+      await settleNotify();
       expect(calls).assertEqual(2);
       off();
       pushNewChat(b, 2, 'B', [folderPos(5, '200', false)], null, 0);
+      await settleNotify();
       expect(calls).assertEqual(2);
     });
     it('load_sends_loadChats', 0, () => {

@@ -80,6 +80,23 @@ function messageNotification(id: number, text: string): TdObject {
   return notification;
 }
 
+function feedNewMessage(b: FakeBridge, chatId: number, messageId: number,
+  text: string, outgoing: boolean): void {
+  const ft: TdObject = { '@type': 'formattedText' };
+  ft['text'] = text;
+  const content: TdObject = { '@type': 'messageText' };
+  content['text'] = ft;
+  const message: TdObject = { '@type': 'message' };
+  message['id'] = messageId;
+  message['chat_id'] = chatId;
+  message['date'] = 100;
+  message['is_outgoing'] = outgoing;
+  message['content'] = content;
+  const u: TdObject = { '@type': 'updateNewMessage' };
+  u['message'] = message;
+  b.onReceive(JSON.stringify(u));
+}
+
 function sentOptions(b: FakeBridge): string[] {
   return b.sent.map((json: string): TdObject => JSON.parse(json) as TdObject)
     .filter((o: TdObject): boolean => o['@type'] === 'setOption')
@@ -97,30 +114,40 @@ export default function notificationServiceTest() {
       expect(names.indexOf('notification_group_count_max') >= 0).assertTrue();
       expect(names.indexOf('notification_group_size_max') >= 0).assertTrue();
     });
-    it('notification_group_publishes_when_background', 0, () => {
+    it('new_message_publishes_when_background', 0, () => {
       const env = setup();
       env.foreground = false;
-      feedGroup(env.bridge, 1, 5, [messageNotification(7, '晚上开会')], []);
+      feedNewMessage(env.bridge, 5, 4194304, '晚上开会', false);
       expect(env.publisher.published.length).assertEqual(1);
       const notice = env.publisher.published[0];
-      expect(notice.id).assertEqual(7);
       expect(notice.chatId).assertEqual(5);
       expect(notice.title).assertEqual('工作群');
       expect(notice.text.indexOf('晚上开会') >= 0).assertTrue();
       expect(notice.isCall).assertFalse();
     });
+    it('outgoing_message_does_not_publish', 0, () => {
+      const env = setup();
+      env.foreground = false;
+      feedNewMessage(env.bridge, 5, 4194304, '我发的', true);
+      expect(env.publisher.published.length).assertEqual(0);
+    });
     it('foreground_suppresses_publish', 0, () => {
       const env = setup();
       env.foreground = true;
-      feedGroup(env.bridge, 1, 5, [messageNotification(8, 'hi')], []);
+      feedNewMessage(env.bridge, 5, 8388608, 'hi', false);
       expect(env.publisher.published.length).assertEqual(0);
     });
-    it('removed_notifications_cancel', 0, () => {
+    it('read_inbox_cancels_chat_notices', 0, () => {
       const env = setup();
       env.foreground = false;
-      feedGroup(env.bridge, 1, 5, [messageNotification(9, 'a')], []);
-      feedGroup(env.bridge, 1, 5, [], [9]);
-      expect(env.publisher.cancelled.join(',')).assertEqual('9');
+      feedNewMessage(env.bridge, 5, 12582912, 'a', false);
+      expect(env.publisher.published.length).assertEqual(1);
+      const shownId: number = env.publisher.published[0].id;
+      const read: TdObject = { '@type': 'updateChatReadInbox' };
+      read['chat_id'] = 5;
+      read['unread_count'] = 0;
+      env.bridge.onReceive(JSON.stringify(read));
+      expect(env.publisher.cancelled.join(',')).assertEqual(`${shownId}`);
     });
     it('call_ringing_publishes_and_clears', 0, () => {
       // CallSession 用独立 bridge，避免与通知服务的 TdClient 事件混淆。

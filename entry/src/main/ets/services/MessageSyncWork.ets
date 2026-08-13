@@ -18,8 +18,35 @@ export function registerMessageSyncWork(bundleName: string): void {
   try {
     workScheduler.startWork(info);
     console.info('[MessageSyncWork] registered');
+    logWorkStatus();
   } catch (e) {
-    console.error(`[MessageSyncWork] register failed: ${(e as Error).message}`);
+    // 9700005 = 该任务已在系统队列中（应用每次启动都会调一次注册），
+    // 属于正常路径而非错误：任务仍然有效，继续自查状态。
+    const message: string = (e as Error).message;
+    if (message.indexOf('9700005') >= 0) {
+      console.info('[MessageSyncWork] already registered (kept)');
+      logWorkStatus();
+      return;
+    }
+    console.error(`[MessageSyncWork] register failed: ${message}`);
+  }
+}
+
+// 自查：延迟任务是否真的在系统队列里。设备侧 hidumper 对 WorkSchedule 的
+// 输出被安全策略屏蔽，只能用官方 API 从应用内确认注册状态。
+export function logWorkStatus(): void {
+  try {
+    workScheduler.getWorkStatus(WORK_ID, (err: Error, work: workScheduler.WorkInfo): void => {
+      if (err !== null && err !== undefined) {
+        console.error(`[MessageSyncWork] status unavailable: ${err.message}`);
+        return;
+      }
+      console.info(`[MessageSyncWork] status workId=${work.workId} ` +
+        `repeat=${work.isRepeat} cycle=${work.repeatCycleTime} ` +
+        `network=${work.networkType} ability=${work.abilityName}`);
+    });
+  } catch (e) {
+    console.error(`[MessageSyncWork] getWorkStatus threw: ${(e as Error).message}`);
   }
 }
 

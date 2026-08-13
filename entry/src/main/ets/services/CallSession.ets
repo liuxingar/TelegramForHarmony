@@ -143,6 +143,16 @@ export class CallSession {
     this.endWith('hangup', '');
   }
 
+  // 指定静音状态（系统来电界面的静音按钮回传时用，避免与本地状态打架）。
+  setMuted(muted: boolean): void {
+    if (this.muted === muted) {
+      return;
+    }
+    this.muted = muted;
+    this.media.setMuted(muted);
+    this.publish();
+  }
+
   toggleMute(): void {
     this.muted = !this.muted;
     this.media.setMuted(this.muted);

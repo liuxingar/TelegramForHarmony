@@ -1,5 +1,6 @@
 import { common, wantAgent } from '@kit.AbilityKit';
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
+import { avSession } from '@kit.AVSessionKit';
 
 // 1对1 通话期间的后台保活：voip 长时任务让通话切后台后进程不被挂起、
 // 音频路由不被冻结。串行化模式与 LiveStreamBackgroundTask 相同 ——
@@ -9,6 +10,9 @@ class CallKeepAliveTask {
   private started: boolean = false;
   private wantsRunning: boolean = false;
   private operation: Promise<void> = Promise.resolve();
+  // 系统要求 VoIP 通话持有已激活的 voice_call AVSession，否则切后台后
+  // 通话音频会被静音（与直播的 audioPlayback 约束同源）。
+  private session: avSession.AVSession | null = null;
 
   start(context: common.UIAbilityContext): void {
     this.context = context;
@@ -40,6 +44,7 @@ class CallKeepAliveTask {
         console.info('[CallKeepAliveTask] started mode=audioPlayback (fallback)');
       }
       this.started = true;
+      await this.ensureSession(current);
       if (!this.wantsRunning) {
         await this.stopCurrent();
       }
@@ -51,10 +56,43 @@ class CallKeepAliveTask {
     this.enqueue(async (): Promise<void> => this.stopCurrent());
   }
 
+  private async ensureSession(context: common.UIAbilityContext): Promise<void> {
+    if (this.session !== null) {
+      return;
+    }
+    try {
+      const session = await avSession.createAVSession(context, 'telegram_call', 'voice_call');
+      await session.setAVMetadata({ assetId: 'telegram_call', title: '通话中' });
+      await session.setAVPlaybackState({
+        state: avSession.PlaybackState.PLAYBACK_STATE_PLAY
+      });
+      await session.activate();
+      this.session = session;
+      console.info('[CallKeepAliveTask] avsession activated');
+    } catch (caught) {
+      console.error(`[CallKeepAliveTask] avsession failed: ${(caught as Error).message}`);
+    }
+  }
+
+  private async destroySession(): Promise<void> {
+    const session = this.session;
+    if (session === null) {
+      return;
+    }
+    this.session = null;
+    try {
+      await session.deactivate();
+      await session.destroy();
+    } catch (caught) {
+      console.error(`[CallKeepAliveTask] avsession destroy failed: ${(caught as Error).message}`);
+    }
+  }
+
   private async stopCurrent(): Promise<void> {
     if (!this.started || this.context === null) {
       return;
     }
+    await this.destroySession();
     await backgroundTaskManager.stopBackgroundRunning(this.context);
     this.started = false;
     console.info('[CallKeepAliveTask] stopped');

@@ -3,6 +3,7 @@ import { notificationManager } from '@kit.NotificationKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window, KeyboardAvoidMode } from '@kit.ArkUI';
 import { initTdKit, setTdOnlineState, setUiAbilityContext } from '../tdkit/Globals';
+import { backgroundGraceTask } from '../services/BackgroundGraceTask';
 import { initSettings, refreshPowerSavingState } from '../store/AppSettings';
 import { beginNetworkMonitoring, refreshNetworkState } from '../services/NetworkStateService';
 
@@ -138,6 +139,8 @@ export default class EntryAbility extends UIAbility {
     refreshPowerSavingState();
     refreshNetworkState(true);
     AppStorage.setOrCreate('appIsForeground', true);
+    // 回前台：释放短时任务配额（下次切后台再申请）。
+    backgroundGraceTask.end();
     AppStorage.setOrCreate('appForegroundEpoch', Date.now());
     setTdOnlineState(true);
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
@@ -147,6 +150,8 @@ export default class EntryAbility extends UIAbility {
     // Ability has back to background
     AppStorage.setOrCreate('appIsForeground', false);
     setTdOnlineState(false);
+    // 申请短时任务：切后台后多存活几分钟，这段时间内新消息仍能实时收到并通知。
+    backgroundGraceTask.begin();
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onBackground');
   }
 }

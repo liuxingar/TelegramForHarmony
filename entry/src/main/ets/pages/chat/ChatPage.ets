@@ -13,6 +13,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { PollComposeSheet } from './PollComposeSheet';
 import { formatPreview } from '../../util/formatPreview';
 import { ContactPickerSheet, PickedContact } from './ContactPickerSheet';
+import { VideoNoteRecorderView } from './VideoNoteRecorderView';
 import { picker, fileIo as fs } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { VoiceRecorder } from '../../services/VoiceRecorder';
@@ -56,10 +57,16 @@ import {
   openTelegramLink, openInviteLink, openChatLinkAction, openChatFolderInviteLink, openStickerSetLink
 } from '../../util/openTelegramLink';
 import { openUrl } from '../../util/openUrl';
+import {
+  AvailableReactionSet, customEmojiReactionKey, parseAvailableReactions, reactionDisplayLabel,
+  reactionKeyFrom, reactionTypeOf
+} from '../../util/reactions';
+import { resolveCustomEmojiThumbs } from '../../util/customEmojiThumbs';
 import { openWebUrl } from '../../util/webBrowserNav';
 import { TdObject, TdRequest, TdError } from '../../tdkit/TdTypes';
 import { searchMentions, loadBotCommands, MentionItem, CommandItem } from '../../store/InputSuggestions';
 import { floatingLiveWindow } from './LiveFloatingWindow';
+import { MUTE_LONG, setMute } from '../../store/ChatActions';
 
 // One emoji-triggered sticker hint shown above the composer.
 interface StickerSuggestion {
@@ -78,6 +85,10 @@ const VIEWER_CHROME_BG: string = '#6e3e3e40';
 const VIEWER_MIN_SCALE: number = 1;
 const VIEWER_MAX_SCALE: number = 4;
 const VIEWER_DOUBLE_TAP_SCALE: number = 2.5;
+// 等上下文菜单收起再弹确认框：菜单是独立子窗口，收起过程中弹出的
+// 对话框会挂死（Promise 既不 resolve 也不 reject）。
+const MENU_DISMISS_MS: number = 150;
+
 const CHAT_HEADER_ACTION_SIZE: number = 42;
 const CHAT_HEADER_RADIUS: number = 22;
 const CHAT_HEADER_NAV_GUARD_MS: number = 700;
@@ -99,6 +110,12 @@ const REACTION_EMOJIS: string[] = [
   '😨', '🤝', '✍️', '🤗', '🫡', '🎅', '🎄', '☃️', '💅', '🤪', '🗿', '🆒',
   '💘', '🙉', '🦄', '😘', '💊', '🙊', '😎', '👾', '🤷', '😡'
 ];
+
+// 反应面板里的一枚自定义 emoji：位图路径为 '' 表示还在下载。
+interface CustomEmojiOption {
+  id: string;
+  path: string;
+}
 
 @Entry
 @Preview
@@ -170,6 +187,10 @@ struct ChatPage {
   // Reactions this chat actually allows for the sheet's target message,
   // fetched per open; the static list is only the instant fallback.
   @State sheetReactions: string[] = [];
+  // 自定义 emoji（Premium）反应：仅当服务端 allow_custom_emoji 为 true 时展示，
+  // 位图异步下载，未就绪时先渲染占位格子。
+  @State sheetCustomEmojis: CustomEmojiOption[] = [];
+  @State sheetAllowCustomEmoji: boolean = false;
   @State reactionPendingKey: string = '';
   @State paidMediaPendingIds: number[] = [];
   // Forwarding is deliberately kept as an in-page sheet: leaving ChatPage to
@@ -177,6 +198,7 @@ struct ChatPage {
   @State showForwardSheet: boolean = false;
   @State showPollSheet: boolean = false;
   @State showContactSheet: boolean = false;
+  @State showVideoNoteRecorder: boolean = false;
   @State showScheduledSheet: boolean = false;
   @State scheduledIds: number[] = [];
   @State scheduledPreviews: string[] = [];   // 与 scheduledIds 平行
@@ -1807,6 +1829,11 @@ struct ChatPage {
   // System back (gesture/hardware button): close the fullscreen viewer first
   // if it's open, rather than popping all the way back to the chat list.
   onBackPress(): boolean {
+    // 录制浮层盖住整页，返回键必须先关它（组件退场时会取消录制并删掉临时文件）。
+    if (this.showVideoNoteRecorder) {
+      this.showVideoNoteRecorder = false;
+      return true;
+    }
     if (this.headerMenuShow) {
       this.headerMenuShow = false;
       return true;
@@ -3326,6 +3353,27 @@ struct ChatPage {
   private onViewerPanStart(): void {
     this.viewerPanStartOffsetX = this.viewerPhotoOffsetX;
     this.viewerPanStartOffsetY = this.viewerPhotoOffsetY;
+    this.viewerEdgeOverscroll = 0;
+  }
+
+  // 放大态下拖到左右边界后继续拖动的累计量。达到阈值即翻页，
+  // 让"滑到边上还能翻下一张"在放大时也成立（此时 Swiper 收不到手势）。
+  private viewerEdgeOverscroll: number = 0;
+
+  private onViewerPanEnd(): void {
+    if (!this.viewerZoomed() || Math.abs(this.viewerEdgeOverscroll) < 60) {
+      this.viewerEdgeOverscroll = 0;
+      return;
+    }
+    const forward: boolean = this.viewerEdgeOverscroll < 0; // 向左拖 = 看下一张
+    this.viewerEdgeOverscroll = 0;
+    // 翻页前回到 1x，否则新图会沿用上一张的缩放与偏移。
+    this.resetViewerPhotoZoom(false);
+    if (forward) {
+      this.viewerSwiperCtrl.showNext();
+    } else {
+      this.viewerSwiperCtrl.showPrevious();
+    }
   }
 
   // One-finger drag pans the zoomed photo; clamping keeps it on-screen. At
@@ -3334,9 +3382,12 @@ struct ChatPage {
     if (!this.viewerZoomed()) {
       return;
     }
-    this.viewerPhotoOffsetX = this.viewerPanStartOffsetX + event.offsetX;
+    const desiredX: number = this.viewerPanStartOffsetX + event.offsetX;
+    this.viewerPhotoOffsetX = desiredX;
     this.viewerPhotoOffsetY = this.viewerPanStartOffsetY + event.offsetY;
     this.clampViewerOffset();
+    // clamp 吃掉的水平位移就是"已经贴边还在继续拖"的量。
+    this.viewerEdgeOverscroll = desiredX - this.viewerPhotoOffsetX;
   }
 
   // A single tap toggles chrome at every zoom level. Closing is explicit via
@@ -3704,6 +3755,7 @@ struct ChatPage {
                 PanGesture({ fingers: 1, distance: this.viewerZoomed() ? 3 : 50 })
                   .onActionStart(() => { this.onViewerPanStart(); })
                   .onActionUpdate((event: GestureEvent) => { this.onViewerPanUpdate(event); })
+                  .onActionEnd(() => { this.onViewerPanEnd(); })
               )
             );
           }
@@ -4626,19 +4678,13 @@ struct ChatPage {
     const next = !previous;
     this.headerMuteUpdating = true;
     this.isMuted = next;
-    const settings: TdObject = { '@type': 'chatNotificationSettings' };
-    settings['use_default_mute_for'] = false;
-    settings['mute_for'] = next ? 2147483647 : 0; // 0 = unmute, max = forever
-    const req: TdRequest = { '@type': 'setChatNotificationSettings' };
-    req['chat_id'] = this.chatId;
-    req['notification_settings'] = settings;
-    getTdClient().send(req).then((): void => {
+    // setMute 会先读取完整通知设置，所以在 TDLib 接受修改前保持更新锁；
+    // 否则任意一次聊天刷新都会立刻用 ChatStore 的旧值覆盖乐观状态。
+    setMute(this.chatId, next ? MUTE_LONG : 0).then((success: boolean): void => {
+      if (!success) {
+        this.isMuted = previous;
+      }
       this.headerMuteUpdating = false;
-    }).catch((e: TdError) => {
-      this.headerMuteUpdating = false;
-      this.isMuted = previous;
-      console.error(`ChatPage.toggleChatMute failed: ${e.message}`);
-      promptAction.showToast({ message: '通知设置更新失败', duration: 1600 });
     });
   }
 
@@ -5356,6 +5402,10 @@ struct ChatPage {
         this.setEmojiPanel(false);
         this.pickAndSendMedia();
       } } as MenuElement,
+      { value: '圆形视频', action: (): void => {
+        this.setEmojiPanel(false);
+        this.openVideoNoteRecorder();
+      } } as MenuElement,
       { value: '文件', action: (): void => {
         this.setEmojiPanel(false);
         this.pickAndSendFile();
@@ -5389,6 +5439,19 @@ struct ChatPage {
 
   private openPollComposer(): void {
     this.showPollSheet = true;
+  }
+
+  // 圆形视频走附件菜单而不是麦克风按钮：麦克风已经是"点一下开始录音"的
+  // 单击语义，再叠一个长按会和录音的起录竞争，误触率高；附件菜单里它和
+  // 照片/文件是同一类"选一种内容发出去"的入口，心智更一致。
+  private openVideoNoteRecorder(): void {
+    if (this.store === null) {
+      return;
+    }
+    this.cancelRecording();
+    this.composerController.stopEditing();
+    this.composerFocused = false;
+    this.showVideoNoteRecorder = true;
   }
 
   private openContactPicker(): void {
@@ -5784,15 +5847,16 @@ struct ChatPage {
     });
   }
 
-  private toggleReaction(messageId: number, emoji: string, isChosen: boolean): void {
+  // reactionKey：标准 emoji 原样，自定义 emoji 为 'ce:<custom_emoji_id>'。
+  private toggleReaction(messageId: number, reactionKey: string, isChosen: boolean): void {
     const store: MessageStore | null = this.store;
-    const key: string = `${messageId}_${emoji}`;
+    const key: string = `${messageId}_${reactionKey}`;
     if (store === null || this.reactionPendingKey !== '') {
       return;
     }
     ContextMenu.close();
     this.reactionPendingKey = key;
-    store.setReaction(messageId, emoji, isChosen).then((): void => {
+    store.setReaction(messageId, reactionKey, isChosen).then((): void => {
       if (this.reactionPendingKey === key) {
         this.reactionPendingKey = '';
       }
@@ -5812,6 +5876,8 @@ struct ChatPage {
     }
     this.reactionTargetId = messageId;
     this.sheetReactions = REACTION_EMOJIS;
+    this.sheetCustomEmojis = [];
+    this.sheetAllowCustomEmoji = false;
     this.showReactionSheet = true;
     this.loadAvailableReactions(messageId);
   }
@@ -5825,40 +5891,64 @@ struct ChatPage {
     req['row_size'] = 8;
     getTdClient().send(req, 10000).then((result: TdObject): void => {
       if (this.reactionTargetId !== messageId || !this.showReactionSheet) { return; }
-      const emojis: string[] = [];
-      const buckets: string[] = ['top_reactions', 'recent_reactions', 'popular_reactions'];
-      for (const bucket of buckets) {
-        for (const item of (result[bucket] as TdObject[] | undefined) ?? []) {
-          const type = item['type'] as TdObject | undefined;
-          if (type !== undefined && type['@type'] === 'reactionTypeEmoji') {
-            const emoji = (type['emoji'] as string | undefined) ?? '';
-            if (emoji !== '' && emojis.indexOf(emoji) < 0) { emojis.push(emoji); }
-          }
-        }
-      }
-      if (emojis.length > 0) { this.sheetReactions = emojis; }
+      const available: AvailableReactionSet = parseAvailableReactions(result);
+      if (available.emojis.length > 0) { this.sheetReactions = available.emojis; }
+      this.sheetAllowCustomEmoji = available.allowCustomEmoji;
+      if (!available.allowCustomEmoji || available.customEmojiIds.length === 0) { return; }
+      this.sheetCustomEmojis = available.customEmojiIds.map((id: string): CustomEmojiOption => {
+        return { id, path: '' };
+      });
+      resolveCustomEmojiThumbs(available.customEmojiIds, (id: string, path: string): void => {
+        if (this.reactionTargetId !== messageId || !this.showReactionSheet) { return; }
+        this.applyCustomEmojiThumb(id, path);
+      });
     }).catch((e: TdError): void => {
       console.error(`ChatPage.availableReactions failed: ${e.message}`);
     });
   }
 
+  // 逐个替换而不是整批重建：先到的位图立刻可见，其余仍显示占位。
+  private applyCustomEmojiThumb(customEmojiId: string, path: string): void {
+    this.sheetCustomEmojis = this.sheetCustomEmojis.map(
+      (option: CustomEmojiOption): CustomEmojiOption => {
+        return option.id === customEmojiId ? { id: option.id, path } : option;
+      });
+  }
+
+  // 从长按菜单里直接调全局 promptAction.showDialog 会静默挂死：菜单是独立
+  // 子窗口，收起过程中弹出的对话框没有可依附的 UI 上下文，Promise 既不
+  // resolve 也不 reject（见 ChatRow.showConfirm 的同类修复）。
+  private showMenuConfirm(
+    options: promptAction.ShowDialogOptions, what: string,
+    onConfirm: (index: number) => void
+  ): void {
+    const prompt = this.getUIContext().getPromptAction();
+    setTimeout((): void => {
+      prompt.showDialog(options).then((res: promptAction.ShowDialogSuccessResponse): void => {
+        onConfirm(res.index);
+      }).catch((e: Object): void => {
+        console.info(`ChatPage.${what} dialog dismissed: ${JSON.stringify(e)}`);
+      });
+    }, MENU_DISMISS_MS);
+  }
+
   private stopPoll(messageId: number): void {
-    promptAction.showDialog({
+    this.showMenuConfirm({
       title: '结束投票',
       message: '结束后不能再投票，结果将保留。',
       buttons: [
         { text: '取消', color: '#8E8E93' },
         { text: '结束', color: '#E5484D' }
       ]
-    }).then((result): void => {
-      if (result.index !== 1) { return; }
+    }, 'stopPoll', (index: number): void => {
+      if (index !== 1) { return; }
       this.store?.stopPollAsync(messageId).then((): void => {
         promptAction.showToast({ message: '投票已结束', duration: 1500 });
       }).catch((e: TdError): void => {
         console.error(`ChatPage.stopPoll failed: ${e.message}`);
         promptAction.showToast({ message: '结束投票失败', duration: 1600 });
       });
-    }).catch((): void => {});
+    });
   }
 
   // Public polls only: list who picked each option.
@@ -6100,13 +6190,11 @@ struct ChatPage {
   }
 
   // Long-press on a reaction chip: who reacted with it.
-  private showReactors(messageId: number, emoji: string): void {
+  private showReactors(messageId: number, reactionKey: string): void {
     const req: TdRequest = { '@type': 'getMessageAddedReactions' };
     req['chat_id'] = this.chatId;
     req['message_id'] = messageId;
-    const rt: TdObject = { '@type': 'reactionTypeEmoji' };
-    rt['emoji'] = emoji;
-    req['reaction_type'] = rt;
+    req['reaction_type'] = reactionTypeOf(reactionKey);
     req['offset'] = '';
     req['limit'] = 50;
     getTdClient().send(req, 10000).then((result: TdObject): void => {
@@ -6128,7 +6216,7 @@ struct ChatPage {
         }
       }
       promptAction.showDialog({
-        title: `${emoji} 共 ${total} 人`,
+        title: `${reactionDisplayLabel(reactionKey)} 共 ${total} 人`,
         message: names.length > 0 ? names.join('\n') : '暂无详情',
         buttons: [{ text: '关闭', color: '#3390EC' }]
       }).catch((): void => {});
@@ -6141,15 +6229,17 @@ struct ChatPage {
   private closeReactionSheet(): void {
     this.showReactionSheet = false;
     this.reactionTargetId = 0;
+    this.sheetCustomEmojis = [];
+    this.sheetAllowCustomEmoji = false;
   }
 
-  private targetReactionChosen(emoji: string): boolean {
+  private targetReactionChosen(reactionKey: string): boolean {
     const m: MessageEntry | null = this.findMsg(this.reactionTargetId);
     if (m === null) {
       return false;
     }
     for (const reaction of m.reactions) {
-      if (reaction.emoji === emoji) {
+      if (reactionKeyFrom(reaction.emoji, reaction.customEmojiId) === reactionKey) {
         return reaction.isChosen;
       }
     }
@@ -6158,14 +6248,14 @@ struct ChatPage {
 
   // The full sheet mirrors the quick row: tapping an already-selected emoji
   // removes it instead of issuing a redundant add request.
-  private pickReaction(emoji: string): void {
+  private pickReaction(reactionKey: string): void {
     const targetId: number = this.reactionTargetId;
     if (targetId === 0 || this.reactionPendingKey !== '') {
       return;
     }
-    const chosen: boolean = this.targetReactionChosen(emoji);
+    const chosen: boolean = this.targetReactionChosen(reactionKey);
     this.closeReactionSheet();
-    this.toggleReaction(targetId, emoji, chosen);
+    this.toggleReaction(targetId, reactionKey, chosen);
   }
 
   private updateForwardChats(list: ChatEntry[]): void {
@@ -6972,6 +7062,47 @@ struct ChatPage {
     );
   }
 
+  // 自定义 emoji（Premium 表情）反应区。只在服务端允许时才出现，避免用户点
+  // 一个必然被拒的反应。
+  @Builder
+  customEmojiReactionSection() {
+    Column({ space: 6 }) {
+      Row() {
+        Text('自定义表情').fontSize(13).fontColor(COLOR_TEXT_SECONDARY).layoutWeight(1);
+      }
+      .width('100%').padding({ left: 6, right: 6 });
+      Scroll() {
+        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
+          ForEach(this.sheetCustomEmojis, (option: CustomEmojiOption) => {
+            Row() {
+              if (option.path !== '') {
+                Image(option.path.startsWith('/') ? `file://${option.path}` : option.path)
+                  .width(30).height(30).objectFit(ImageFit.Contain)
+                  .draggable(false);
+              } else {
+                // 位图未就绪：灰底占位保持格子尺寸，不闪空白。
+                Row().width(30).height(30).borderRadius(8)
+                  .backgroundColor($r('app.color.surface_alt'));
+              }
+            }
+            .width(44).height(44).borderRadius(22)
+            .justifyContent(FlexAlign.Center)
+            .backgroundColor(this.targetReactionChosen(customEmojiReactionKey(option.id))
+              ? $r('app.color.selected_pill') : Color.Transparent)
+            .stateStyles({
+              normal: this.suggestionRowNormalStyle,
+              pressed: this.suggestionRowPressedStyle
+            })
+            .animation({ duration: this.reactionEffectDuration(130), curve: Curve.EaseOut })
+            .accessibilityText('自定义表情回应')
+            .onClick(() => { this.pickReaction(customEmojiReactionKey(option.id)); });
+          }, (option: CustomEmojiOption) => `ce_${option.id}_${option.path}`);
+        }.width('100%');
+      }.constraintSize({ maxHeight: 108 }).scrollBar(BarState.Off);
+    }
+    .width('100%');
+  }
+
   // Full emoji reaction picker (opened from the long-press menu chevron): a
   // bottom sheet grid; tapping an emoji adds it as a reaction to the target.
   @Builder
@@ -7005,7 +7136,10 @@ struct ChatPage {
                 .onClick(() => { this.pickReaction(e); });
             }, (e: string) => e);
           }.width('100%');
-        }.constraintSize({ maxHeight: 300 }).scrollBar(BarState.Off);
+        }.constraintSize({ maxHeight: 240 }).scrollBar(BarState.Off);
+        if (this.sheetAllowCustomEmoji && this.sheetCustomEmojis.length > 0) {
+          this.customEmojiReactionSection();
+        }
       }
       .width('calc(100% - 16vp)')
       .padding({ left: 10, right: 10, top: 10, bottom: 14 + this.bottomInset() })
@@ -8595,6 +8729,19 @@ struct ChatPage {
           },
           onClose: (): void => {
             this.showContactSheet = false;
+          }
+        });
+      }
+      if (this.showVideoNoteRecorder) {
+        VideoNoteRecorderView({
+          onCaptured: (path: string, durationSec: number, length: number): void => {
+            if (this.store !== null) {
+              this.atBottom = true;
+              this.store.sendVideoNote(path, durationSec, length);
+            }
+          },
+          onClose: (): void => {
+            this.showVideoNoteRecorder = false;
           }
         });
       }

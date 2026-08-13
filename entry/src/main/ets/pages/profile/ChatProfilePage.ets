@@ -8,6 +8,7 @@ import {
 } from '../../store/ChatProfileStore';
 import { AvatarView } from '../chatlist/AvatarView';
 import { QrDialog } from '../common/QrDialog';
+import { AvatarViewer } from '../common/AvatarViewer';
 import { TdObject, TdRequest, TdError } from '../../tdkit/TdTypes';
 import {
   COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY,
@@ -19,6 +20,7 @@ import {
   createVideoChat, endGroupCall, getGroupCall, startScheduledVideoChat
 } from '../../tdkit/GroupCallApi';
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
+import { MUTE_LONG, setMute } from '../../store/ChatActions';
 
 const CARD_BG: ResourceColor = $r('app.color.surface');
 const CARD_RADIUS: number = 14;
@@ -53,6 +55,8 @@ struct ChatProfilePage {
   @State title: string = '';
   @State initials: string = '?';
   @State avatarPath: string = '';
+  // 头像点击放大（'' = 未打开）。
+  @State viewerAvatarPath: string = '';
   @State avatarAnimPath: string = '';
   @State subtitle: string = '';
   @State description: string = '';
@@ -487,20 +491,17 @@ struct ChatProfilePage {
 
   private toggleMute(): void {
     const willMute = !this.isMuted;
-    const settings: TdObject = { '@type': 'chatNotificationSettings' };
-    settings['use_default_mute_for'] = false;
-    settings['mute_for'] = willMute ? 2147483647 : 0; // forever / unmute
-    const req: TdRequest = { '@type': 'setChatNotificationSettings' };
-    req['chat_id'] = this.chatId;
-    req['notification_settings'] = settings;
-    getTdClient().send(req).then(() => {
-      // The updateChatNotificationSettings event also confirms this, but flip
-      // immediately so the button reacts without waiting for the round-trip.
-      this.isMuted = willMute;
-      promptAction.showToast({ message: willMute ? '已静音' : '已取消静音', duration: 1500 });
-    }).catch((e: TdError) => {
-      console.error(`ChatProfilePage.setChatNotificationSettings failed: ${e.message}`);
-      promptAction.showToast({ message: '操作失败', duration: 1500 });
+    // 统一走 ChatActions：那里用的是服务端会接受的静音时长，并且带
+    // "会话未加载则先 getChat 再重试"的兜底。
+    const pending = setMute(this.chatId, willMute ? MUTE_LONG : 0);
+    // updateChatNotificationSettings 也会确认，但先本地翻转，按钮不必等往返。
+    this.isMuted = willMute;
+    pending.then((success: boolean): void => {
+      if (success) {
+        promptAction.showToast({ message: willMute ? '已静音' : '已取消静音', duration: 1500 });
+      } else {
+        this.isMuted = !willMute;
+      }
     });
   }
 
@@ -870,7 +871,12 @@ struct ChatProfilePage {
         avatarPath: this.avatarPath, initials: this.initials,
         colorSeed: this.chatId, avatarSize: 100,
         animPath: this.avatarAnimPath
-      });
+      })
+        .onClick((): void => {
+          if (this.avatarPath !== '') {
+            this.viewerAvatarPath = this.avatarPath;
+          }
+        });
       Text(this.title)
         .fontSize(20).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
         .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -1336,6 +1342,8 @@ struct ChatProfilePage {
   }
 
   build() {
+    // 查看器需覆盖整页，故在滚动容器外再包一层 Stack。
+    Stack() {
     Scroll() {
       Column() {
         this.header();
@@ -1381,5 +1389,13 @@ struct ChatProfilePage {
       }
     })
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM]);
+    if (this.viewerAvatarPath !== '') {
+      AvatarViewer({
+        imagePath: this.viewerAvatarPath,
+        onClose: (): void => { this.viewerAvatarPath = ''; }
+      });
+    }
+    }
+    .width('100%').height('100%');
   }
 }

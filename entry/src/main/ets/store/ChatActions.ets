@@ -14,6 +14,13 @@ import { ChatKind } from './ChatEntry';
 // overflows int32 and is rejected).
 export const MUTE_FOREVER: number = 2147483647;
 
+// 曾经怀疑 MUTE_FOREVER 这个哨兵值会被服务端拒绝（现象是本地先生效、约
+// 400ms 后被回退成"跟随默认"），因此一度改用 366 天。后来确认：那个回退是
+// **服务端对通知设置变更的限流** —— 短时间内连续修改多个会话就会触发，
+// 隔一会儿再点同一个会话就能成功。和 mute_for 的取值无关。
+// 所以恢复用哨兵值，"永久静音"才是真的永久，不会一年后自己解除。
+export const MUTE_LONG: number = MUTE_FOREVER;
+
 export interface MuteOption {
   label: string;
   seconds: number;
@@ -23,7 +30,7 @@ export const MUTE_OPTIONS: MuteOption[] = [
   { label: '静音 1 小时', seconds: 3600 },
   { label: '静音 8 小时', seconds: 8 * 3600 },
   { label: '静音 2 天', seconds: 2 * 24 * 3600 },
-  { label: '永久静音', seconds: MUTE_FOREVER }
+  { label: '永久静音', seconds: MUTE_LONG }
 ];
 
 function fail(what: string, e: TdError): void {
@@ -31,23 +38,79 @@ function fail(what: string, e: TdError): void {
   promptAction.showToast({ message: `操作失败：${e.message}`, duration: 2000 });
 }
 
-export function togglePin(listKey: string, chatId: number, pinned: boolean): void {
-  const req: TdRequest = { '@type': 'toggleChatIsPinned' };
-  req['chat_list'] = chatListOf(listKey);
-  req['chat_id'] = chatId;
-  req['is_pinned'] = pinned;
-  getTdClient().send(req).catch((e: TdError) => { fail('togglePin', e); });
+// TDLib 的 chat 级方法都要求该会话在当前运行期"已加载"，否则一律拒为
+// Wrong chat identifier specified。会话列表很长时，多数会话并不在最近活跃的
+// 那批，从列表长按触发的操作就会莫名失败。getChat 会把它从数据库读回内存。
+//
+// 只用在用户主动触发的一次性操作上 —— 多一次往返换确定性是划算的；
+// 高频路径（比如滚动时的批量读取）不该走这里。
+function withChat(chatId: number, what: string, run: () => Promise<TdObject>): void {
+  const load: TdRequest = { '@type': 'getChat' };
+  load['chat_id'] = chatId;
+  getTdClient().send(load)
+    .then((): Promise<TdObject> => run())
+    .catch((e: TdError) => { fail(what, e); });
 }
 
-// seconds = 0 unmutes; MUTE_FOREVER mutes indefinitely.
-export function setMute(chatId: number, seconds: number): void {
-  const settings: TdObject = { '@type': 'chatNotificationSettings' };
-  settings['use_default_mute_for'] = false;
-  settings['mute_for'] = seconds;
-  const req: TdRequest = { '@type': 'setChatNotificationSettings' };
-  req['chat_id'] = chatId;
-  req['notification_settings'] = settings;
-  getTdClient().send(req).catch((e: TdError) => { fail('setMute', e); });
+export function togglePin(listKey: string, chatId: number, pinned: boolean): void {
+  withChat(chatId, 'togglePin', (): Promise<TdObject> => {
+    const req: TdRequest = { '@type': 'toggleChatIsPinned' };
+    req['chat_list'] = chatListOf(listKey);
+    req['chat_id'] = chatId;
+    req['is_pinned'] = pinned;
+    return getTdClient().send(req);
+  });
+}
+
+// chatNotificationSettings 是一个**整体**：它有 8 个 use_default_* 开关，
+// 只发其中一两个字段时，其余在 JSON 转换里全部缺省为 false —— 等于顺带声明
+// "提示音、预览、置顶、提及也都不跟随默认"，而它们的值字段又是空的。
+// 服务端会拒绝这一整套非法组合：本地先生效，约 400ms 后被整体回退成跟随默认。
+//
+// 所以必须先读回当前设置，只覆盖要改的字段，再把完整对象发回去。
+// getChat 同时解决了另一个问题：TDLib 只认当前运行期加载过的会话，
+// 冷会话直接调用会被拒为 Wrong chat identifier specified。
+function updateChatNotificationSettings(
+  chatId: number, mutate: (settings: TdObject) => void, what: string
+): Promise<boolean> {
+  const load: TdRequest = { '@type': 'getChat' };
+  load['chat_id'] = chatId;
+  return getTdClient().send(load).then((chat: TdObject): Promise<TdObject> => {
+    const current = chat['notification_settings'] as TdObject | undefined;
+    // 复制而不是原地改 TDLib 回给我们的对象。
+    const settings: TdObject = { '@type': 'chatNotificationSettings' };
+    if (current !== undefined) {
+      for (const key of Object.keys(current)) {
+        settings[key] = current[key];
+      }
+      settings['@type'] = 'chatNotificationSettings';
+    }
+    mutate(settings);
+    const req: TdRequest = { '@type': 'setChatNotificationSettings' };
+    req['chat_id'] = chatId;
+    req['notification_settings'] = settings;
+    return getTdClient().send(req);
+  }).then((): boolean => true).catch((e: TdError): boolean => {
+    fail(what, e);
+    return false;
+  });
+}
+
+// 恢复成"跟随作用域默认值"。撤销操作需要它 —— 如果原本就是跟随默认，
+// 用 setMute 回写会留下一条显式设置，和撤销前的状态并不等价。
+export function useDefaultMute(chatId: number): Promise<boolean> {
+  return updateChatNotificationSettings(chatId, (settings: TdObject): void => {
+    settings['use_default_mute_for'] = true;
+    settings['mute_for'] = 0;
+  }, 'useDefaultMute');
+}
+
+// seconds = 0 unmutes; 长期静音传 MUTE_LONG。
+export function setMute(chatId: number, seconds: number): Promise<boolean> {
+  return updateChatNotificationSettings(chatId, (settings: TdObject): void => {
+    settings['use_default_mute_for'] = false;
+    settings['mute_for'] = seconds;
+  }, 'setMute');
 }
 
 // Reads everything up to the newest message and clears a manual unread flag.
@@ -64,17 +127,21 @@ export function markAsRead(chatId: number, lastMessageId: number): void {
 }
 
 export function markUnread(chatId: number, unread: boolean): void {
-  const req: TdRequest = { '@type': 'toggleChatIsMarkedAsUnread' };
-  req['chat_id'] = chatId;
-  req['is_marked_as_unread'] = unread;
-  getTdClient().send(req).catch((e: TdError) => { fail('markUnread', e); });
+  withChat(chatId, 'markUnread', (): Promise<TdObject> => {
+    const req: TdRequest = { '@type': 'toggleChatIsMarkedAsUnread' };
+    req['chat_id'] = chatId;
+    req['is_marked_as_unread'] = unread;
+    return getTdClient().send(req);
+  });
 }
 
 export function setArchived(chatId: number, archived: boolean): void {
-  const req: TdRequest = { '@type': 'addChatToList' };
-  req['chat_id'] = chatId;
-  req['chat_list'] = chatListOf(archived ? 'archive' : 'main');
-  getTdClient().send(req).catch((e: TdError) => { fail('setArchived', e); });
+  withChat(chatId, 'setArchived', (): Promise<TdObject> => {
+    const req: TdRequest = { '@type': 'addChatToList' };
+    req['chat_id'] = chatId;
+    req['chat_list'] = chatListOf(archived ? 'archive' : 'main');
+    return getTdClient().send(req);
+  });
 }
 
 // TDLib has no "add chat to folder" call: the whole folder must be read,
@@ -114,27 +181,32 @@ export async function setInFolder(folderId: number, chatId: number, include: boo
 
 // revoke: also delete the history for the other side (private chats only).
 export function clearHistory(chatId: number, revoke: boolean): void {
-  const req: TdRequest = { '@type': 'deleteChatHistory' };
-  req['chat_id'] = chatId;
-  req['remove_from_chat_list'] = false;
-  req['revoke'] = revoke;
-  getTdClient().send(req).catch((e: TdError) => { fail('clearHistory', e); });
+  withChat(chatId, 'clearHistory', (): Promise<TdObject> => {
+    const req: TdRequest = { '@type': 'deleteChatHistory' };
+    req['chat_id'] = chatId;
+    req['remove_from_chat_list'] = false;
+    req['revoke'] = revoke;
+    return getTdClient().send(req);
+  });
 }
 
 // Groups/channels are left; private and secret chats are deleted from the list.
 export function leaveOrDeleteChat(chatId: number, kind: ChatKind): void {
-  const client = getTdClient();
   if (kind === 'basicGroup' || kind === 'supergroup' || kind === 'channel') {
-    const req: TdRequest = { '@type': 'leaveChat' };
-    req['chat_id'] = chatId;
-    client.send(req).catch((e: TdError) => { fail('leaveChat', e); });
+    withChat(chatId, 'leaveChat', (): Promise<TdObject> => {
+      const req: TdRequest = { '@type': 'leaveChat' };
+      req['chat_id'] = chatId;
+      return getTdClient().send(req);
+    });
     return;
   }
-  const req: TdRequest = { '@type': 'deleteChatHistory' };
-  req['chat_id'] = chatId;
-  req['remove_from_chat_list'] = true;
-  req['revoke'] = false;
-  client.send(req).catch((e: TdError) => { fail('deleteChat', e); });
+  withChat(chatId, 'deleteChat', (): Promise<TdObject> => {
+    const req: TdRequest = { '@type': 'deleteChatHistory' };
+    req['chat_id'] = chatId;
+    req['remove_from_chat_list'] = true;
+    req['revoke'] = false;
+    return getTdClient().send(req);
+  });
 }
 
 // Menu label for the destructive last item, by chat kind.

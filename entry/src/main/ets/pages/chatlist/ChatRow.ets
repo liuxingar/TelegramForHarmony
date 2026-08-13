@@ -1,5 +1,5 @@
 import { router, promptAction, SymbolGlyphModifier } from '@kit.ArkUI';
-import { ChatEntry } from '../../store/ChatEntry';
+import { ChatEntry, ChatKind } from '../../store/ChatEntry';
 import { FOLDER_TAGS_ENABLED, FolderInfo } from '../../store/FolderStore';
 import {
   MUTE_OPTIONS, MuteOption, togglePin, setMute, markAsRead, markUnread,
@@ -15,6 +15,10 @@ import { AvatarView } from './AvatarView';
 import { formatTime } from '../../util/formatTime';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY, COLOR_MUTED_BADGE, ROW_PAD_H, ROW_PAD_V } from '../../util/theme';
 import { folderColor } from '../../util/FolderVisuals';
+
+// 等上下文菜单收起再弹确认框。菜单是独立子窗口，收起过程中弹出的
+// 对话框会挂死（Promise 既不 resolve 也不 reject）。
+const MENU_DISMISS_MS: number = 150;
 
 @Component
 export struct ChatRow {
@@ -146,33 +150,55 @@ export struct ChatRow {
     if (isPrivate) {
       buttons.push({ text: '同时为对方清空', color: '#E64646' });
     }
-    promptAction.showDialog({
+    const chatId: number = this.chat.id;
+    this.showConfirm({
       title: '清空聊天记录',
       message: `确定要清空与「${this.chat.title}」的聊天记录吗？此操作无法撤销。`,
       buttons: buttons
-    }).then((res: promptAction.ShowDialogSuccessResponse) => {
-      if (res.index === 1) {
-        clearHistory(this.chat.id, false);
-      } else if (res.index === 2) {
-        clearHistory(this.chat.id, true);
+    }, 'confirmClearHistory', (index: number): void => {
+      if (index === 1) {
+        clearHistory(chatId, false);
+      } else if (index === 2) {
+        clearHistory(chatId, true);
       }
-    }).catch(() => {}); // dismissed by tapping outside
+    });
+  }
+
+  // 上下文菜单的 onClick 里直接调全局 promptAction.showDialog 会静默挂死：
+  // 菜单是独立子窗口，收起过程中弹出的对话框没有可依附的 UI 上下文，Promise
+  // 既不 resolve 也不 reject，界面上什么都不发生（排查时极难定位）。
+  // 两处修正：用 UIContext 作用域的 promptAction，并延后到菜单收起动画之后。
+  private showConfirm(
+    options: promptAction.ShowDialogOptions, what: string,
+    onConfirm: (index: number) => void
+  ): void {
+    const prompt = this.getUIContext().getPromptAction();
+    setTimeout((): void => {
+      prompt.showDialog(options).then((res: promptAction.ShowDialogSuccessResponse): void => {
+        onConfirm(res.index);
+      }).catch((e: Object): void => {
+        // 点击遮罩关闭也会走到这里，所以只记录不打扰用户。
+        console.info(`ChatRow.${what} dialog dismissed: ${JSON.stringify(e)}`);
+      });
+    }, MENU_DISMISS_MS);
   }
 
   private confirmLeave(): void {
     const label = leaveLabel(this.chat.kind);
-    promptAction.showDialog({
+    const chatId: number = this.chat.id;
+    const kind: ChatKind = this.chat.kind;
+    this.showConfirm({
       title: label,
       message: `确定要${label.substring(0, 2)}「${this.chat.title}」吗？`,
       buttons: [
         { text: '取消', color: COLOR_TEXT_SECONDARY as string },
         { text: label, color: '#E64646' }
       ]
-    }).then((res: promptAction.ShowDialogSuccessResponse) => {
-      if (res.index === 1) {
-        leaveOrDeleteChat(this.chat.id, this.chat.kind);
+    }, 'confirmLeave', (index: number): void => {
+      if (index === 1) {
+        leaveOrDeleteChat(chatId, kind);
       }
-    }).catch(() => {});
+    });
   }
 
   // Native pressed feedback starts as soon as the finger goes down. Besides

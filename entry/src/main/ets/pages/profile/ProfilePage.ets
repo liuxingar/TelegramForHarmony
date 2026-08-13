@@ -9,6 +9,7 @@ import {
 } from '../../store/ChatProfileStore';
 import { AvatarView } from '../chatlist/AvatarView';
 import { QrDialog } from '../common/QrDialog';
+import { AvatarViewer } from '../common/AvatarViewer';
 import { TgsStickerView } from '../chat/TgsStickerView';
 import { WebmStickerView } from '../chat/WebmStickerView';
 import { TdObject, TdRequest, TdError } from '../../tdkit/TdTypes';
@@ -20,6 +21,7 @@ import { ExpandableText } from './ExpandableText';
 import { openUrl } from '../../util/openUrl';
 import { common } from '@kit.AbilityKit';
 import { publicLink } from '../../util/telegramLink';
+import { MUTE_LONG, setMute } from '../../store/ChatActions';
 
 const CARD_BG: ResourceColor = $r('app.color.surface');
 const CARD_RADIUS: number = 14;
@@ -64,6 +66,8 @@ struct ProfilePage {
   @State name: string = '';
   @State initials: string = '?';
   @State avatarPath: string = '';
+  // 头像点击放大（'' = 未打开）。
+  @State viewerAvatarPath: string = '';
   @State avatarAnimPath: string = '';
   @State statusEmojiPath: string = '';
   @State statusEmojiFormat: string = '';
@@ -426,15 +430,7 @@ struct ProfilePage {
   }
 
   private toggleMute(): void {
-    const settings: TdObject = { '@type': 'chatNotificationSettings' };
-    settings['use_default_mute_for'] = false;
-    settings['mute_for'] = 2147483647; // "forever"
-    const req: TdRequest = { '@type': 'setChatNotificationSettings' };
-    req['chat_id'] = this.userId;
-    req['notification_settings'] = settings;
-    getTdClient().send(req).catch((e: TdError) => {
-      console.error(`ProfilePage.setChatNotificationSettings failed: ${e.message}`);
-    });
+    setMute(this.userId, MUTE_LONG);
   }
 
   // 位置 tap → system map app via geo: URI (coordinates when TDLib provides
@@ -573,7 +569,13 @@ struct ProfilePage {
         avatarPath: this.avatarPath, initials: this.initials,
         colorSeed: this.userId, avatarSize: 100,
         animPath: this.avatarAnimPath
-      });
+      })
+        // 没有头像文件时（仅首字母占位）点击无意义，不给反馈。
+        .onClick((): void => {
+          if (this.avatarPath !== '') {
+            this.viewerAvatarPath = this.avatarPath;
+          }
+        });
       Row({ space: 5 }) {
         Text(this.name)
           .fontSize(20).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
@@ -1217,6 +1219,12 @@ struct ProfilePage {
       })
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM]);
 
+      if (this.viewerAvatarPath !== '') {
+        AvatarViewer({
+          imagePath: this.viewerAvatarPath,
+          onClose: (): void => { this.viewerAvatarPath = ''; }
+        });
+      }
       if (this.showGiftPicker) {
         this.giftPicker();
       }

@@ -802,6 +802,23 @@ export default function messageStoreTest() {
       expect(content['@type']).assertEqual('inputMessageDice');
       expect(content['emoji']).assertEqual('🎯');
     });
+    // video_note 必须是裸 InputFile：捆绑的 td 没有 inputVideoNote 包装类，
+    // 套一层会让整条消息发不出去。duration/length 相应挂在外层。
+    it('send_video_note_uses_bare_input_file_with_outer_duration_and_length', 0, () => {
+      const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
+      store.open();
+      store.sendVideoNote('/cache/videonote_1.mp4', 12, 480);
+      const req = b.sent.map((json: string): TdObject => JSON.parse(json) as TdObject)
+        .filter((o: TdObject): boolean => o['@type'] === 'sendMessage').pop();
+      const content = req!['input_message_content'] as TdObject;
+      expect(content['@type']).assertEqual('inputMessageVideoNote');
+      expect(content['duration']).assertEqual(12);
+      expect(content['length']).assertEqual(480);
+      const file = content['video_note'] as TdObject;
+      expect(file['@type']).assertEqual('inputFileLocal');
+      expect(file['path'] as string).assertEqual('/cache/videonote_1.mp4');
+      expect(req!['chat_id']).assertEqual(5);
+    });
     it('close_unsubscribes', 0, () => {
       const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
       store.open();

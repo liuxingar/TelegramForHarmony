@@ -10,6 +10,7 @@ import {
   KEY_POWER_AUTOPLAY_GIF, powerFeatureEnabled, reduceAnimations, shouldAutoDownload
 } from './AppSettings';
 import { PollOptionInfo } from '../util/formatMsgContent';
+import { reactionTypeOf } from '../util/reactions';
 
 const PAGE: number = 30;
 // Visible bubble/header thumbnails should outrank silent video prefetch. The
@@ -1056,11 +1057,11 @@ export class MessageStore {
     });
   }
 
-  // Toggle an emoji reaction on a message. TDLib pushes the updated counts back
-  // via updateMessageInteractionInfo, which onInteraction() already applies.
-  setReaction(messageId: number, emoji: string, isChosen: boolean): Promise<void> {
-    const rt: TdObject = { '@type': 'reactionTypeEmoji' };
-    rt['emoji'] = emoji;
+  // Toggle a reaction on a message. `reactionKey` 既可以是标准 emoji，也可以是
+  // 'ce:<custom_emoji_id>' 形式的自定义 emoji（见 util/reactions.ets）。TDLib
+  // 会通过 updateMessageInteractionInfo 推回新的计数，onInteraction() 已处理。
+  setReaction(messageId: number, reactionKey: string, isChosen: boolean): Promise<void> {
+    const rt: TdObject = reactionTypeOf(reactionKey);
     if (isChosen) {
       const req: TdRequest = { '@type': 'removeMessageReaction' };
       req['chat_id'] = this.chatId;
@@ -1345,6 +1346,19 @@ export class MessageStore {
     content['voice_note'] = MessageStore.localFile(path);
     content['duration'] = durationSec;
     this.sendContent(content, 'sendVoiceNote');
+  }
+
+  // 圆形视频消息。length 是正方形边长（圆形视频宽高相等）。
+  // video_note 是裸 InputFile，和 voiceNote/sticker/animation 一族一致 —— 捆绑的
+  // libtdjson.so 里根本没有 inputVideoNote 这个类（`strings libtdjson.so` 只有
+  // inputMessageVideoNote），包装对象会被判为未知类型而整条消息发不出去。
+  // 对应地 duration/length 直接挂在 inputMessageVideoNote 外层。
+  sendVideoNote(path: string, durationSec: number, length: number): void {
+    const content: TdObject = { '@type': 'inputMessageVideoNote' };
+    content['video_note'] = MessageStore.localFile(path);
+    content['duration'] = durationSec;
+    content['length'] = length;
+    this.sendContent(content, 'sendVideoNote');
   }
 
   private sendSimple(type: string): void {
@@ -1831,6 +1845,11 @@ export class MessageStore {
       c.commentReplierAvatarPaths = [];
       c.reactions = rx;
     });
+    // 反应是随更新推过来的，可能首次出现自定义 emoji：立刻解析位图，
+    // 否则要等下一次 requestPhotos 才会补齐。
+    if (rx.some((r: ReactionInfo): boolean => r.customEmojiId !== '')) {
+      this.resolveCustomEmojis();
+    }
     this.resolveCommentAvatars();
   }
 
@@ -1969,7 +1988,7 @@ export class MessageStore {
   private customEmojiFailed: Set<string> = new Set();
 
   private resolveCustomEmojis(): void {
-    this.hydrateInlineCustomEmojiPaths();
+    this.hydrateCustomEmojiPaths();
     for (const e of this.messages) {
       if (e.contentType === 'customEmoji' && e.customEmojiId !== '') {
         this.resolveCustomEmojiId(e.customEmojiId, e.id);
@@ -1977,29 +1996,33 @@ export class MessageStore {
       for (const id of e.inlineCustomEmojiIds) {
         this.resolveCustomEmojiId(id, e.id);
       }
+      // 自定义 emoji 反应复用同一条解析/下载管线：拿到的静态位图正好是
+      // 反应 chip 需要的尺寸，无需第二套缓存。
+      for (const r of e.reactions) {
+        if (r.customEmojiId !== '') {
+          this.resolveCustomEmojiId(r.customEmojiId, e.id);
+        }
+      }
     }
   }
 
-  private hydrateInlineCustomEmojiPaths(): void {
+  // 已下载的位图路径同时回填到「文本内联自定义 emoji」和「自定义 emoji 反应」，
+  // 一次遍历一次 notify，避免两条路径各自刷新列表。
+  private hydrateCustomEmojiPaths(): void {
     let changed = false;
     this.messages = this.messages.map((m: MessageEntry): MessageEntry => {
-      if (m.inlineCustomEmojiIds.length === 0) {
-        return m;
-      }
-      const paths: string[] = [];
-      let differs = m.inlineCustomEmojiPaths.length !== m.inlineCustomEmojiIds.length;
-      for (let i = 0; i < m.inlineCustomEmojiIds.length; i++) {
-        const path = this.inlineCustomEmojiPathById.get(m.inlineCustomEmojiIds[i]) ?? '';
-        paths.push(path);
-        if (!differs && path !== m.inlineCustomEmojiPaths[i]) {
-          differs = true;
-        }
-      }
-      if (!differs) {
+      const inlinePaths: string[] | null = this.updatedInlineCustomEmojiPaths(m);
+      const reactions: ReactionInfo[] | null = this.updatedReactionCustomEmojiPaths(m);
+      if (inlinePaths === null && reactions === null) {
         return m;
       }
       const c = cloneMessage(m);
-      c.inlineCustomEmojiPaths = paths;
+      if (inlinePaths !== null) {
+        c.inlineCustomEmojiPaths = inlinePaths;
+      }
+      if (reactions !== null) {
+        c.reactions = reactions;
+      }
       changed = true;
       return c;
     });
@@ -2008,13 +2031,49 @@ export class MessageStore {
     }
   }
 
+  // 返回 null 表示无变化（调用方据此跳过克隆）。
+  private updatedInlineCustomEmojiPaths(m: MessageEntry): string[] | null {
+    if (m.inlineCustomEmojiIds.length === 0) {
+      return null;
+    }
+    const paths: string[] = [];
+    let differs = m.inlineCustomEmojiPaths.length !== m.inlineCustomEmojiIds.length;
+    for (let i = 0; i < m.inlineCustomEmojiIds.length; i++) {
+      const path = this.inlineCustomEmojiPathById.get(m.inlineCustomEmojiIds[i]) ?? '';
+      paths.push(path);
+      if (!differs && path !== m.inlineCustomEmojiPaths[i]) {
+        differs = true;
+      }
+    }
+    return differs ? paths : null;
+  }
+
+  private updatedReactionCustomEmojiPaths(m: MessageEntry): ReactionInfo[] | null {
+    let differs = false;
+    const next: ReactionInfo[] = m.reactions.map((r: ReactionInfo): ReactionInfo => {
+      if (r.customEmojiId === '') {
+        return r;
+      }
+      const path = this.inlineCustomEmojiPathById.get(r.customEmojiId) ?? '';
+      if (path === r.customEmojiPath) {
+        return r;
+      }
+      differs = true;
+      return {
+        emoji: r.emoji, count: r.count, isChosen: r.isChosen,
+        customEmojiId: r.customEmojiId, customEmojiPath: path
+      };
+    });
+    return differs ? next : null;
+  }
+
   private applyInlineCustomEmojiPath(customEmojiId: string, path: string): void {
     if (customEmojiId === '' || path === '' ||
       this.inlineCustomEmojiPathById.get(customEmojiId) === path) {
       return;
     }
     this.inlineCustomEmojiPathById.set(customEmojiId, path);
-    this.hydrateInlineCustomEmojiPaths();
+    this.hydrateCustomEmojiPaths();
   }
 
   private markCustomEmojiResolveFailed(ceId: string): void {
@@ -3678,10 +3737,13 @@ export class MessageStore {
     // Keep those updates in `messages`, but publish the initial timeline only
     // when history is ready; otherwise ChatPage treats that one-message
     // snapshot as its completed first page and anchors the viewport to it.
+    // 已读水位是对 messages 的纯状态计算，与"是否发布快照"无关：必须在
+    // 下面的提前返回之前执行，否则初始历史加载期间到达的 updateChatReadOutbox
+    // 会被整个丢弃（要等下一次 notify 才自愈）。
+    this.applyReadOutbox();
     if (kind === 'update' && this.initialHistoryState === 'loading') {
       return;
     }
-    this.applyReadOutbox();
     this.currentNotifyKind = kind;
     try {
       for (const l of this.msgSubs) {

@@ -1,12 +1,14 @@
 import { promptAction, router } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
-import { fileIo as fs } from '@kit.CoreFileKit';
 import { getTdClient, getTdFilesDirectory } from '../../tdkit/Globals';
 import { openLocalFile } from '../../util/openLocalFile';
 import { formatFileSize } from '../../util/formatFileSize';
 import { TdObject, TdRequest, TdError } from '../../tdkit/TdTypes';
 import { GlobalSearchStore, SearchRow } from '../../store/GlobalSearchStore';
 import { AvatarView } from '../chatlist/AvatarView';
+import { AvatarViewer } from '../common/AvatarViewer';
+import { ScannedFile, scanDownloadedFiles } from '../../util/downloadedFileScan';
+import { LocalVideoPlayer } from '../common/LocalVideoPlayer';
 import { formatPreview } from '../../util/formatPreview';
 import { formatTime } from '../../util/formatTime';
 import {
@@ -18,6 +20,11 @@ import {
   COLOR_TAB_PILL_BG
 } from '../../util/theme';
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
+import {
+  DownloadCounts, DownloadEntry, DownloadPage, DownloadQuery, defaultDownloadQuery,
+  downloadErrorMessage, emptyDownloadCounts, removeDownload, searchDownloads,
+  setAllDownloadsPaused, setDownloadPaused
+} from '../../store/DownloadApi';
 
 interface FoundItem {
   chatId: number;
@@ -91,6 +98,14 @@ interface DownloadItem {
   dateLabel: string;
   fileId: number;  // >0 for download-manager items (live progress via updateFile)
   progress: number; // 0-99 while downloading, 100 when complete
+  // 仅下载管理器登记过的条目（fileId > 0）才可暂停/移除；磁盘扫描出来的历史
+  // 文件没有 file_id，TDLib 无从操作，所以这两个字段对它们恒为 false。
+  isPaused: boolean;
+  preview: string; // 来源消息摘要
+  // 来源消息坐标，用于长按"定位到消息"。磁盘扫描出来的历史文件没有这层关联
+  // （文件名里不含 chat/message），两者恒为 0，菜单里相应不提供该项。
+  chatId: number;
+  messageId: number;
 }
 
 // Global search (Telegram-style): an empty query shows frequent contacts and
@@ -489,34 +504,37 @@ struct GlobalSearchPage {
   @State downloads: DownloadItem[] = [];      // completed, from the filesystem scan
   @State activeDownloads: DownloadItem[] = []; // in-flight, from TDLib's download manager
   @State downloadsLoaded: boolean = false;
+  @State downloadsScanning: boolean = false;
+  @State downloadCounts: DownloadCounts = emptyDownloadCounts();
+  @State downloadActionBusy: boolean = false;
+  // 待确认移除的条目：!== null 时弹确认框，同时决定"是否删除本地文件"的默认值。
+  @State pendingRemoval: DownloadItem | null = null;
+  // 应用内预览的目标。图片走 AvatarViewer（同一套缩放/拖动/下滑关闭），
+  // 视频走 LocalVideoPlayer；文档类没有通用渲染器，仍交给系统应用。
+  @State previewItem: DownloadItem | null = null;
+  @State removeAlsoDeletesFile: boolean = false;
+  @State removeSheetShown: boolean = false;
   private unsubFile: (() => void) | null = null;
 
   // Active (in-progress) downloads from TDLib's download manager. Fetched on
   // every 下载 tab visit; progress rows update live via updateFile.
   private loadActiveDownloads(): void {
-    const req: TdRequest = { '@type': 'searchFileDownloads' };
-    req['query'] = '';
-    req['only_active'] = true;
-    req['only_completed'] = false;
-    req['offset'] = '';
-    req['limit'] = 50;
-    getTdClient().send(req).then((res: TdObject) => {
-      const files = (res['files'] as TdObject[] | undefined) ?? [];
+    const query: DownloadQuery = defaultDownloadQuery();
+    query.onlyActive = true;
+    searchDownloads(getTdClient(), query).then((page: DownloadPage) => {
       const fresh: DownloadItem[] = [];
-      for (const fd of files) {
-        const fileId = (fd['file_id'] as number | undefined) ?? 0;
-        if (fileId === 0) {
-          continue;
-        }
-        const msg = fd['message'] as TdObject | undefined;
+      for (const entry of page.entries) {
         fresh.push({
-          path: '', name: this.downloadName(msg), kind: 'file',
-          sizeLabel: '', mtime: ((fd['add_date'] as number | undefined) ?? 0) * 1000,
-          dateLabel: '', fileId, progress: 0
+          path: '', name: this.downloadEntryName(entry), kind: 'file',
+          sizeLabel: '', mtime: entry.addDate * 1000,
+          dateLabel: '', fileId: entry.fileId, progress: 0,
+          isPaused: entry.isPaused, preview: entry.preview,
+          chatId: entry.chatId, messageId: entry.messageId
         });
-        this.refreshFileProgress(fileId);
+        this.refreshFileProgress(entry.fileId);
       }
       this.activeDownloads = fresh;
+      this.downloadCounts = page.counts;
       if (this.unsubFile === null && fresh.length > 0) {
         this.unsubFile = getTdClient().onUpdate('updateFile', (u: TdObject) => {
           const f = u['file'] as TdObject | undefined;
@@ -525,26 +543,90 @@ struct GlobalSearchPage {
           }
         });
       }
-    }).catch((e: TdError) => {
-      console.error(`GlobalSearchPage.searchFileDownloads failed: ${e.message}`);
+    }).catch((e: Object) => {
+      console.error(`GlobalSearchPage.searchFileDownloads failed: ${downloadErrorMessage('加载下载列表', e)}`);
+      promptAction.showToast({ message: downloadErrorMessage('加载下载列表', e), duration: 1800 });
     });
   }
 
-  private downloadName(msg: TdObject | undefined): string {
-    const content = msg !== undefined ? (msg['content'] as TdObject | undefined) : undefined;
-    if (content !== undefined) {
-      const doc = content['document'] as TdObject | undefined;
-      const docName = doc !== undefined ? ((doc['file_name'] as string | undefined) ?? '') : '';
-      if (docName !== '') {
-        return docName;
-      }
-      const video = content['video'] as TdObject | undefined;
-      const videoName = video !== undefined ? ((video['file_name'] as string | undefined) ?? '') : '';
-      if (videoName !== '') {
-        return videoName;
-      }
+  // 下载项的显示名：优先取消息里的原始文件名，退回消息摘要。
+  private downloadEntryName(entry: DownloadEntry): string {
+    if (entry.fileName !== '') {
+      return entry.fileName;
     }
-    return '媒体文件';
+    return entry.preview !== '' ? entry.preview : '媒体文件';
+  }
+
+  // 所有进行中的条目都已暂停时，顶部按钮切换成"全部继续"。
+  private allDownloadsPaused(): boolean {
+    return this.downloadCounts.activeCount === 0 && this.downloadCounts.pausedCount > 0;
+  }
+
+  private async toggleOneDownload(item: DownloadItem): Promise<void> {
+    if (item.fileId === 0 || this.downloadActionBusy) {
+      return;
+    }
+    this.downloadActionBusy = true;
+    const next = !item.isPaused;
+    try {
+      await setDownloadPaused(getTdClient(), item.fileId, next);
+      // 乐观更新只为消除按钮延迟，权威状态仍以随后的列表刷新为准。
+      this.activeDownloads = this.activeDownloads.map((it: DownloadItem): DownloadItem =>
+        it.fileId === item.fileId ? this.withPaused(it, next) : it);
+      this.reloadDownloadState();
+    } catch (e) {
+      promptAction.showToast({ message: downloadErrorMessage(next ? '暂停' : '继续', e), duration: 1800 });
+    }
+    this.downloadActionBusy = false;
+  }
+
+  private withPaused(item: DownloadItem, paused: boolean): DownloadItem {
+    return {
+      path: item.path, name: item.name, kind: item.kind, sizeLabel: item.sizeLabel,
+      mtime: item.mtime, dateLabel: item.dateLabel, fileId: item.fileId,
+      progress: item.progress, isPaused: paused, preview: item.preview,
+      chatId: item.chatId, messageId: item.messageId
+    };
+  }
+
+  private async toggleAllDownloads(): Promise<void> {
+    if (this.downloadActionBusy) {
+      return;
+    }
+    this.downloadActionBusy = true;
+    const pauseAll = !this.allDownloadsPaused();
+    try {
+      await setAllDownloadsPaused(getTdClient(), pauseAll);
+      this.reloadDownloadState();
+    } catch (e) {
+      promptAction.showToast({
+        message: downloadErrorMessage(pauseAll ? '全部暂停' : '全部继续', e), duration: 1800
+      });
+    }
+    this.downloadActionBusy = false;
+  }
+
+  private async confirmRemoveDownload(item: DownloadItem, deleteFromCache: boolean): Promise<void> {
+    if (item.fileId === 0) {
+      return;
+    }
+    try {
+      await removeDownload(getTdClient(), item.fileId, deleteFromCache);
+      this.activeDownloads = this.activeDownloads.filter((it: DownloadItem) => it.fileId !== item.fileId);
+      // 删除了本地文件时磁盘扫描结果也过期了，强制重扫。
+      if (deleteFromCache) {
+        this.downloadsLoaded = false;
+        this.loadDownloads();
+      }
+      this.reloadDownloadState();
+    } catch (e) {
+      promptAction.showToast({ message: downloadErrorMessage('移除', e), duration: 1800 });
+    }
+  }
+
+  // 任何写操作之后重新拉一次列表，让计数与暂停态回到服务端权威值。
+  private reloadDownloadState(): void {
+    this.loadActiveDownloads();
   }
 
   private refreshFileProgress(fileId: number): void {
@@ -570,58 +652,73 @@ struct GlobalSearchPage {
         path: done ? path : it.path, name: it.name, kind: it.kind,
         sizeLabel: total > 0 ? formatFileSize(total) : it.sizeLabel,
         mtime: it.mtime, dateLabel: done ? '刚刚' : it.dateLabel,
-        fileId: it.fileId, progress
+        fileId: it.fileId, progress, isPaused: it.isPaused, preview: it.preview,
+        chatId: it.chatId, messageId: it.messageId
       } : it);
   }
 
   // Scan TDLib's download directories for media/files already on disk,
   // newest first. Small photos are skipped (auto-downloaded thumbnails).
+  // 扫描本身跑在 TaskPool 里 —— 见 util/downloadedFileScan.ets 的说明，同步扫
+  // 会因为文件数量把主线程卡到被系统杀掉。
   private loadDownloads(): void {
     if (this.downloadsLoaded) {
       return;
     }
     this.downloadsLoaded = true;
-    const base = getTdFilesDirectory();
-    const dirs: string[][] = [
-      ['videos', 'video'], ['documents', 'file'], ['animations', 'video'], ['photos', 'photo']
-    ];
-    const items: DownloadItem[] = [];
-    for (const d of dirs) {
-      const dir = `${base}/${d[0]}`;
-      try {
-        const names = fs.listFileSync(dir);
-        for (const name of names) {
-          const path = `${dir}/${name}`;
-          try {
-            const st = fs.statSync(path);
-            if (!st.isFile() || st.size <= 0) {
-              continue;
-            }
-            if (d[1] === 'photo' && st.size < MIN_PHOTO_BYTES) {
-              continue;
-            }
-            items.push({
-              path, name, kind: d[1],
-              sizeLabel: formatFileSize(st.size),
-              mtime: st.mtime * 1000,
-              dateLabel: this.downloadDate(st.mtime),
-              fileId: 0, progress: 100
-            });
-          } catch (e) {
-            // unreadable entry — skip
-          }
-        }
-      } catch (e) {
-        // directory may not exist yet — fine
-      }
-    }
-    items.sort((a: DownloadItem, b: DownloadItem) => b.mtime - a.mtime);
-    this.downloads = items.slice(0, MAX_DOWNLOAD_ITEMS);
+    this.downloadsScanning = true;
+    scanDownloadedFiles(getTdFilesDirectory(), MIN_PHOTO_BYTES, MAX_DOWNLOAD_ITEMS)
+      .then((found: ScannedFile[]): void => {
+        this.downloads = found.map((f: ScannedFile): DownloadItem => {
+          return {
+            path: f.path, name: f.name, kind: f.kind,
+            sizeLabel: formatFileSize(f.size),
+            mtime: f.mtimeSec * 1000,
+            dateLabel: this.downloadDate(f.mtimeSec),
+            fileId: 0, progress: 100, isPaused: false, preview: '',
+            chatId: 0, messageId: 0
+          };
+        });
+        this.downloadsScanning = false;
+      })
+      .catch((e: Object): void => {
+        console.error(`GlobalSearchPage.scanDownloadedFiles failed: ${JSON.stringify(e)}`);
+        this.downloadsScanning = false;
+        // 允许下次进入 tab 时重试，否则一次失败会让列表永久空白。
+        this.downloadsLoaded = false;
+      });
   }
 
   private downloadDate(sec: number): string {
     const d = new Date(sec * 1000);
     return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+  }
+
+  // 图片/视频在应用内看，其余（文档、压缩包……）没有通用渲染器，交给系统应用。
+  private openDownloadItem(it: DownloadItem): void {
+    if (it.progress < 100 || it.path === '') {
+      return;
+    }
+    if (it.kind === 'photo' || it.kind === 'video') {
+      this.previewItem = it;
+      return;
+    }
+    openLocalFile(getContext(this) as common.UIAbilityContext, it.path, '');
+  }
+
+  private canLocateDownload(it: DownloadItem): boolean {
+    return it.chatId !== 0 && it.messageId !== 0;
+  }
+
+  private locateDownloadMessage(it: DownloadItem): void {
+    if (!this.canLocateDownload(it)) {
+      return;
+    }
+    const params: Record<string, Object> = { 'chatId': it.chatId, 'jumpTo': it.messageId };
+    router.pushUrl({ url: 'pages/chat/ChatPage', params: params }).catch((e: Error): void => {
+      console.error(`GlobalSearchPage.locateDownloadMessage failed: ${e.message}`);
+      promptAction.showToast({ message: '无法打开来源消息', duration: 1500 });
+    });
   }
 
   // Rows the current tab actually shows: the 频道 tab keeps only messages from
@@ -2062,14 +2159,41 @@ struct GlobalSearchPage {
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
           if (it.progress < 100) {
             Progress({ value: it.progress, total: 100, type: ProgressType.Linear })
-              .width('92%').height(4).color(COLOR_PRIMARY);
-            Text(`${it.sizeLabel !== '' ? it.sizeLabel + ' · ' : ''}下载中 ${it.progress}%`)
+              .width('92%').height(4).color(it.isPaused ? COLOR_TEXT_SECONDARY : COLOR_PRIMARY);
+            Text(`${it.sizeLabel !== '' ? it.sizeLabel + ' · ' : ''}${it.isPaused ? '已暂停' : '下载中'} ${it.progress}%`)
               .fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
           } else {
             Text(`${it.sizeLabel}${it.dateLabel !== '' ? ' · ' + it.dateLabel : ''}`)
               .fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
           }
+          if (it.preview !== '') {
+            Text(it.preview).fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
+              .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
+          }
         }.alignItems(HorizontalAlign.Start).layoutWeight(1);
+        // 只有下载管理器登记过的条目才给操作按钮，避免对磁盘扫描项做无效调用。
+        if (it.fileId !== 0) {
+          if (it.progress < 100) {
+            Button({ type: ButtonType.Circle }) {
+              SymbolGlyph($r(it.isPaused ? 'sys.symbol.play_fill' : 'sys.symbol.pause_fill'))
+                .fontSize(18).fontColor([COLOR_PRIMARY]);
+            }
+            .width(34).height(34).backgroundColor(Color.Transparent)
+            .enabled(!this.downloadActionBusy)
+            .accessibilityText(it.isPaused ? '继续下载' : '暂停下载')
+            .onClick(() => { this.toggleOneDownload(it); });
+          }
+          Button({ type: ButtonType.Circle }) {
+            SymbolGlyph($r('sys.symbol.trash')).fontSize(18).fontColor([COLOR_TEXT_SECONDARY]);
+          }
+          .width(34).height(34).backgroundColor(Color.Transparent)
+          .accessibilityText('从下载列表移除')
+          .onClick(() => {
+            this.removeAlsoDeletesFile = false;
+            this.pendingRemoval = it;
+            this.removeSheetShown = true;
+          });
+        }
       }
       .width('100%').padding({ left: 14, right: 14, top: 8, bottom: 8 })
       .alignItems(VerticalAlign.Center)
@@ -2078,11 +2202,32 @@ struct GlobalSearchPage {
         pressed: this.resultRowPressedStyle
       })
       .accessibilityText(`${it.name}，${it.progress < 100 ? '下载中' : it.sizeLabel}`)
-      .onClick(() => {
-        if (it.progress >= 100 && it.path !== '') {
-          openLocalFile(getContext(this) as common.UIAbilityContext, it.path, '');
-        }
-      });
+      .onClick(() => { this.openDownloadItem(it); })
+      .bindContextMenu(this.downloadRowMenu(it), ResponseType.LongPress);
+    }
+  }
+
+  @Builder
+  downloadRowMenu(it: DownloadItem) {
+    Menu() {
+      if (this.canLocateDownload(it)) {
+        MenuItem({ startIcon: $r('sys.symbol.arrow_up_left_and_arrow_down_right'), content: '定位到消息' })
+          .onClick((): void => { this.locateDownloadMessage(it); });
+      }
+      if (it.progress >= 100 && it.path !== '') {
+        MenuItem({ startIcon: $r('sys.symbol.arrow_right_and_square'), content: '用其他应用打开' })
+          .onClick((): void => {
+            openLocalFile(getContext(this) as common.UIAbilityContext, it.path, '');
+          });
+      }
+      if (it.fileId !== 0) {
+        MenuItem({ startIcon: $r('sys.symbol.trash'), content: '从下载列表移除' })
+          .onClick((): void => {
+            this.removeAlsoDeletesFile = false;
+            this.pendingRemoval = it;
+            this.removeSheetShown = true;
+          });
+      }
     }
   }
 
@@ -2115,28 +2260,100 @@ struct GlobalSearchPage {
       row.title !== '' && (q === '' || row.title.toLowerCase().includes(q)));
   }
 
+  // 计数条：TDLib 的 downloadedFileCounts 是列表的权威统计，比客户端数组长度可靠。
+  @Builder
+  downloadCountsBar() {
+    Row({ space: 10 }) {
+      Column({ space: 2 }) {
+        Text(`进行中 ${this.downloadCounts.activeCount}`).fontSize(13).fontColor(COLOR_TEXT_PRIMARY);
+        Text(`已暂停 ${this.downloadCounts.pausedCount} · 已完成 ${this.downloadCounts.completedCount}`)
+          .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+      }.alignItems(HorizontalAlign.Start).layoutWeight(1);
+      if (this.downloadCounts.activeCount + this.downloadCounts.pausedCount > 0) {
+        Button(this.allDownloadsPaused() ? '全部继续' : '全部暂停')
+          .fontSize(14).fontColor(COLOR_PRIMARY)
+          .backgroundColor(COLOR_TAB_PILL_BG)
+          .height(32).padding({ left: 14, right: 14 })
+          .enabled(!this.downloadActionBusy)
+          .onClick(() => { this.toggleAllDownloads(); });
+      }
+    }
+    .width('100%').padding({ left: 14, right: 14, top: 10, bottom: 10 })
+    .alignItems(VerticalAlign.Center);
+  }
+
+  @Builder
+  removeDownloadSheet() {
+    Column({ space: 14 }) {
+      Text('从下载列表移除').fontSize(17).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+      Text(this.pendingRemoval !== null ? this.pendingRemoval.name : '')
+        .fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
+        .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis });
+      Row({ space: 10 }) {
+        Checkbox().select(this.removeAlsoDeletesFile)
+          .onChange((checked: boolean) => { this.removeAlsoDeletesFile = checked; });
+        Text('同时删除本地文件').fontSize(14).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
+      }.width('100%').alignItems(VerticalAlign.Center);
+      Row({ space: 12 }) {
+        Button('取消').fontSize(15).fontColor(COLOR_TEXT_SECONDARY)
+          .backgroundColor(COLOR_TAB_PILL_BG).layoutWeight(1).height(42)
+          .onClick(() => { this.removeSheetShown = false; });
+        Button('移除').fontSize(15).fontColor(Color.White)
+          .backgroundColor(COLOR_PRIMARY).layoutWeight(1).height(42)
+          .onClick(() => {
+            const target = this.pendingRemoval;
+            const deleteFile = this.removeAlsoDeletesFile;
+            this.removeSheetShown = false;
+            if (target !== null) {
+              this.confirmRemoveDownload(target, deleteFile);
+            }
+          });
+      }.width('100%');
+    }
+    .width('100%').padding(20).alignItems(HorizontalAlign.Start);
+  }
+
   @Builder
   downloadsList() {
-    List() {
-      ForEach(this.mergedDownloads(), (it: DownloadItem, idx: number) => {
-        ListItem() {
-          this.downloadRow(it, idx > 0);
-        }.backgroundColor($r('app.color.surface'));
-      }, (it: DownloadItem) =>
-        `dl_${it.fileId}_${it.path}_${it.progress}_${it.sizeLabel}_${it.dateLabel}`);
-      if (this.downloads.length === 0 && this.activeDownloads.length === 0) {
-        ListItem() {
-          Text('暂无下载记录').fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
-            .width('100%').textAlign(TextAlign.Center).padding({ top: 48 });
+    Column() {
+      this.downloadCountsBar();
+      List() {
+        ForEach(this.mergedDownloads(), (it: DownloadItem, idx: number) => {
+          ListItem() {
+            this.downloadRow(it, idx > 0);
+          }.backgroundColor($r('app.color.surface'));
+        }, (it: DownloadItem) =>
+          `dl_${it.fileId}_${it.path}_${it.progress}_${it.isPaused}_${it.sizeLabel}_${it.dateLabel}`);
+        if (this.downloadsScanning && this.downloads.length === 0) {
+          ListItem() {
+            Column({ space: 10 }) {
+              LoadingProgress().width(32).height(32).color(COLOR_PRIMARY);
+              Text('正在扫描本地文件').fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
+            }
+            .width('100%').padding({ top: 48 });
+          }
+        } else if (this.downloads.length === 0 && this.activeDownloads.length === 0) {
+          ListItem() {
+            Text('暂无下载记录').fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
+              .width('100%').textAlign(TextAlign.Center).padding({ top: 48 });
+          }
         }
       }
+      .layoutWeight(1).width('100%')
+      .edgeEffect(EdgeEffect.Spring)
+      .scrollBar(BarState.Off);
     }
     .layoutWeight(1)
     .width('calc(100% - 24vp)')
     .margin({ left: 12, right: 12, top: 12, bottom: 12 })
     .backgroundColor($r('app.color.surface'))
     .borderRadius(20)
-    .clip(true);
+    .clip(true)
+    .bindSheet($$this.removeSheetShown, this.removeDownloadSheet(), {
+      height: SheetSize.FIT_CONTENT,
+      backgroundColor: $r('app.color.surface'),
+      onDisappear: () => { this.pendingRemoval = null; }
+    });
   }
 
   @Builder
@@ -2735,7 +2952,17 @@ struct GlobalSearchPage {
     }
   }
 
+  // 预览是页内浮层而不是独立路由，返回键要先关它，否则会直接退出搜索页。
+  onBackPress(): boolean {
+    if (this.previewItem !== null) {
+      this.previewItem = null;
+      return true;
+    }
+    return false;
+  }
+
   build() {
+    Stack({ alignContent: Alignment.TopStart }) {
     Column() {
       Column() {
         this.searchBar();
@@ -2771,6 +2998,32 @@ struct GlobalSearchPage {
     }
     .width('100%').height('100%')
     .backgroundColor($r('app.color.page_bg'))
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM]);
+
+      if (this.previewItem !== null) {
+        this.downloadPreviewOverlay(this.previewItem!);
+      }
+    }
+    .width('100%').height('100%');
+  }
+
+  @Builder
+  downloadPreviewOverlay(it: DownloadItem) {
+    Column() {
+      if (it.kind === 'video') {
+        LocalVideoPlayer({
+          videoPath: it.path,
+          title: it.name,
+          onClose: (): void => { this.previewItem = null; }
+        });
+      } else {
+        AvatarViewer({
+          imagePath: it.path,
+          onClose: (): void => { this.previewItem = null; }
+        });
+      }
+    }
+    .width('100%').height('100%')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM]);
   }
 }

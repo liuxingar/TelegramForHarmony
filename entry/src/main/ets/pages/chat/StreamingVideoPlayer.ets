@@ -915,7 +915,6 @@ export struct StreamingVideoPlayer {
               .alignItems(VerticalAlign.Center);
               this.playControl();
               Row({ space: 8 }) {
-                this.symbolControl('sys.symbol.arrow_clockwise', 34, 19, () => { this.replay(); });
                 this.speedControl();
                 this.symbolControl(
                   this.landscape

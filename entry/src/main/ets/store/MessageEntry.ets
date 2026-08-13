@@ -167,9 +167,11 @@ export interface MessageEntry {
 }
 
 export interface ReactionInfo {
-  emoji: string;
+  emoji: string;           // 标准 emoji（自定义 emoji 反应为 ''）
   count: number;
   isChosen: boolean;
+  customEmojiId: string;   // reactionTypeCustomEmoji 的 int64 id，字符串承载（标准反应为 ''）
+  customEmojiPath: string; // 自定义 emoji 位图本地路径（'' = 尚未下载完成，显示占位）
 }
 
 // One bot inline-keyboard button. Exactly one of url/callbackData is set for
@@ -804,17 +806,28 @@ export function reactionsFromInteraction(ii: TdObject | undefined): ReactionInfo
     const t = r['type'] as TdObject | undefined;
     const tt = t !== undefined ? ((t['@type'] as string | undefined) ?? '') : '';
     let emoji = '';
+    let customEmojiId = '';
     if (tt === 'reactionTypeEmoji') {
       emoji = (t!['emoji'] as string | undefined) ?? '';
     } else if (tt === 'reactionTypePaid') {
       emoji = '⭐';
+    } else if (tt === 'reactionTypeCustomEmoji') {
+      // 位图要等 getCustomEmojiStickers + 下载，这里只记 id，路径由
+      // MessageStore 解析完成后回填（未就绪时气泡显示占位而非空白）。
+      const raw = t!['custom_emoji_id'];
+      customEmojiId = raw !== undefined ? `${raw}` : '';
+      if (customEmojiId === '' || customEmojiId === '0') {
+        continue;
+      }
     } else {
-      continue; // custom-emoji reactions need a sticker download; skip for now
+      continue; // 未知反应类型（未来的 TDLib 扩展）静默跳过
     }
     out.push({
       emoji,
       count: (r['total_count'] as number | undefined) ?? 0,
-      isChosen: (r['is_chosen'] as boolean | undefined) ?? false
+      isChosen: (r['is_chosen'] as boolean | undefined) ?? false,
+      customEmojiId,
+      customEmojiPath: ''
     });
   }
   return out;

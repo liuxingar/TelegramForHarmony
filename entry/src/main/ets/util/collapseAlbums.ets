@@ -100,7 +100,8 @@ function mutableSig(m: MessageEntry): string {
       `:${option.isChosen ? 'c' : ''}:${option.isBeingChosen ? 'p' : ''}`;
   }
   for (const r of m.reactions) {
-    s += `|${r.emoji}${r.count}${r.isChosen ? 'c' : ''}`;
+    // 自定义 emoji 的位图路径要进指纹，否则下载完成后气泡不会重建。
+    s += `|${r.emoji}${r.customEmojiId}${r.customEmojiPath}${r.count}${r.isChosen ? 'c' : ''}`;
   }
   for (const row of m.inlineButtons) {
     for (const b of row) {

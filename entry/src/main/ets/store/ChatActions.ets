@@ -190,6 +190,31 @@ export function clearHistory(chatId: number, revoke: boolean): void {
   });
 }
 
+// 屏蔽私聊对方。私聊的 chat_id 就是对方的 user_id，所以可以直接用；密聊不行
+// （chat_id 是密聊会话 id，不是用户 id），调用方只对 private 开放这个入口。
+export function blockPrivateChatSender(chatId: number): Promise<void> {
+  const sender: TdObject = { '@type': 'messageSenderUser' };
+  sender['user_id'] = chatId;
+  const req: TdRequest = { '@type': 'setMessageSenderBlockList' };
+  req['sender_id'] = sender;
+  req['block_list'] = { '@type': 'blockListMain' } as TdObject;
+  return getTdClient().send(req).then((): void => {});
+}
+
+// 屏蔽并删除。先屏蔽再删除：反过来的话，删除到屏蔽之间对方新发的消息会把
+// 会话重新拉回列表，看起来像"删了又冒出来"。
+export function blockAndDeleteChat(chatId: number): void {
+  withChat(chatId, 'blockAndDelete', (): Promise<TdObject> => {
+    return blockPrivateChatSender(chatId).then((): Promise<TdObject> => {
+      const req: TdRequest = { '@type': 'deleteChatHistory' };
+      req['chat_id'] = chatId;
+      req['remove_from_chat_list'] = true;
+      req['revoke'] = false;
+      return getTdClient().send(req);
+    });
+  });
+}
+
 // Groups/channels are left; private and secret chats are deleted from the list.
 export function leaveOrDeleteChat(chatId: number, kind: ChatKind): void {
   if (kind === 'basicGroup' || kind === 'supergroup' || kind === 'channel') {

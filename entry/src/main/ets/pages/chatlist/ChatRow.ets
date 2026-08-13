@@ -3,7 +3,7 @@ import { ChatEntry, ChatKind } from '../../store/ChatEntry';
 import { FOLDER_TAGS_ENABLED, FolderInfo } from '../../store/FolderStore';
 import {
   MUTE_OPTIONS, MuteOption, togglePin, setMute, markAsRead, markUnread,
-  setArchived, setInFolder, clearHistory, leaveOrDeleteChat, leaveLabel
+  setArchived, setInFolder, clearHistory, leaveOrDeleteChat, leaveLabel, blockAndDeleteChat
 } from '../../store/ChatActions';
 import { getChatStore, getFolderStore } from '../../tdkit/Globals';
 import {
@@ -187,16 +187,34 @@ export struct ChatRow {
     const label = leaveLabel(this.chat.kind);
     const chatId: number = this.chat.id;
     const kind: ChatKind = this.chat.kind;
-    this.showConfirm({
-      title: label,
-      message: `确定要${label.substring(0, 2)}「${this.chat.title}」吗？`,
-      buttons: [
+    const title: string = this.chat.title;
+    // 只有私聊能屏蔽：私聊的 chat_id 就是对方 user_id；密聊的 chat_id 是会话
+    // id，群和频道也没有单一发送者可屏蔽。
+    const canBlock: boolean = kind === 'private';
+    const buttons: promptAction.Button[] = canBlock
+      ? [
+        { text: '取消', color: COLOR_TEXT_SECONDARY as string },
+        { text: '删除聊天', color: '#E64646' },
+        { text: '删除并屏蔽', color: '#E64646' }
+      ]
+      : [
         { text: '取消', color: COLOR_TEXT_SECONDARY as string },
         { text: label, color: '#E64646' }
-      ]
+      ];
+    this.showConfirm({
+      title: label,
+      message: canBlock
+        ? `删除与「${title}」的聊天。屏蔽后对方无法再给你发消息，可在设置的已屏蔽用户里解除。`
+        : `确定要${label.substring(0, 2)}「${title}」吗？`,
+      buttons: buttons
     }, 'confirmLeave', (index: number): void => {
       if (index === 1) {
         leaveOrDeleteChat(chatId, kind);
+        return;
+      }
+      if (index === 2 && canBlock) {
+        blockAndDeleteChat(chatId);
+        promptAction.showToast({ message: `已删除并屏蔽「${title}」`, duration: 1800 });
       }
     });
   }

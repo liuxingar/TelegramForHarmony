@@ -262,11 +262,25 @@ struct GroupAdminPage {
     }.width('100%').height(52).padding({ left: 8, right: 16 }).alignItems(VerticalAlign.Center);
   }
 
+  // 按 key 读状态，而不是把值当 @Builder 参数传进来 —— 值参数不会随
+  // @State 变化重新求值，开关会停在旧状态（同 ChatProfilePage.muteButton）。
+  private permissionValue(key: string): boolean {
+    const p = this.permissions;
+    if (key === 'sendMessages') { return p.sendMessages; }
+    if (key === 'sendMedia') { return p.sendMedia; }
+    if (key === 'sendPolls') { return p.sendPolls; }
+    if (key === 'sendOther') { return p.sendOther; }
+    if (key === 'addLinkPreviews') { return p.addLinkPreviews; }
+    if (key === 'changeInfo') { return p.changeInfo; }
+    if (key === 'inviteUsers') { return p.inviteUsers; }
+    return p.pinMessages;
+  }
+
   @Builder
-  permissionRow(label: string, key: string, value: boolean) {
+  permissionRow(label: string, key: string) {
     Row() {
       Text(label).fontSize(15).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
-      Toggle({ type: ToggleType.Switch, isOn: value }).selectedColor(COLOR_PRIMARY)
+      Toggle({ type: ToggleType.Switch, isOn: this.permissionValue(key) }).selectedColor(COLOR_PRIMARY)
         .onChange((next: boolean): void => this.togglePermission(key, next));
     }.width('100%').height(48).padding({ left: 14, right: 12 });
   }
@@ -316,14 +330,14 @@ struct GroupAdminPage {
             Column() {
               Text('成员权限').fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
                 .width('100%').padding({ left: 14, top: 12, bottom: 4 });
-              this.permissionRow('发送消息', 'sendMessages', this.permissions.sendMessages);
-              this.permissionRow('发送媒体', 'sendMedia', this.permissions.sendMedia);
-              this.permissionRow('发起投票', 'sendPolls', this.permissions.sendPolls);
-              this.permissionRow('发送贴纸和 GIF', 'sendOther', this.permissions.sendOther);
-              this.permissionRow('嵌入链接预览', 'addLinkPreviews', this.permissions.addLinkPreviews);
-              this.permissionRow('修改群信息', 'changeInfo', this.permissions.changeInfo);
-              this.permissionRow('添加成员', 'inviteUsers', this.permissions.inviteUsers);
-              this.permissionRow('置顶消息', 'pinMessages', this.permissions.pinMessages);
+              this.permissionRow('发送消息', 'sendMessages');
+              this.permissionRow('发送媒体', 'sendMedia');
+              this.permissionRow('发起投票', 'sendPolls');
+              this.permissionRow('发送贴纸和 GIF', 'sendOther');
+              this.permissionRow('嵌入链接预览', 'addLinkPreviews');
+              this.permissionRow('修改群信息', 'changeInfo');
+              this.permissionRow('添加成员', 'inviteUsers');
+              this.permissionRow('置顶消息', 'pinMessages');
               Row() {
                 Text('慢速模式').fontSize(15).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
                 Text(SLOW_MODE_LABELS[this.slowModeIndex]).fontSize(14).fontColor(COLOR_PRIMARY);

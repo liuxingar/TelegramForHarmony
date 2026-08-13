@@ -177,13 +177,27 @@ export async function folderChatCount(folder: FolderData): Promise<number> {
   return (result['count'] as number | undefined) ?? 0;
 }
 
+// optionValueInteger 的 value 是 int64，TDLib 在 JSON 里把它编码成**字符串**。
+// 直接当 number 用会让 Number.isFinite 恒为 false，于是永远退回兜底值 ——
+// 表现就是上限被写死成兜底的 10，从没真正读到过服务端的配额
+// （Premium 账号本该是 20，却照样在第 10 个就被拦下）。
+export function parseOptionInteger(raw: Object | undefined, fallback: number): number {
+  if (typeof raw === 'number') {
+    return Number.isFinite(raw) && raw > 0 ? raw : fallback;
+  }
+  if (typeof raw === 'string') {
+    const parsed = Number(raw.trim());
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  }
+  return fallback;
+}
+
 async function optionInteger(name: string, fallback: number): Promise<number> {
   const request: TdRequest = { '@type': 'getOption' };
   request['name'] = name;
   try {
     const result = await getTdClient().send(request);
-    const value = (result['value'] as number | undefined) ?? fallback;
-    return Number.isFinite(value) && value > 0 ? value : fallback;
+    return parseOptionInteger(result['value'], fallback);
   } catch (_error) {
     return fallback;
   }
@@ -210,12 +224,41 @@ function emptyTdFolder(): TdObject {
   return toTdFolder(emptyFolder());
 }
 
-export async function defaultFolderIconName(folder: FolderData): Promise<string> {
-  const request: TdRequest = { '@type': 'getChatFolderDefaultIconName' };
-  request['folder'] = toTdFolder(folder);
-  const result = await getTdClient().send(request);
-  // TDLib returns a `text` object here, not a chatFolderIcon.
-  return (result['text'] as string | undefined) ?? 'Custom';
+// 用户没有显式选图标时，Telegram 按筛选规则推导一个默认图标。这里照搬
+// TDLib 的 DialogFilter::get_default_icon_name（DialogFilter.cpp:402），
+// 这样列表里不会一整屏都是同一个通用文件夹方框。
+// 做成纯函数而不是调 getChatFolderDefaultIconName：那是异步的，列表每行一次
+// 往返既慢又难和渲染对齐。
+export function derivedFolderIconName(folder: FolderData): string {
+  if (folder.iconName !== '') {
+    return folder.iconName;
+  }
+  if (folder.pinnedChatIds.length > 0 || folder.includedChatIds.length > 0 ||
+    folder.excludedChatIds.length > 0) {
+    return 'Custom';
+  }
+  if (folder.includeContacts || folder.includeNonContacts) {
+    if (!folder.includeBots && !folder.includeGroups && !folder.includeChannels) {
+      return 'Private';
+    }
+  } else {
+    if (!folder.includeBots && !folder.includeChannels) {
+      return folder.includeGroups ? 'Groups' : 'Custom';
+    }
+    if (!folder.includeBots && !folder.includeGroups) {
+      return 'Channels';
+    }
+    if (!folder.includeGroups && !folder.includeChannels) {
+      return 'Bots';
+    }
+  }
+  if (folder.excludeRead && !folder.excludeMuted) {
+    return 'Unread';
+  }
+  if (folder.excludeMuted && !folder.excludeRead) {
+    return 'Unmuted';
+  }
+  return 'Custom';
 }
 
 export function setFolderTagsEnabled(enabled: boolean): Promise<void> {

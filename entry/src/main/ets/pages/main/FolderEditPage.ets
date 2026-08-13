@@ -2,7 +2,7 @@ import { promptAction, router } from '@kit.ArkUI';
 import { TdError } from '../../tdkit/TdTypes';
 import { getFolderStore } from '../../tdkit/Globals';
 import {
-  FolderChatSummary, FolderData, FolderLimits, chatIdsNotInChatList, defaultFolderIconName,
+  FolderChatSummary, FolderData, FolderLimits, chatIdsNotInChatList, derivedFolderIconName,
   emptyFolder, folderChatCount, getFolder, getFolderChatSummaries, getFolderLimits,
   saveFolder, searchFolderChats
 } from '../../store/FolderApi';
@@ -330,14 +330,12 @@ struct FolderEditPage {
     }, 320);
   }
 
+  // 本地推导即可，规则和 TDLib 完全一致（见 derivedFolderIconName）。原先每次
+  // 改动都往服务端问一次，还要用 sequence 防乱序 —— 纯函数把这些一并省掉，
+  // 预览也不再有一跳延迟。
   private refreshDefaultIcon(): void {
     if (this.iconName !== '') { return; }
-    const sequence = ++this.iconSequence;
-    defaultFolderIconName(this.draft()).then((name: string): void => {
-      if (this.active && sequence === this.iconSequence && this.iconName === '') {
-        this.defaultIconName = name;
-      }
-    }).catch((): void => {});
+    this.defaultIconName = derivedFolderIconName(this.draft());
   }
 
   private fieldChanged(): void {
@@ -580,14 +578,27 @@ struct FolderEditPage {
     }.width('100%').padding(14).backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
   }
 
+  // 按 kind 读状态，而不是把值当 @Builder 参数传进来 —— 值参数不会随
+  // @State 变化重新求值，开关会停在旧状态（同 ChatProfilePage.muteButton）。
+  private typeValue(kind: string): boolean {
+    if (kind === 'contacts') { return this.includeContacts; }
+    if (kind === 'nonContacts') { return this.includeNonContacts; }
+    if (kind === 'groups') { return this.includeGroups; }
+    if (kind === 'channels') { return this.includeChannels; }
+    if (kind === 'bots') { return this.includeBots; }
+    if (kind === 'muted') { return this.excludeMuted; }
+    if (kind === 'read') { return this.excludeRead; }
+    return this.excludeArchived;
+  }
+
   @Builder
-  toggleRow(title: string, subtitle: string, value: boolean, kind: string) {
+  toggleRow(title: string, subtitle: string, kind: string) {
     Row({ space: 12 }) {
       Column({ space: 2 }) {
         Text(title).fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
         Text(subtitle).fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
-      Toggle({ type: ToggleType.Switch, isOn: value }).selectedColor(COLOR_PRIMARY)
+      Toggle({ type: ToggleType.Switch, isOn: this.typeValue(kind) }).selectedColor(COLOR_PRIMARY)
         .enabled(!this.base.isShareable).onChange((next: boolean): void => this.setType(kind, next));
     }.width('100%').padding({ left: 14, right: 14, top: 9, bottom: 9 });
   }
@@ -636,15 +647,15 @@ struct FolderEditPage {
           Text('共享文件夹只能使用明确添加的聊天').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
         }.width('100%').padding(14).backgroundColor('#105B8FF9');
       } else {
-        this.toggleRow('联系人', '所有联系人私聊', this.includeContacts, 'contacts');
+        this.toggleRow('联系人', '所有联系人私聊', 'contacts');
         Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
-        this.toggleRow('非联系人', '尚未保存为联系人的私聊', this.includeNonContacts, 'nonContacts');
+        this.toggleRow('非联系人', '尚未保存为联系人的私聊', 'nonContacts');
         Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
-        this.toggleRow('群组', '基础群组和超级群组', this.includeGroups, 'groups');
+        this.toggleRow('群组', '基础群组和超级群组', 'groups');
         Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
-        this.toggleRow('频道', '订阅的广播频道', this.includeChannels, 'channels');
+        this.toggleRow('频道', '订阅的广播频道', 'channels');
         Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
-        this.toggleRow('机器人', '与机器人的私聊', this.includeBots, 'bots');
+        this.toggleRow('机器人', '与机器人的私聊', 'bots');
       }
       ForEach(this.included, (id: number) => {
         Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 58 });
@@ -658,11 +669,11 @@ struct FolderEditPage {
   @Builder
   excludeCard() {
     Column() {
-      this.toggleRow('已静音', '排除关闭通知的聊天', this.excludeMuted, 'muted');
+      this.toggleRow('已静音', '排除关闭通知的聊天', 'muted');
       Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
-      this.toggleRow('已读', '只保留仍有未读消息的聊天', this.excludeRead, 'read');
+      this.toggleRow('已读', '只保留仍有未读消息的聊天', 'read');
       Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
-      this.toggleRow('已归档', '排除归档列表中的聊天', this.excludeArchived, 'archived');
+      this.toggleRow('已归档', '排除归档列表中的聊天', 'archived');
       ForEach(this.excluded, (id: number) => {
         Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 58 });
         this.selectedChatRow(id, false);

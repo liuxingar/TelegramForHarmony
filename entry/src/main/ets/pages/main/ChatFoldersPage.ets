@@ -22,6 +22,8 @@ import {
 const CARD_RADIUS: number = 14;
 const DANGER: string = '#E64646';
 const ROW_HEIGHT: number = 66;
+// 拖拽时一格的位移：行高 + 行间分隔线，否则累计几行后会错位。
+const ROW_STEP: number = ROW_HEIGHT + 0.5;
 
 @Entry
 @Component
@@ -34,6 +36,9 @@ struct ChatFoldersPage {
   @State loadError: boolean = false;
   @State tagsEnabled: boolean = false;
   @State operationKey: string = '';
+  // 拖拽排序：-1 表示没有在拖。offset 是手指相对起点的位移。
+  @State draggingIndex: number = -1;
+  @State dragOffsetY: number = 0;
   @State recommendations: RecommendedFolder[] = [];
   @State recommendationState: string = 'loading';
   @State limits: FolderLimits = { folderCount: 10, chosenChatCount: 100 };
@@ -158,6 +163,38 @@ struct ChatFoldersPage {
     if (this.operationKey !== '') { return; }
     const params: FolderEditParams = { folderId: id };
     router.pushUrl({ url: 'pages/main/FolderEditPage', params });
+  }
+
+  // 拖动中该落到第几位。四舍五入到最近的一格，并夹在合法范围内。
+  private dragTargetIndex(): number {
+    if (this.draggingIndex < 0) { return -1; }
+    const shift = Math.round(this.dragOffsetY / ROW_STEP);
+    const target = this.draggingIndex + shift;
+    return Math.max(0, Math.min(this.folders.length - 1, target));
+  }
+
+  // 每一行在拖拽过程中的视觉位移：被拖的那行跟手，其余行给它让位。
+  private rowOffsetY(index: number): number {
+    if (this.draggingIndex < 0) { return 0; }
+    if (index === this.draggingIndex) { return this.dragOffsetY; }
+    const target = this.dragTargetIndex();
+    if (this.draggingIndex < target && index > this.draggingIndex && index <= target) {
+      return -ROW_STEP;
+    }
+    if (this.draggingIndex > target && index >= target && index < this.draggingIndex) {
+      return ROW_STEP;
+    }
+    return 0;
+  }
+
+  private endDrag(): void {
+    const from = this.draggingIndex;
+    const to = this.dragTargetIndex();
+    this.draggingIndex = -1;
+    this.dragOffsetY = 0;
+    if (from >= 0 && to >= 0 && from !== to) {
+      this.moveFolder(from, to);
+    }
   }
 
   private moveFolder(from: number, to: number): void {
@@ -338,13 +375,14 @@ struct ChatFoldersPage {
   }
 
   @Builder
+  // 不加彩色底块：前景和底色同色只差透明度，对比度低、看着发糊，42×42 的方块
+  // 在 66 高的行里也过重。这里只留单色图标，把视觉重量让给标题、"共享"标签
+  // 和右侧的拖拽手柄。颜色仍来自文件夹自身的 colorId，辨识度不丢。
   folderIcon(folder: FolderInfo) {
     Row() {
-      SymbolGlyph(folderSymbol(folder.iconName)).fontSize(21)
+      SymbolGlyph(folderSymbol(folder.iconName)).fontSize(24)
         .fontColor([folderColor(folder.colorId)]);
-    }.width(42).height(42).borderRadius(14)
-      .justifyContent(FlexAlign.Center)
-      .backgroundColor(`${folderColor(folder.colorId)}20`);
+    }.width(30).height(30).justifyContent(FlexAlign.Center);
   }
 
   @Builder
@@ -379,7 +417,7 @@ struct ChatFoldersPage {
         .width(40).height(40).borderRadius(20).justifyContent(FlexAlign.Center)
         .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
         .bindMenu(this.folderMenu(folder, index));
-    }.width('100%').height(ROW_HEIGHT).padding({ left: 14, right: 8 })
+    }.width('100%').height(ROW_HEIGHT).padding({ left: 16, right: 8 })
       .alignItems(VerticalAlign.Center)
       .transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: -5 }))
         .animation({ duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180), curve: Curve.EaseOut }));
@@ -399,7 +437,45 @@ struct ChatFoldersPage {
       }.width('100%').height(ROW_HEIGHT).padding({ left: 14, right: 14 });
       ForEach(this.folders, (folder: FolderInfo, index: number) => {
         Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 68 });
-        this.folderRow(folder, index);
+        Column() {
+          this.folderRow(folder, index);
+        }
+        .width('100%')
+        .translate({ y: this.rowOffsetY(index) })
+        // 被拖的一行浮在其它行之上，并给一点抬起感。
+        .zIndex(this.draggingIndex === index ? 2 : 1)
+        .scale(this.draggingIndex === index
+          ? { x: 1.02, y: 1.02 } : { x: 1, y: 1 })
+        .shadow(this.draggingIndex === index
+          ? { radius: 12, color: '#22000000', offsetX: 0, offsetY: 4 }
+          : { radius: 0, color: Color.Transparent, offsetX: 0, offsetY: 0 })
+        .backgroundColor(this.draggingIndex === index
+          ? $r('app.color.surface') : Color.Transparent)
+        // 让位动画只作用于没被拖的行，被拖那行必须跟手、不能有插值延迟。
+        .animation(this.draggingIndex === index
+          ? undefined
+          : { duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 160), curve: Curve.EaseOut })
+        .gesture(
+          // Sequence：先长按确认意图，再进入拖动，避免和点击/滚动抢手势。
+          GestureGroup(GestureMode.Sequence,
+            LongPressGesture({ repeat: false, duration: 300 })
+              .onAction((): void => {
+                if (this.operationKey !== '') { return; }
+                this.draggingIndex = index;
+                this.dragOffsetY = 0;
+              }),
+            PanGesture({ direction: PanDirection.Vertical })
+              .onActionUpdate((event: GestureEvent): void => {
+                if (this.draggingIndex === index) { this.dragOffsetY = event.offsetY; }
+              })
+              .onActionEnd((): void => {
+                if (this.draggingIndex === index) { this.endDrag(); }
+              })
+              .onActionCancel((): void => {
+                if (this.draggingIndex === index) { this.endDrag(); }
+              })
+          )
+        );
       }, (folder: FolderInfo): string => `folder_${folder.id}`);
       Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
       Row({ space: 10 }) {

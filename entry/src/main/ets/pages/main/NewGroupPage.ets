@@ -10,6 +10,7 @@ import { AvatarView } from '../chatlist/AvatarView';
 import {
   PublicUserSearchResult, searchPublicUsersDetailed
 } from '../../store/PublicUserSearch';
+import { parseOptionInteger } from '../../store/FolderApi';
 import {
   NewBasicGroupResult, maxSelectableBasicGroupMembers, newGroupCreationErrorText,
   newGroupCreationOutcomeUncertain, newGroupTitleError, parseNewBasicGroupResult
@@ -163,7 +164,8 @@ struct NewGroupPage {
     request['name'] = 'basic_group_size_max';
     getTdClient().send(request).then((result: TdObject): void => {
       if (!this.active) { return; }
-      const sizeMax = (result['value'] as number | undefined) ?? DEFAULT_BASIC_GROUP_SIZE_MAX;
+      // optionValueInteger 的 value 是 int64，TDLib 编码成字符串。
+      const sizeMax = parseOptionInteger(result['value'], DEFAULT_BASIC_GROUP_SIZE_MAX);
       this.maxSelectableMembers = maxSelectableBasicGroupMembers(sizeMax);
     }).catch((error: TdError): void => {
       console.warn(`NewGroupPage basic_group_size_max failed: ${error.message}`);

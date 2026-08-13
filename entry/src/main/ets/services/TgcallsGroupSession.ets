@@ -6,6 +6,7 @@ import {
 import { TdClient } from '../tdkit/TdClient';
 import { GroupCallStreamInfo } from '../tdkit/GroupCallTypes';
 import { TdRequest } from '../tdkit/TdTypes';
+import { parseOptionInteger } from '../store/FolderApi';
 
 const JOIN_PAYLOAD_TIMEOUT_MS: number = 15000;
 const SCREEN_SHARE_JOIN_PAYLOAD_TIMEOUT_MS: number = 15000;
@@ -575,7 +576,9 @@ export class TgcallsGroupSession {
     const request: TdRequest = { '@type': 'getOption' };
     request['name'] = 'unix_time';
     const response = await client.send(request);
-    const seconds = (response['value'] as number | undefined) ?? 0;
+    // unix_time 同样是 int64 → JSON 字符串，直接当 number 会恒为 0，
+    // 导致服务端时间偏移算不出来。
+    const seconds = parseOptionInteger(response['value'], 0);
     if (seconds <= 0) { return 0; }
     const milliseconds = seconds * 1000;
     this.serverTimeOffsetMs = milliseconds - Date.now();

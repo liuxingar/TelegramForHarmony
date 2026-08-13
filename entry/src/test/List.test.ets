@@ -22,6 +22,8 @@ import callPresentationTest from './CallPresentation.test';
 import notificationServiceTest from './NotificationService.test';
 import storyStoreTest from './StoryStore.test';
 import linkNavTest from './LinkNav.test';
+import deepLinkTest from './DeepLink.test';
+import webPushRegistrationTest from './WebPushRegistration.test';
 import streamSegmentMathTest from './StreamSegmentMath.test';
 import groupCallApiTest from './GroupCallApi.test';
 import liveStreamStoreTest from './LiveStreamStore.test';
@@ -46,6 +48,8 @@ import webBrowserNavTest from './WebBrowserNav.test';
 import backgroundPresentationTest from './BackgroundPresentation.test';
 import chatThemePresentationTest from './ChatThemePresentation.test';
 import accentPresentationTest from './AccentPresentation.test';
+import customEmojiReactionsTest from './CustomEmojiReactions.test';
+import downloadApiTest from './DownloadApi.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -72,6 +76,8 @@ export default function testsuite() {
   notificationServiceTest();
   storyStoreTest();
   linkNavTest();
+  deepLinkTest();
+  webPushRegistrationTest();
   streamSegmentMathTest();
   groupCallApiTest();
   liveStreamStoreTest();
@@ -96,4 +102,6 @@ export default function testsuite() {
   backgroundPresentationTest();
   chatThemePresentationTest();
   accentPresentationTest();
+  downloadApiTest();
+  customEmojiReactionsTest();
 }

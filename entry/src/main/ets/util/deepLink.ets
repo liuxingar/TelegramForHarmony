@@ -1,4 +1,5 @@
 import { common } from '@kit.AbilityKit';
+import { router } from '@kit.ArkUI';
 import { openTelegramLink } from './openTelegramLink';
 
 // Incoming deep links arrive as tg:// URIs (a browser https://t.me link can't
@@ -22,6 +23,73 @@ function queryParam(query: string, key: string): string {
     }
   }
   return '';
+}
+
+// —— tg://openmessage ——
+//
+// 给自建 Web Push 中转服务用的跳转入口：推送里带上这个 URL，点通知就能直接
+// 落到具体会话。参数名刻意和 Telegram 推送 payload 的 `custom` 字段一一对应，
+// 中转服务原样抄过来即可，不需要懂下面这些换算。
+//
+//   tg://openmessage?from_id=<用户id>&msg_id=<服务端消息id>     私聊
+//   tg://openmessage?chat_id=<基础群id>&msg_id=<...>            基础群
+//   tg://openmessage?channel_id=<频道id>&msg_id=<...>           超级群/频道
+//
+// `user_id` 是 `from_id` 的别名（真实 Telegram 客户端用这个名字）。msg_id 可
+// 省略，省略时只打开会话不跳转到具体消息。
+//
+// 换算依据 TDLib 源码，push 的 custom 给的是原始 id，td_api 用的是另一套：
+//   DialogId.h:27          ZERO_CHANNEL_ID = -1000000000000
+//   MessageId.h:27         SERVER_ID_SHIFT = 20
+const ZERO_CHANNEL_ID: number = -1000000000000;
+// 注意必须用乘法：JS 的位运算是 32 位的，`<< 20` 会直接溢出。
+const SERVER_MESSAGE_ID_SCALE: number = 1048576; // 1 << 20
+
+export interface OpenMessageTarget {
+  chatId: number;
+  messageId: number; // td_api 消息 id（已换算）；0 表示只打开会话
+}
+
+// 严格的十进制整数解析：queryParam 拿到的是任意用户输入，parseInt 会把
+// "12abc" 读成 12，这里不接受这种。
+function intParam(query: string, key: string): number {
+  const raw = queryParam(query, key).trim();
+  if (raw === '' || !/^-?\d+$/.test(raw)) {
+    return 0;
+  }
+  const value = Number(raw);
+  return Number.isSafeInteger(value) ? value : 0;
+}
+
+export function parseOpenMessageLink(uri: string): OpenMessageTarget | null {
+  if (!uri.startsWith('tg://')) {
+    return null;
+  }
+  const rest = uri.substring('tg://'.length);
+  const q = rest.indexOf('?');
+  if (q < 0 || rest.substring(0, q) !== 'openmessage') {
+    return null;
+  }
+  const query = rest.substring(q + 1);
+
+  let chatId: number = 0;
+  const channelId: number = intParam(query, 'channel_id');
+  const basicGroupId: number = intParam(query, 'chat_id');
+  const userId: number = intParam(query, 'from_id') !== 0
+    ? intParam(query, 'from_id') : intParam(query, 'user_id');
+  if (channelId > 0) {
+    chatId = ZERO_CHANNEL_ID - channelId;
+  } else if (basicGroupId > 0) {
+    chatId = -basicGroupId;
+  } else if (userId > 0) {
+    chatId = userId;
+  } else {
+    return null;
+  }
+
+  const serverMessageId: number = intParam(query, 'msg_id');
+  const messageId: number = serverMessageId > 0 ? serverMessageId * SERVER_MESSAGE_ID_SCALE : 0;
+  return { chatId, messageId };
 }
 
 // tg://resolve?domain=foo&post=12 → https://t.me/foo/12
@@ -56,6 +124,19 @@ export function tgSchemeToUrl(uri: string): string {
 export function handleIncomingLink(context: common.UIAbilityContext, rawUri: string): void {
   const uri = rawUri.trim();
   if (uri === '') {
+    return;
+  }
+  // openmessage 走本地路由而不是 t.me —— 它带的是数字 id，没有对应的公开链接
+  // 形式（私聊和无用户名的群根本没有 t.me 地址）。
+  const target = parseOpenMessageLink(uri);
+  if (target !== null) {
+    const params: Record<string, Object> = { 'chatId': target.chatId };
+    if (target.messageId > 0) {
+      params['jumpTo'] = target.messageId;
+    }
+    router.pushUrl({ url: 'pages/chat/ChatPage', params: params }).catch((e: Error): void => {
+      console.error(`deepLink.openmessage failed: ${e.message}`);
+    });
     return;
   }
   // allowBrowser=false: a deep link that fails to resolve must NOT re-open the

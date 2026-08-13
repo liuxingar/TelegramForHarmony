@@ -60,6 +60,18 @@ export struct PhoneNumberPage {
     });
   }
 
+  // 状态流转到 WaitQrCode 后 Index 会切到扫码页，这里只需负责发起请求。
+  private startQrLogin(): void {
+    if (this.busy) { return; }
+    this.busy = true;
+    this.errorText = '';
+    getAuthService().requestQrLogin().catch((caught: TdError): void => {
+      this.errorText = caught.message;
+    }).finally((): void => {
+      this.busy = false;
+    });
+  }
+
   private selectCountry(country: CountryOption): void {
     if (!this.pickerReady) { return; }
     this.selectedCountry = country;
@@ -219,6 +231,17 @@ export struct PhoneNumberPage {
           .borderRadius(14)
           .enabled(!this.busy && this.phoneDigits.length >= 4)
           .onClick((): void => this.submitPhone());
+
+        Row({ space: 8 }) {
+          SymbolGlyph($r('sys.symbol.qrcode'))
+            .fontSize(18).fontColor([COLOR_PRIMARY]);
+          Text('用其他设备扫码登录')
+            .fontSize(15).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY);
+        }
+        .width('100%').height(46)
+        .justifyContent(FlexAlign.Center)
+        .enabled(!this.busy)
+        .onClick((): void => this.startQrLogin());
 
         if (canReturnToPreviousTdAccount()) {
           Button('返回原账号')

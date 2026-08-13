@@ -6,11 +6,14 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 export enum AuthStage {
   Init = 'Init',
   WaitPhone = 'WaitPhone',
+  WaitQrCode = 'WaitQrCode',
   WaitCode = 'WaitCode',
   WaitPassword = 'WaitPassword',
   Ready = 'Ready',
   LoggedOut = 'LoggedOut'
 }
+
+const QR_CONFIRMATION_STATE: string = 'authorizationStateWaitOtherDeviceConfirmation';
 
 // Set true to connect to Telegram's test datacenter, which validates the login
 // flow end-to-end without SMS or production flood limits. Test phone numbers are
@@ -20,6 +23,7 @@ const USE_TEST_DC: boolean = false;
 
 const STATE_TO_STAGE: Map<string, AuthStage> = new Map([
   ['authorizationStateWaitPhoneNumber', AuthStage.WaitPhone],
+  [QR_CONFIRMATION_STATE, AuthStage.WaitQrCode],
   ['authorizationStateWaitCode', AuthStage.WaitCode],
   ['authorizationStateWaitPassword', AuthStage.WaitPassword],
   ['authorizationStateReady', AuthStage.Ready],
@@ -40,6 +44,13 @@ export class AuthService {
   private authenticationCodeType: string = '';
   private authenticationCodeDestination: string = '';
   private nextAuthenticationCodeType: string = '';
+  private qrLoginLink: string = '';
+  private qrLinkCallbacks: Array<(link: string) => void> = [];
+  // 用户在扫码页选择「改用手机号登录」后置位。TDLib 仍会周期性推送新的
+  // WaitOtherDeviceConfirmation（token 刷新），若不记住这个选择，用户会被反复
+  // 拽回扫码页。setAuthenticationPhoneNumber 在该状态下依然可用，所以本地
+  // 直接把阶段回退到 WaitPhone 即可，无需先取消服务端的扫码会话。
+  private phoneLoginPreferred: boolean = false;
   private offAuthorizationState: (() => void) | null = null;
 
   constructor(client: TdClient, databaseDirectory: string, filesDirectory: string) {
@@ -61,6 +72,42 @@ export class AuthService {
         (current: (stage: AuthStage) => void): boolean => current !== cb
       );
     };
+  }
+
+  // 注册二维码链接监听并立即回放当前链接：扫码页可能在链接到达之后才挂载，
+  // 没有回放就会一直空白等待下一次 token 刷新。
+  onQrLinkChange(cb: (link: string) => void): () => void {
+    this.qrLinkCallbacks = [...this.qrLinkCallbacks, cb];
+    cb(this.qrLoginLink);
+    return (): void => {
+      this.qrLinkCallbacks = this.qrLinkCallbacks.filter(
+        (current: (link: string) => void): boolean => current !== cb
+      );
+    };
+  }
+
+  getQrLoginLink(): string {
+    return this.qrLoginLink;
+  }
+
+  // 请求扫码登录：TDLib 随后进入 WaitOtherDeviceConfirmation 并给出 tg://login 链接。
+  // other_user_ids 仅用于「同一设备上的已登录账号免确认」，本机是新会话故传空。
+  async requestQrLogin(): Promise<void> {
+    this.phoneLoginPreferred = false;
+    const request: TdRequest = { '@type': 'requestQrCodeAuthentication' };
+    request['other_user_ids'] = [];
+    await this.client.send(request);
+  }
+
+  // 从扫码页退回手机号登录。不向 TDLib 发请求，避免打断仍然有效的授权会话；
+  // 用户输入手机号后 setAuthenticationPhoneNumber 会自然覆盖扫码状态。
+  switchToPhoneLogin(): void {
+    if (this.currentStage !== AuthStage.WaitQrCode) {
+      return;
+    }
+    this.phoneLoginPreferred = true;
+    this.setQrLoginLink('');
+    this.emitStage(AuthStage.WaitPhone);
   }
 
   async submitPhone(phone: string): Promise<void> {
@@ -171,6 +218,7 @@ export class AuthService {
       this.offAuthorizationState = null;
     }
     this.callbacks = [];
+    this.qrLinkCallbacks = [];
     const closed = this.closedCallbacks;
     this.closedCallbacks = [];
     for (const callback of closed) { callback(); }
@@ -184,6 +232,16 @@ export class AuthService {
     if (type === 'authorizationStateWaitTdlibParameters') {
       this.sendTdlibParameters();
       return;
+    }
+    if (type === QR_CONFIRMATION_STATE && !this.phoneLoginPreferred) {
+      // token 会被服务端周期性刷新，每次刷新都是一条新的同类型更新。
+      this.setQrLoginLink((state['link'] as string | undefined) ?? '');
+    } else if (this.qrLoginLink !== '') {
+      this.setQrLoginLink('');
+    }
+    if (type === 'authorizationStateWaitPhoneNumber') {
+      // 服务端确实回到了手机号阶段，此前的「改用手机号」偏好已无意义。
+      this.phoneLoginPreferred = false;
     }
     if (type === 'authorizationStateWaitCode') {
       const codeInfo = state['code_info'] as TdObject | undefined;
@@ -209,17 +267,33 @@ export class AuthService {
         this.nextAuthenticationCodeType
       );
     }
-    const stage = STATE_TO_STAGE.get(type);
-    if (stage !== undefined) {
-      this.currentStage = stage;
-      for (const cb of this.callbacks) {
-        cb(stage);
-      }
+    const mapped = STATE_TO_STAGE.get(type);
+    if (mapped !== undefined) {
+      const stage: AuthStage =
+        mapped === AuthStage.WaitQrCode && this.phoneLoginPreferred ? AuthStage.WaitPhone : mapped;
+      this.emitStage(stage);
     }
     if (type === 'authorizationStateClosed') {
       const closed = this.closedCallbacks;
       this.closedCallbacks = [];
       for (const callback of closed) { callback(); }
+    }
+  }
+
+  private emitStage(stage: AuthStage): void {
+    this.currentStage = stage;
+    for (const cb of this.callbacks) {
+      cb(stage);
+    }
+  }
+
+  private setQrLoginLink(link: string): void {
+    if (this.qrLoginLink === link) {
+      return;
+    }
+    this.qrLoginLink = link;
+    for (const cb of this.qrLinkCallbacks) {
+      cb(link);
     }
   }
 

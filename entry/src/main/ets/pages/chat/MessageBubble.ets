@@ -27,6 +27,7 @@ import { formatFileSize } from '../../util/formatFileSize';
 import { parseFormattedText, RichSegment, RichRun } from '../../util/richText';
 import { packAlbumRows, AlbumCell } from '../../util/packAlbumRows';
 import { linkPreviewPresentation, LinkPreviewPresentation } from '../../util/linkPreview';
+import { reactionKeyFrom } from '../../util/reactions';
 import { COLOR_PRIMARY, COLOR_TEXT_SECONDARY, COLOR_BUBBLE_OUT, COLOR_BUBBLE_IN, COLOR_BUBBLE_TEXT, AVATAR_PALETTE, botButtonBg } from '../../util/theme';
 
 const ALBUM_MAX_WIDTH: number = 280;
@@ -117,6 +118,7 @@ export struct MessageBubble {
   @Prop animationForcePlay: boolean = false;
   @Prop animationPlaybackFailed: boolean = false;
   // Long-press context menu actions.
+  // emoji 参数其实是 reaction key：标准 emoji 原样，自定义 emoji 为 'ce:<id>'。
   onSetReaction: (messageId: number, emoji: string, isChosen: boolean) => void = (): void => {};
   onReplyTo: (messageId: number) => void = (): void => {};
   onEditMsg: (messageId: number) => void = (): void => {};
@@ -1157,7 +1159,20 @@ export struct MessageBubble {
     Flex({ wrap: FlexWrap.Wrap }) {
       ForEach(this.msg.reactions, (r: ReactionInfo) => {
         Row({ space: 4 }) {
-          Text(r.emoji).fontSize(13);
+          if (r.customEmojiId !== '') {
+            // 位图还没下载完时给一个同尺寸占位，chip 宽度不会跳动。
+            if (r.customEmojiPath !== '') {
+              Image(this.reactionImageSource(r.customEmojiPath))
+                .width(15).height(15).objectFit(ImageFit.Contain)
+                .draggable(false);
+            } else {
+              Row()
+                .width(15).height(15).borderRadius(4)
+                .backgroundColor(r.isChosen ? '#40FFFFFF' : '#1A000000');
+            }
+          } else {
+            Text(r.emoji).fontSize(13);
+          }
           Text(`${r.count}`).fontSize(12).fontColor(r.isChosen ? Color.White : COLOR_TEXT_SECONDARY);
         }
         .backgroundColor(r.isChosen ? COLOR_PRIMARY : '#00000010')
@@ -1168,23 +1183,30 @@ export struct MessageBubble {
           pressed: this.menuActionPressedStyle
         })
         .animation({ duration: this.reactionDuration(120), curve: Curve.EaseOut })
-        .onClick(() => { this.onSetReaction(this.msg.id, r.emoji, r.isChosen); })
+        .onClick(() => {
+          this.onSetReaction(this.msg.id, reactionKeyFrom(r.emoji, r.customEmojiId), r.isChosen);
+        })
         // Long-press a chip to see who reacted with it.
         .gesture(LongPressGesture().onAction(() => {
-          this.onShowReactors(this.msg.id, r.emoji);
+          this.onShowReactors(this.msg.id, reactionKeyFrom(r.emoji, r.customEmojiId));
         }))
         .transition(
           TransitionEffect.scale({ x: 0.6, y: 0.6 })
             .combine(TransitionEffect.OPACITY)
             .animation({ duration: this.reactionDuration(180), curve: Curve.EaseOut })
         );
-      }, (r: ReactionInfo) => `rx_${r.emoji}`);
+        // key 里带上路径，位图下载完成后 chip 才会重建并显示图片。
+      }, (r: ReactionInfo) => `rx_${reactionKeyFrom(r.emoji, r.customEmojiId)}_${r.customEmojiPath}`);
     }.constraintSize({ maxWidth: this.inlineMaxW() }).margin({ top: 4 });
   }
 
-  private reactionChosen(emoji: string): boolean {
+  private reactionImageSource(path: string): string {
+    return path.startsWith('/') ? `file://${path}` : path;
+  }
+
+  private reactionChosen(reactionKey: string): boolean {
     for (const r of this.msg.reactions) {
-      if (r.emoji === emoji) {
+      if (reactionKeyFrom(r.emoji, r.customEmojiId) === reactionKey) {
         return r.isChosen;
       }
     }

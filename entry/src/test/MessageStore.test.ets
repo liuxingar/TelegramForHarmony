@@ -206,7 +206,7 @@ function pushNewMessage(b: FakeBridge, m: TdObject): void {
 function extraOf(json: string): string {
   const o = JSON.parse(json) as TdObject; return (o['@extra'] as string | undefined) ?? '';
 }
-function feedChat(b: FakeBridge, chatId: number): void {
+function feedChat(b: FakeBridge, chatId: number, asGroup: boolean = false): void {
   // find the getChat request and answer it with a minimal chat (no unread
   // anchor), so startInitialLoad() takes the plain loadHistory(0) path.
   let extra = '';
@@ -217,6 +217,12 @@ function feedChat(b: FakeBridge, chatId: number): void {
   const chat: TdObject = { '@type': 'chat' };
   chat['id'] = chatId;
   chat['@extra'] = extra;
+  if (asGroup) {
+    // 回复键盘的尾部探测只对群聊生效，不带 type 的 chat 走不到那条分支。
+    const type: TdObject = { '@type': 'chatTypeSupergroup' };
+    type['supergroup_id'] = chatId;
+    chat['type'] = type;
+  }
   b.onReceive(JSON.stringify(chat));
 }
 function feedHistory(b: FakeBridge, msgs: TdObject[]): void {
@@ -430,7 +436,7 @@ export default function messageStoreTest() {
           ? kb.rows[0][0].text : '';
       });
       store.open();
-      feedChat(b, 5);
+      feedChat(b, 5, true);
       await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
       // The visible latest page has no keyboard marker, so MessageStore starts
       // an independent tail probe rather than depending on rendered history.

@@ -24,7 +24,10 @@ function input(): LiveInteractionPresentationInput {
 export default function liveInteractionPresentationTest() {
   describe('LiveInteractionPresentation', (): void => {
     it('keeps_stable_arrival_order_for_equal_dates', 0, (): void => {
+      // 文本必须不同：同发送者 + 同时间 + 同文本会命中跨源去重（见下一个用例），
+      // 两条被合成一条，就验不到排序了。
       const later = entry('call:2', 'call', 10, 2);
+      later.text = '在的';
       const earlier = entry('chat:1', 'chat', 10, 1);
       const merged = mergeLiveInteractions([later, earlier], 100);
       expect(merged[0].key).assertEqual('chat:1');

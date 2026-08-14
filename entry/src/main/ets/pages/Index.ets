@@ -7,6 +7,7 @@ import {
 import { PhoneNumberPage } from './login/PhoneNumberPage';
 import { CodePage } from './login/CodePage';
 import { PasswordPage } from './login/PasswordPage';
+import { RegisterPage } from './login/RegisterPage';
 import { QrLoginPage } from './login/QrLoginPage';
 import { MainScreen } from './main/MainScreen';
 import { handleIncomingLink } from '../util/deepLink';
@@ -124,6 +125,8 @@ struct Index {
           CodePage()
         } else if (this.stage === AuthStage.WaitPassword) {
           PasswordPage()
+        } else if (this.stage === AuthStage.WaitRegistration) {
+          RegisterPage()
         } else if (this.stage === AuthStage.Ready) {
           MainScreen()
         } else if (this.stage === AuthStage.LoggedOut) {

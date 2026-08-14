@@ -91,7 +91,7 @@ const SET_LIMIT: number = 20;
 // server's trending packs, like the official client.
 @Component
 export struct StickerPicker {
-  onPick: (s: StickerItem) => void = (): void => {};
+  onPick: (s: StickerItem, x: number, y: number) => void = (): void => {};
   stickerType: string = 'regular'; // 'regular' | 'custom_emoji'
   includeTrending: boolean = false;
   classicPacks: ClassicPack[] = []; // built-in unicode sections, shown first
@@ -848,11 +848,12 @@ export struct StickerPicker {
       duration: this.reduceAnimations || this.powerSaving ? 0 : 110,
       curve: Curve.EaseOut
     })
-    .onClick(() => {
+    .onClick((e: ClickEvent) => {
       if (s.fileId !== 0 && this.stickerType !== 'custom_emoji') {
         rememberRecentSticker(s.fileId);
       }
-      this.onPick(s);
+      // 坐标用于"贴纸飞出"动画的起点，窗口坐标系与浮层一致。
+      this.onPick(s, e.windowX, e.windowY);
     })
     // Long-press to (un)favorite — the 收藏 section refreshes on next open.
     .gesture(LongPressGesture().onAction(() => { this.toggleFavorite(s); }));

@@ -19,8 +19,12 @@ export struct CodePage {
   @State codeDestination: string = '';
   @State nextCodeType: string = '';
   @State codeSlots: number[] = [0, 1, 2, 3, 4];
+  // 距离允许重发还剩多少秒（来自 codeInfo.timeout）。
+  @State resendCountdown: number = 0;
+  @State resendAvailable: boolean = false;
   private lastSubmittedCode: string = '';
   private unsubscribeStage: (() => void) | null = null;
+  private countdownTimer: number = -1;
 
   aboutToAppear(): void {
     const auth = getAuthService();
@@ -34,6 +38,7 @@ export struct CodePage {
   }
 
   aboutToDisappear(): void {
+    this.clearCountdown();
     if (this.unsubscribeStage !== null) {
       this.unsubscribeStage();
       this.unsubscribeStage = null;
@@ -47,11 +52,40 @@ export struct CodePage {
     this.codeType = auth.getCodeType();
     this.codeDestination = auth.getCodeDestination();
     this.nextCodeType = auth.getNextCodeType();
+    this.resendAvailable = auth.canResendCode();
+    this.startCountdown(auth.getCodeTimeout());
     const slots: number[] = [];
     for (let index = 0; index < this.codeLength; ++index) {
       slots.push(index);
     }
     this.codeSlots = slots;
+  }
+
+  // 服务端给的等待时间。到点前重发一定被拒（Code can't be resent），所以
+  // 按钮在倒计时期间置灰并显示剩余秒数，而不是让用户点出个报错。
+  private startCountdown(seconds: number): void {
+    this.clearCountdown();
+    this.resendCountdown = Math.max(0, Math.floor(seconds));
+    if (this.resendCountdown <= 0) {
+      return;
+    }
+    this.countdownTimer = setInterval((): void => {
+      this.resendCountdown = this.resendCountdown - 1;
+      if (this.resendCountdown <= 0) {
+        this.clearCountdown();
+      }
+    }, 1000);
+  }
+
+  private clearCountdown(): void {
+    if (this.countdownTimer !== -1) {
+      clearInterval(this.countdownTimer);
+      this.countdownTimer = -1;
+    }
+  }
+
+  private resendEnabled(): boolean {
+    return !this.busy && this.resendAvailable && this.resendCountdown <= 0;
   }
 
   private phoneTarget(): string {
@@ -87,6 +121,13 @@ export struct CodePage {
   }
 
   private resendButtonText(): string {
+    // 倒计时优先：它反映的是服务端给的等待时间，跟"有没有下一种通道"是两回事。
+    if (this.resendCountdown > 0) {
+      return `${this.resendCountdown} 秒后可重新发送`;
+    }
+    if (!this.resendAvailable) {
+      return '该验证方式不支持重发';
+    }
     switch (this.nextCodeType) {
       case 'authenticationCodeTypeTelegramMessage':
         return '改用 Telegram 接收验证码';
@@ -231,10 +272,16 @@ export struct CodePage {
 
         Button(this.resendButtonText())
           .width('100%').height(45)
-          .fontSize(14).fontColor(COLOR_PRIMARY)
+          .fontSize(14)
+          .fontColor(this.resendEnabled() ? COLOR_PRIMARY : COLOR_TEXT_SECONDARY)
           .backgroundColor(Color.Transparent)
-          .enabled(!this.busy)
+          .enabled(this.resendEnabled())
           .onClick((): void => this.resendCode());
+        if (!this.resendAvailable) {
+          Text('这台设备收不到的话，请在能收到验证码的设备上完成登录')
+            .width('100%').fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
+            .textAlign(TextAlign.Center);
+        }
 
         if (canReturnToPreviousTdAccount()) {
           Button('返回原账号')

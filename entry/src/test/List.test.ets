@@ -1,4 +1,5 @@
 import localUnitTest from './LocalUnit.test';
+import markdownBlocksTest from './MarkdownBlocks.test';
 import tdClientTest from './TdClient.test';
 import authServiceTest from './AuthService.test';
 import formatTimeTest from './formatTime.test';
@@ -104,4 +105,5 @@ export default function testsuite() {
   accentPresentationTest();
   downloadApiTest();
   customEmojiReactionsTest();
+  markdownBlocksTest();
 }

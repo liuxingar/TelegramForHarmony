@@ -76,7 +76,7 @@ const CLASSIC_PACKS: ClassicPack[] = SECTIONS.map((s: EmojiSection): ClassicPack
 export struct EmojiPanel {
   onPick: (emoji: string) => void = (): void => {};
   onPickCustomEmoji: (emoji: string, customEmojiId: string) => void = (): void => {};
-  onPickSticker: (s: StickerItem) => void = (): void => {};
+  onPickSticker: (s: StickerItem, x: number, y: number) => void = (): void => {};
   onPickGif: (g: GifItem) => void = (): void => {};
   @Link tab: number;
   @StorageProp(KEY_POWER_ACTIVE) powerSaving: boolean = false;
@@ -154,7 +154,7 @@ export struct EmojiPanel {
         .visibility(this.tab === 0 ? Visibility.Visible : Visibility.Hidden);
         if (this.stickerMounted) {
           Column() {
-            StickerPicker({ onPick: (s: StickerItem): void => { this.onPickSticker(s); } });
+            StickerPicker({ onPick: (s: StickerItem, x: number, y: number): void => { this.onPickSticker(s, x, y); } });
           }
           .width('100%').height('100%')
           .visibility(this.tab === 1 ? Visibility.Visible : Visibility.Hidden);

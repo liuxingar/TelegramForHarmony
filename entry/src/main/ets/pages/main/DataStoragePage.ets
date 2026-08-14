@@ -4,7 +4,6 @@ import {
   StorageUsage, NetworkUsage, formatBytes, getStorageUsage, clearCache,
   getNetworkUsage, resetNetworkUsage, clearAllDrafts
 } from '../../store/StorageApi';
-import { listProxies, ProxyEntry } from '../../store/ProxyApi';
 import {
   KEY_CURRENT_NETWORK_TYPE, KEY_AUTOSAVE_PRIVATE, KEY_AUTOSAVE_GROUP,
   KEY_AUTOSAVE_CHANNEL, autoDownloadPolicy, powerAnimationDuration,
@@ -35,7 +34,6 @@ struct DataStoragePage {
   @State storageError: string = '';
   @State networkError: string = '';
   @State syncWarning: string = '';
-  @State proxySummary: string = '正在读取…';
   @State actionKey: string = '';
   @State skeletonBright: boolean = false;
   private active: boolean = false;
@@ -137,13 +135,6 @@ struct DataStoragePage {
       if (this.network !== null) { this.syncWarning = '部分数据同步失败，正在显示上次结果'; }
       if (!this.storageLoading) { this.stopSkeleton(); }
       console.error(`DataStoragePage.getNetworkUsage failed: ${error.message}`);
-    });
-    listProxies().then((entries: ProxyEntry[]): void => {
-      if (!this.active || sequence !== this.loadSequence) { return; }
-      const enabled = entries.find((entry: ProxyEntry): boolean => entry.isEnabled);
-      this.proxySummary = enabled !== undefined ? `已连接 · ${enabled.server}` : '直连';
-    }).catch((): void => {
-      if (this.active && sequence === this.loadSequence) { this.proxySummary = '状态暂不可用'; }
     });
   }
 
@@ -404,9 +395,6 @@ struct DataStoragePage {
             this.statsCard();
           }
           this.mediaCard();
-          Column() {
-            this.navRow($r('sys.symbol.link'), '代理', this.proxySummary, '', 'pages/main/ProxyPage');
-          }.width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS).clip(true);
           this.actionsCard();
           Text('自动下载按当前网络与文件大小执行；保存到相册由系统确认写入。')
             .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).width('100%')

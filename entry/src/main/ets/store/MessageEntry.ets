@@ -899,6 +899,19 @@ function replyId(message: TdObject): number {
   return (r['message_id'] as number | undefined) ?? 0;
 }
 
+// messageReplyToMessage.quote 里带着被引用的那段文字（用户划选的片段）。
+// 它是自带的，不依赖原消息是否已加载 —— 桌面端就是直接渲染它。之前只取了
+// message_id，原消息不在已加载窗口里时引用块就是空的。
+function replyQuoteText(message: TdObject): string {
+  const r = message['reply_to'] as TdObject | undefined;
+  if (r === undefined || r['@type'] !== 'messageReplyToMessage') {
+    return '';
+  }
+  const quote = r['quote'] as TdObject | undefined;
+  const text = quote !== undefined ? (quote['text'] as TdObject | undefined) : undefined;
+  return text !== undefined ? ((text['text'] as string | undefined) ?? '') : '';
+}
+
 function inlineCustomEmojiIds(entities: TdObject[]): string[] {
   const ids: string[] = [];
   for (const entity of entities) {
@@ -961,7 +974,7 @@ export function buildMessageEntry(message: TdObject, users: UserStore): MessageE
     isVideoChatStarted,
     replyToMessageId: replyId(message),
     replySenderName: '',
-    replyText: '',
+    replyText: replyQuoteText(message),
     sendState: isOutgoing ? outgoingState(message) : 'none',
     albumId: albumIdOf(message),
     textEntities: c.entities,

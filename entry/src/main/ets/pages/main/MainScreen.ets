@@ -13,6 +13,7 @@ import { MyProfilePage } from './MyProfilePage';
 import { TdObject, TdRequest, TdError } from '../../tdkit/TdTypes';
 import { COLOR_DIVIDER, COLOR_PRIMARY, COLOR_TAB_PILL_BG, COLOR_TAB_UNSELECTED } from '../../util/theme';
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
+import { updateChecker, STORAGE_UPDATE_AVAILABLE } from '../../services/UpdateChecker';
 
 // Translucent tint over a backdrop blur — the frosted-glass dock material.
 const DOCK_BG: ResourceColor = $r('app.color.dock_glass');
@@ -30,6 +31,7 @@ const DOCK_SWITCH_DURATION: number = 240;
 @Component
 export struct MainScreen {
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
+  @StorageProp(STORAGE_UPDATE_AVAILABLE) updateAvailable: boolean = false;
   // 回前台补偿：后台期间的来电 push 可能被系统拒绝，前台一刻重查一次。
   @StorageProp('appIsForeground') @Watch('onAppForegroundChanged') appIsForeground: boolean = true;
   @State tab: number = 0;
@@ -47,6 +49,8 @@ export struct MainScreen {
   private callPagePushed: boolean = false;
 
   aboutToAppear(): void {
+    // 已登录才查更新（MainScreen 只在登录后渲染），内部按 6 小时节流。
+    updateChecker.check(false).catch((): void => {});
     // 来电（应用存活时）：常驻订阅通话状态，响铃即弹入通话页。
     this.unsubCall = getCallSession().subscribe((s: CallSnapshot): void => {
       // 通话期保活：接通流程开始挂 voip 长时任务，结束即释放。
@@ -153,6 +157,10 @@ export struct MainScreen {
             duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
             curve: Curve.EaseOut
         });
+        // 设置页签的红点：和「关于」那一行是同一个信号，一路引到更新入口。
+        if (index === 2 && this.updateAvailable) {
+          Circle({ width: 8, height: 8 }).fill(BADGE_BG).offset({ x: 6, y: -2 });
+        }
         if (index === 0 && this.unread > 0) {
           Row() {
             Text(this.unread > 99 ? '99+' : `${this.unread}`)

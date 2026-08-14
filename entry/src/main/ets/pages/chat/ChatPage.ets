@@ -1,4 +1,5 @@
 import { router, promptAction } from '@kit.ArkUI';
+import { DeleteMessagesDialog } from './DeleteMessagesDialog';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { i18n } from '@kit.LocalizationKit';
 import { PollOptionInfo } from '../../util/formatMsgContent';
@@ -90,6 +91,8 @@ const VIEWER_DOUBLE_TAP_SCALE: number = 2.5;
 // 对话框会挂死（Promise 既不 resolve 也不 reject）。
 const MENU_DISMISS_MS: number = 150;
 const NOW_SEC_TICK_MS: number = 30000;
+const STICKER_FLY_MS: number = 260;
+const STICKER_GHOST_SIDE: number = 92;
 // 绝对像素半径。在高密度屏上 18 远达不到"糊掉"的观感。
 const HEADER_BLUR_RADIUS: number = 140;
 // 实时位置的上报间隔。Telegram 官方客户端也是分钟级——秒级上报既费电又没有
@@ -326,6 +329,15 @@ struct ChatPage {
   // 是否正在共享实时位置（全局单例状态，不限于当前会话）。
   @State liveLocationActive: boolean = false;
   @State liveLocationMessageId: number = 0;
+  // 贴纸"飞出"动画：从点击处向上收缩淡出，动画收尾时才关面板 —— 关面板要
+  // 同步卸载整个贴纸网格并触发全页重排（实测 51ms），压在点击那一帧就是可感
+  // 的顿挫；挪到运动尾声则被动作本身盖住。
+  @State stickerGhostPath: string = '';
+  @State stickerGhostX: number = 0;
+  @State stickerGhostY: number = 0;
+  @State stickerGhostFly: boolean = false;
+  private stickerGhostTimer: number = -1;
+  private deleteDialog: CustomDialogController | null = null;
   private unsubLiveLocation: (() => void) | null = null;
   @State unreadBadge: number = 0;
   private firstUnreadId: number = 0;
@@ -4988,6 +5000,33 @@ struct ChatPage {
   }
 
   // Show/hide the emoji/sticker panel without resizing the message viewport.
+  // 发出去之后的收尾。残影是独立浮层，和面板收起**并行**跑：先前把关面板
+  // 排在飞出动画之后，串行等待让面板要一秒多才下去，感觉像卡住了。
+  private finishStickerSend(thumbPath: string, x: number, y: number): void {
+    if (this.stickerGhostTimer !== -1) {
+      clearTimeout(this.stickerGhostTimer);
+      this.stickerGhostTimer = -1;
+    }
+    // 立刻开始收面板（内部已把卸载与动画分帧）。
+    this.setEmojiPanel(false);
+    const duration: number = this.chatEffectDuration(KEY_POWER_EFFECT_MENU, STICKER_FLY_MS);
+    if (duration === 0 || thumbPath === '') {
+      this.stickerGhostPath = '';
+      return;
+    }
+    this.stickerGhostPath = thumbPath;
+    this.stickerGhostX = x;
+    this.stickerGhostY = y;
+    this.stickerGhostFly = false;
+    // 起始态先落地一帧，否则终态和初始态在同一帧里，动画不会跑。
+    setTimeout((): void => { this.stickerGhostFly = true; }, 16);
+    this.stickerGhostTimer = setTimeout((): void => {
+      this.stickerGhostTimer = -1;
+      this.stickerGhostPath = '';
+      this.stickerGhostFly = false;
+    }, duration + 40);
+  }
+
   private setEmojiPanel(show: boolean): void {
     if (this.showEmojiPanel === show) {
       return;
@@ -5015,13 +5054,24 @@ struct ChatPage {
       }, duration + 20);
     } else {
       this.emojiPanelClosing = true;
-      this.panelContentReady = false; // unmount the heavy content first
-      animateTo({
-        duration, curve: Curve.EaseOut
-      }, () => {
-        this.showEmojiPanel = false;
-        this.emojiPanelClosing = false;
-      });
+      // 卸载重内容和启动收起动画必须分帧。面板里同时挂着三个 picker（自定义
+      // 表情常驻，贴纸/GIF 访问过就常驻），一次性卸掉实测 ~51ms；和 animateTo
+      // 挤在同一个同步块里，动画一开场就已经掉帧。
+      //
+      // 先在没有动画运行时卸载 —— 这一下花在静止状态下，观感是内容一闪而空；
+      // 下一帧再对着一个空面板启动收起动画，动画本身就是廉价的。
+      this.panelContentReady = false;
+      setTimeout((): void => {
+        if (seq !== this.panelReadySeq) {
+          return;
+        }
+        animateTo({
+          duration, curve: Curve.EaseOut
+        }, () => {
+          this.showEmojiPanel = false;
+          this.emojiPanelClosing = false;
+        });
+      }, 0);
     }
   }
 
@@ -5975,34 +6025,35 @@ struct ChatPage {
     }).catch((e: Object) => { console.error(`ChatPage.copySelected failed: ${JSON.stringify(e)}`); });
   }
 
+  // "同时为对方删除"是一个开关，不是第三个按钮：做成三按钮时用户要在两个
+  // 红色危险项之间辨认，容易点错。所以用带复选框的自定义弹窗。
   private deleteSelected(): void {
     const ids: number[] = [...this.selectedIds];
-    const n = ids.length;
-    if (n === 0) {
+    if (ids.length === 0) {
       return;
     }
-    promptAction.showDialog({
-      title: `删除 ${n} 条消息?`,
-      message: '"为所有人删除"仅在权限允许时生效',
-      buttons: [
-        { text: '取消', color: '#8E8E93' },
-        { text: '为我删除', color: '#FF3B30' },
-        { text: '为所有人删除', color: '#FF3B30' }
-      ]
-    }).then((r) => {
-      if (r.index !== 1 && r.index !== 2) {
-        return;
-      }
-      const req: TdRequest = { '@type': 'deleteMessages' };
-      req['chat_id'] = this.chatId;
-      req['message_ids'] = ids;
-      req['revoke'] = r.index === 2;
-      getTdClient().send(req).then(() => {
-        this.exitSelect();
-      }).catch((e: TdError) => {
-        console.error(`ChatPage.deleteMessages failed: ${e.message}`);
-        promptAction.showToast({ message: `删除失败：${e.message}`, duration: 2000 });
-      });
+    this.deleteDialog = new CustomDialogController({
+      builder: DeleteMessagesDialog({
+        peerName: this.isGroup || this.isChannel ? '' : this.headerTitleText(),
+        onConfirm: (revoke: boolean): void => { this.doDeleteMessages(ids, revoke); }
+      }),
+      autoCancel: true,
+      customStyle: true,
+      alignment: DialogAlignment.Center
+    });
+    this.deleteDialog.open();
+  }
+
+  private doDeleteMessages(ids: number[], revoke: boolean): void {
+    const req: TdRequest = { '@type': 'deleteMessages' };
+    req['chat_id'] = this.chatId;
+    req['message_ids'] = ids;
+    req['revoke'] = revoke;
+    getTdClient().send(req).then(() => {
+      this.exitSelect();
+    }).catch((e: TdError) => {
+      console.error(`ChatPage.deleteMessages failed: ${e.message}`);
+      promptAction.showToast({ message: `删除失败：${e.message}`, duration: 2000 });
     });
   }
 
@@ -8972,6 +9023,26 @@ struct ChatPage {
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
       .backgroundColor(Color.Transparent);
 
+      // 贴纸飞出的残影。叠在最外层、不参与命中测试，纯视觉。
+      if (this.stickerGhostPath !== '') {
+        Image(this.stickerGhostPath)
+          .width(STICKER_GHOST_SIDE).height(STICKER_GHOST_SIDE)
+          .objectFit(ImageFit.Contain)
+          .draggable(false)
+          .position({
+            x: this.stickerGhostX - STICKER_GHOST_SIDE / 2,
+            y: this.stickerGhostY - STICKER_GHOST_SIDE / 2
+          })
+          .scale({
+            x: this.stickerGhostFly ? 0.34 : 1,
+            y: this.stickerGhostFly ? 0.34 : 1
+          })
+          .translate({ y: this.stickerGhostFly ? -170 : 0 })
+          .opacity(this.stickerGhostFly ? 0 : 0.95)
+          .animation({ duration: STICKER_FLY_MS, curve: Curve.FastOutSlowIn })
+          .hitTestBehavior(HitTestMode.None);
+      }
+
       // Emoji/sticker panel OVERLAYS the chat (not in the layout flow): the
       // message list keeps its height, so its scrollbar/FAB stay put, and the
       // open/close animation doesn't relayout the LazyForEach every frame.
@@ -8987,22 +9058,22 @@ struct ChatPage {
                 onPickCustomEmoji: (e: string, ceId: string): void => {
                   if (this.store !== null) {
                     this.atBottom = true;
-                    this.setEmojiPanel(false);
                     this.store.sendCustomEmoji(e, ceId);
+                    this.finishStickerSend('', 0, 0);
                   }
                 },
-                onPickSticker: (s: StickerItem): void => {
+                onPickSticker: (s: StickerItem, x: number, y: number): void => {
                   if (this.store !== null) {
                     this.atBottom = true;
-                    this.setEmojiPanel(false);
                     this.store.sendSticker(s.fileId, s.width, s.height);
+                    this.finishStickerSend(s.thumbPath, x, y);
                   }
                 },
                 onPickGif: (g: GifItem): void => {
                   if (this.store !== null) {
                     this.atBottom = true;
-                    this.setEmojiPanel(false);
                     this.store.sendAnimation(g.fileId, g.width, g.height, g.duration);
+                    this.finishStickerSend('', 0, 0);
                   }
                 }
               });
@@ -9021,10 +9092,10 @@ struct ChatPage {
           .borderRadius(18)
           .clip(true)
           .shadow({ radius: 8, color: '#1A000000', offsetX: 0, offsetY: -2 })
-          // A short anchored lift keeps the input context without distorting
-          // the whole panel or flashing twice while heavy content mounts.
-          .transition(TransitionEffect.scale({ x: 0.98, y: 0.98, centerX: this.emojiBtnCx, centerY: '100%' })
-            .combine(TransitionEffect.translate({ y: 14 }))
+          // 只做位移 + 淡出，不做 scale。缩放一个 300px 高、带 clip 和阴影的
+          // 复杂子树，每帧都要重新栅格化 —— 系统 jank 事件实测这一下 80ms，
+          // 而卸载内容本身是 0ms。位移和透明度是纯合成操作，不触发重栅格化。
+          .transition(TransitionEffect.translate({ y: 18 })
             .combine(TransitionEffect.OPACITY)
             .animation({ duration: this.chatEffectDuration(KEY_POWER_EFFECT_MENU, 220), curve: Curve.EaseOut }));
         }

@@ -1,5 +1,6 @@
 import { router, promptAction } from '@kit.ArkUI';
-import { getTdClient } from '../../tdkit/Globals';
+import { getTdClient, logoutCurrentTdAccount } from '../../tdkit/Globals';
+import { floatingLiveWindow } from '../chat/LiveFloatingWindow';
 import { TdObject, TdRequest, TdError } from '../../tdkit/TdTypes';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
@@ -27,6 +28,7 @@ struct AccountEditPage {
   @State saveError: string = '';
   @State skeletonBright: boolean = false;
   @State saving: boolean = false;
+  @State loggingOut: boolean = false;
   @State leavingPage: boolean = false;
   @State discardDialogOpen: boolean = false;
   private origFirst: string = '';
@@ -250,6 +252,66 @@ struct AccountEditPage {
       console.error(`AccountEditPage.save failed: ${e.message}`);
       promptAction.showToast({ message: '保存失败，请检查网络后重试', duration: 2000 });
     });
+  }
+
+  // 退出登录放在账号页最底部。此前它藏在设置页右上角一个无标签的「⋯」图标
+  // 后面、再进一层弹窗，用户根本找不到 —— 低频但关键的操作不该靠探索发现。
+  private confirmLogout(): void {
+    if (this.loggingOut) { return; }
+    promptAction.showDialog({
+      title: '退出登录',
+      message: '确定退出当前账号吗？退出后需要重新登录，云端消息不会被删除。',
+      buttons: [
+        { text: '取消', color: COLOR_TEXT_SECONDARY as string },
+        { text: '退出', color: '#E64646' }
+      ]
+    }).then((result: promptAction.ShowDialogSuccessResponse): void => {
+      if (result.index !== 1) { return; }
+      this.performLogout();
+    }).catch((e: Object): void => {
+      console.error(`AccountEditPage.confirmLogout failed: ${JSON.stringify(e)}`);
+    });
+  }
+
+  private performLogout(): void {
+    this.loggingOut = true;
+    // 先收起悬浮直播窗，否则它会挂在旧账号的运行时上。
+    floatingLiveWindow.closeForAccountSwitch()
+      .then((): Promise<void> => logoutCurrentTdAccount())
+      .catch((caught: Error): void => {
+        this.loggingOut = false;
+        console.error(`AccountEditPage.logout failed: ${caught.message}`);
+        promptAction.showToast({ message: '退出登录失败，请重试', duration: 1800 });
+      });
+  }
+
+  @Builder
+  logoutCard() {
+    Row({ space: 14 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        if (this.loggingOut) {
+          LoadingProgress().width(20).height(20).color('#E64646');
+        } else {
+          SymbolGlyph($r('sys.symbol.xmark_circle')).fontSize(20).fontColor(['#E64646']);
+        }
+      }
+      .width(38).height(38).borderRadius(19).backgroundColor('#18E64646');
+      Column({ space: 2 }) {
+        Text(this.loggingOut ? '正在退出…' : '退出登录')
+          .fontSize(16).fontWeight(FontWeight.Medium).fontColor('#E64646');
+        Text('退出当前账号，不会删除云端消息')
+          .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1);
+    }
+    .width('100%').height(64)
+    .padding({ left: 12, right: 12 })
+    .backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
+    .margin({ top: 14 })
+    .enabled(!this.loggingOut)
+    .accessibilityText('退出当前账号')
+    .onClick((): void => { this.confirmLogout(); });
   }
 
   @Builder
@@ -609,7 +671,7 @@ struct AccountEditPage {
             }
             .width('100%').backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
             .padding({ bottom: 4 })
-            .margin({ left: 12, right: 12, top: 8 });
+            .margin({ top: 8 });
 
             // 个人简介
             Column() {
@@ -628,7 +690,7 @@ struct AccountEditPage {
               }.width('100%').alignItems(VerticalAlign.Center);
             }
             .width('100%').backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
-            .margin({ left: 12, right: 12, top: 14 });
+            .margin({ top: 14 });
             Text('关于您自己的文字介绍。')
               .fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
               .width('100%').padding({ left: 24, right: 24, top: 6 });
@@ -644,10 +706,11 @@ struct AccountEditPage {
             }
             .width('100%').backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
             .padding({ bottom: 4 })
-            .margin({ left: 12, right: 12, top: 14 });
+            .margin({ top: 14 });
+            this.logoutCard();
           }
           .width('100%')
-          .padding({ bottom: this.bottomSafe + 24 });
+          .padding({ left: 12, right: 12, bottom: this.bottomSafe + 24 });
         }
         .layoutWeight(1)
         .width('100%')

@@ -33,6 +33,7 @@ import { COLOR_PRIMARY, COLOR_TEXT_SECONDARY, COLOR_BUBBLE_OUT, COLOR_BUBBLE_IN,
 
 // 圆形视频气泡直径。和 Telegram 的观感接近，同时不至于挤占整行宽度。
 const VIDEO_NOTE_SIDE: number = 180;
+const REPLY_QUOTE_WIDTH_RATIO: number = 0.76;
 
 const ALBUM_MAX_WIDTH: number = 280;
 const STICKER_MAX: number = 160;
@@ -1337,14 +1338,20 @@ export struct MessageBubble {
     .padding({ top: 6, bottom: 6 });
   }
 
+  // 引用块比正文更窄。单行 + 省略号的文本会一直吃满可用宽度，长 URL 直接把
+  // 气泡撑到上限——哪怕正文只有两个字。引用是次要信息，不该决定气泡宽度。
+  private replyQuoteMaxW(): number {
+    return Math.round(this.inlineMaxW() * REPLY_QUOTE_WIDTH_RATIO);
+  }
+
   @Builder
   content() {
     if (this.msg.replyText !== '') {
       Column() {
         Text(this.msg.replySenderName).fontSize(12).fontColor(COLOR_PRIMARY).maxLines(1)
-          .constraintSize({ maxWidth: this.inlineMaxW() }).textOverflow({ overflow: TextOverflow.Ellipsis });
+          .constraintSize({ maxWidth: this.replyQuoteMaxW() }).textOverflow({ overflow: TextOverflow.Ellipsis });
         Text(this.msg.replyText).fontSize(12).fontColor(COLOR_TEXT_SECONDARY).maxLines(1)
-          .constraintSize({ maxWidth: this.inlineMaxW() }).textOverflow({ overflow: TextOverflow.Ellipsis });
+          .constraintSize({ maxWidth: this.replyQuoteMaxW() }).textOverflow({ overflow: TextOverflow.Ellipsis });
       }
       .alignItems(HorizontalAlign.Start)
       .border({ width: { left: 2 }, color: COLOR_PRIMARY })

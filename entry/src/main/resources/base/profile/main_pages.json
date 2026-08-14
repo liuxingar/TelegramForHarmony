@@ -23,6 +23,7 @@
     "pages/main/NetworkUsagePage",
     "pages/main/MediaStorageSettingsPage",
     "pages/main/ProxyPage",
+    "pages/main/AboutPage",
     "pages/main/ChatFoldersPage",
     "pages/main/FolderEditPage",
     "pages/main/FolderInviteLinksPage",

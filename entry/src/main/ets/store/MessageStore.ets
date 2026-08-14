@@ -107,6 +107,7 @@ export class MessageStore {
   private historyPending: boolean = false;
   private historyPendingKind: string = 'history';
   private isGroupFlag: boolean = false;
+  private repliedFetched: number[] = [];
   private isChannel: boolean = false;
   private chatPhotoFileId: number = 0;
   private chatPhotoPath: string = '';
@@ -3659,18 +3660,59 @@ export class MessageStore {
   }
 
   private resolveReplies(): void {
+    const missing: number[] = [];
     this.messages = this.messages.map((e: MessageEntry) => {
       if (e.replyToMessageId === 0 || e.replyText !== '') {
         return e;
       }
       const target = this.messages.find((x: MessageEntry) => x.id === e.replyToMessageId);
       if (target === undefined) {
+        // 原消息不在已加载窗口里 —— 拉一次，否则引用块永远是空的。
+        if (missing.indexOf(e.replyToMessageId) < 0) {
+          missing.push(e.replyToMessageId);
+        }
         return e;
       }
       const c = cloneMessage(e);
       c.replySenderName = target.senderName;
       c.replyText = target.contentType === 'text' ? target.text : (target.placeholderLabel !== '' ? target.placeholderLabel : '[图片]');
       return c;
+    });
+    for (const id of missing) {
+      this.fetchRepliedMessage(id);
+    }
+  }
+
+  // 按需拉取被回复的原消息。只拉一次：请求过的记在 repliedFetched 里，
+  // 失败（原消息已删除等）同样不再重试，否则每次 notify 都会再发一轮。
+  private fetchRepliedMessage(messageId: number): void {
+    if (this.repliedFetched.indexOf(messageId) >= 0) {
+      return;
+    }
+    this.repliedFetched.push(messageId);
+    const req: TdRequest = { '@type': 'getMessage' };
+    req['chat_id'] = this.chatId;
+    req['message_id'] = messageId;
+    this.client.send(req).then((res: TdObject): void => {
+      const entry = buildMessageEntry(res, this.users);
+      const preview: string = entry.contentType === 'text'
+        ? entry.text
+        : (entry.placeholderLabel !== '' ? entry.placeholderLabel : '[图片]');
+      if (preview === '' && entry.senderName === '') {
+        return;
+      }
+      this.messages = this.messages.map((e: MessageEntry): MessageEntry => {
+        if (e.replyToMessageId !== messageId || e.replyText !== '') {
+          return e;
+        }
+        const c = cloneMessage(e);
+        c.replySenderName = entry.senderName;
+        c.replyText = preview;
+        return c;
+      });
+      this.notify();
+    }).catch((e: TdError): void => {
+      console.error(`MessageStore.getMessage(reply ${messageId}) failed: ${e.message}`);
     });
   }
 

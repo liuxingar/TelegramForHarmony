@@ -9,6 +9,7 @@ export enum AuthStage {
   WaitQrCode = 'WaitQrCode',
   WaitCode = 'WaitCode',
   WaitPassword = 'WaitPassword',
+  WaitRegistration = 'WaitRegistration',
   Ready = 'Ready',
   LoggedOut = 'LoggedOut'
 }
@@ -26,6 +27,7 @@ const STATE_TO_STAGE: Map<string, AuthStage> = new Map([
   [QR_CONFIRMATION_STATE, AuthStage.WaitQrCode],
   ['authorizationStateWaitCode', AuthStage.WaitCode],
   ['authorizationStateWaitPassword', AuthStage.WaitPassword],
+  ['authorizationStateWaitRegistration', AuthStage.WaitRegistration],
   ['authorizationStateReady', AuthStage.Ready],
   ['authorizationStateClosed', AuthStage.LoggedOut],
   ['authorizationStateLoggingOut', AuthStage.LoggedOut],
@@ -42,6 +44,11 @@ export class AuthService {
   private authenticationPhoneNumber: string = '';
   private authenticationCodeLength: number = 5;
   private authenticationCodeType: string = '';
+  // codeInfo.timeout：还要等多少秒才允许重发。0 表示没有等待限制。
+  private authenticationCodeTimeout: number = 0;
+  // authorizationStateWaitRegistration 携带的服务条款：注册流程要求展示并同意。
+  private termsOfServiceText: string = '';
+  private termsMinUserAge: number = 0;
   private authenticationCodeDestination: string = '';
   private nextAuthenticationCodeType: string = '';
   private qrLoginLink: string = '';
@@ -183,6 +190,34 @@ export class AuthService {
     return this.nextAuthenticationCodeType;
   }
 
+  getTermsOfServiceText(): string {
+    return this.termsOfServiceText;
+  }
+
+  getTermsMinUserAge(): number {
+    return this.termsMinUserAge;
+  }
+
+  // 号码尚未注册时 TDLib 会停在 authorizationStateWaitRegistration，必须
+  // 提交姓名才能继续。first_name 必填，last_name 可空。
+  async registerUser(firstName: string, lastName: string): Promise<void> {
+    const request: TdRequest = { '@type': 'registerUser' };
+    request['first_name'] = firstName;
+    request['last_name'] = lastName;
+    request['disable_notification'] = false;
+    await this.client.send(request);
+  }
+
+  getCodeTimeout(): number {
+    return this.authenticationCodeTimeout;
+  }
+
+  // next_type 为空表示这次登录**没有**下一种可用通道，重发一定会被服务端
+  // 拒为 "Code can't be resent"。按钮该直接禁用，而不是让用户点出个报错。
+  canResendCode(): boolean {
+    return this.nextAuthenticationCodeType !== '';
+  }
+
   closeDatabase(): Promise<void> {
     if (this.currentAuthType === 'authorizationStateClosed') {
       return Promise.resolve();
@@ -257,14 +292,32 @@ export class AuthService {
       const nextCodeType = codeInfo?.['next_type'] as TdObject | undefined;
       this.nextAuthenticationCodeType =
         (nextCodeType?.['@type'] as string | undefined) ?? '';
+      this.authenticationCodeTimeout =
+        Math.max(0, (codeInfo?.['timeout'] as number | undefined) ?? 0);
       const length = (codeType?.['length'] as number | undefined) ?? 5;
       this.authenticationCodeLength = Math.max(4, Math.min(8, length));
       hilog.info(
         0x0000,
         'TDLib',
-        '[TDLib] authentication code delivery -> %{public}s, next -> %{public}s',
+        '[TDLib] authentication code delivery -> %{public}s, next -> %{public}s, timeout -> %{public}d',
         this.authenticationCodeType,
-        this.nextAuthenticationCodeType
+        this.nextAuthenticationCodeType,
+        this.authenticationCodeTimeout
+      );
+    }
+    if (type === 'authorizationStateWaitRegistration') {
+      const terms = state['terms_of_service'] as TdObject | undefined;
+      const formatted = terms !== undefined
+        ? (terms['text'] as TdObject | undefined) : undefined;
+      this.termsOfServiceText = (formatted?.['text'] as string | undefined) ?? '';
+      this.termsMinUserAge = Math.max(0,
+        (terms?.['min_user_age'] as number | undefined) ?? 0);
+      hilog.info(
+        0x0000,
+        'TDLib',
+        '[TDLib] registration required, terms length -> %{public}d, min age -> %{public}d',
+        this.termsOfServiceText.length,
+        this.termsMinUserAge
       );
     }
     const mapped = STATE_TO_STAGE.get(type);

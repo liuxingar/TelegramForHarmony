@@ -14,6 +14,7 @@ import {
   COLOR_DIVIDER, COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
 import { floatingLiveWindow } from '../chat/LiveFloatingWindow';
+import { STORAGE_UPDATE_AVAILABLE } from '../../services/UpdateChecker';
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
 
 const CARD_BG: ResourceColor = $r('app.color.surface');
@@ -79,6 +80,13 @@ const SETTING_GROUPS: SettingGroup[] = [
       { icon: 'sys.symbol.play_fill', bg: '#30B0C7', title: '后台播放',
         subtitle: '音乐、语音、视频与直播的后台续播', page: 'pages/main/BackgroundPlaybackPage' }
     ]
+  },
+  {
+    title: '关于',
+    items: [
+      { icon: 'sys.symbol.info_circle', bg: '#8E8E93', title: '关于',
+        subtitle: '版本信息与检查更新', page: 'pages/main/AboutPage' }
+    ]
   }
 ];
 
@@ -88,6 +96,7 @@ const SETTING_GROUPS: SettingGroup[] = [
 @Component
 export struct SettingsPage {
   @StorageProp('topSafeHeight') topSafe: number = 0;
+  @StorageProp(STORAGE_UPDATE_AVAILABLE) updateAvailable: boolean = false;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @StorageLink('tdAccountRegistryEpoch') @Watch('onAccountRegistryEpoch')
   accountRegistryEpoch: number = 0;
@@ -111,8 +120,6 @@ export struct SettingsPage {
   @State accountActionTarget: string = '';
   @State settingsSearchOpen: boolean = false;
   @State settingsQuery: string = '';
-  @State moreMenuOpen: boolean = false;
-  @State logoutDialogOpen: boolean = false;
   @State accountNavigationLocked: boolean = false;
   @State pressedSettingTitle: string = '';
   @State openingSettingPage: string = '';
@@ -122,7 +129,6 @@ export struct SettingsPage {
   private profileLoadTimer: number = -1;
   private accountNavigationTimer: number = -1;
   private settingNavigationTimer: number = -1;
-  private moreActionTimer: number = -1;
   private profileSkeletonTimer: number = -1;
 
   aboutToAppear(): void {
@@ -139,16 +145,10 @@ export struct SettingsPage {
     this.pressedSettingTitle = '';
     this.settingsSearchOpen = false;
     this.settingsQuery = '';
-    this.moreMenuOpen = false;
-    this.logoutDialogOpen = false;
     this.stopProfileSkeletonPulse();
     this.accountActionError = '';
     this.accountActionRetry = '';
     this.accountActionTarget = '';
-    if (this.moreActionTimer !== -1) {
-      clearTimeout(this.moreActionTimer);
-      this.moreActionTimer = -1;
-    }
   }
 
   private loadProfile(): void {
@@ -441,8 +441,7 @@ export struct SettingsPage {
 
   private switchAccount(slotId: string): void {
     if (this.switchingSlotId !== '' || slotId === this.activeSlotId ||
-      this.accountNavigationLocked || this.openingSettingPage !== '' ||
-      this.moreMenuOpen || this.logoutDialogOpen) { return; }
+      this.accountNavigationLocked || this.openingSettingPage !== '') { return; }
     this.clearAccountActionError();
     this.switchingSlotId = slotId;
     floatingLiveWindow.closeForAccountSwitch()
@@ -459,7 +458,7 @@ export struct SettingsPage {
 
   private addAccount(): void {
     if (this.switchingSlotId !== '' || this.accountNavigationLocked ||
-      this.openingSettingPage !== '' || this.moreMenuOpen || this.logoutDialogOpen) { return; }
+      this.openingSettingPage !== '') { return; }
     this.clearAccountActionError();
     this.switchingSlotId = 'new';
     floatingLiveWindow.closeForAccountSwitch()
@@ -491,72 +490,12 @@ export struct SettingsPage {
       this.switchAccount(target);
     } else if (action === 'add') {
       this.addAccount();
-    } else if (action === 'logout') {
-      this.performLogout();
     }
   }
 
-  private showMoreMenu(): void {
-    if (this.switchingSlotId !== '' || this.moreMenuOpen ||
-      this.accountNavigationLocked || this.openingSettingPage !== '') { return; }
-    this.moreMenuOpen = true;
-  }
 
-  private requestLogoutFromSheet(): void {
-    if (this.logoutDialogOpen || this.switchingSlotId !== '') {
-      return;
-    }
-    this.moreMenuOpen = false;
-    if (this.moreActionTimer !== -1) {
-      clearTimeout(this.moreActionTimer);
-    }
-    this.moreActionTimer = setTimeout((): void => {
-      this.moreActionTimer = -1;
-      this.confirmLogout();
-    }, powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 160));
-  }
 
-  private confirmLogout(): void {
-    if (this.logoutDialogOpen || this.switchingSlotId !== '') {
-      return;
-    }
-    this.logoutDialogOpen = true;
-    const hasAnotherAccount = this.accounts.some(
-      (account: TdAccountSummary): boolean =>
-        account.slotId !== this.activeSlotId && !account.pendingLogin && account.userId !== 0
-    );
-    promptAction.showDialog({
-      title: '退出登录',
-      message: hasAnotherAccount
-        ? '确定退出当前账号吗？退出后将自动切换到另一个账号。'
-        : '确定退出当前账号吗？退出后需要重新登录。',
-      buttons: [
-        { text: '取消', color: COLOR_TEXT_SECONDARY as string },
-        { text: '退出', color: '#FF3B30' }
-      ]
-    }).then((result: promptAction.ShowDialogSuccessResponse): void => {
-      this.logoutDialogOpen = false;
-      if (result.index === 1) { this.performLogout(); }
-    }).catch((): void => {
-      this.logoutDialogOpen = false;
-    });
-  }
 
-  private performLogout(): void {
-    if (this.switchingSlotId !== '') { return; }
-    this.clearAccountActionError();
-    this.switchingSlotId = 'logout';
-    floatingLiveWindow.closeForAccountSwitch()
-      .then((): Promise<void> => logoutCurrentTdAccount())
-      .catch((caught: Error): void => {
-        console.error(`SettingsPage.logout failed: ${caught.message}`);
-        promptAction.showToast({ message: '退出登录失败，请重试', duration: 1800 });
-        this.switchingSlotId = '';
-        this.accountActionError = '退出登录失败，账号仍保持登录';
-        this.accountActionRetry = 'logout';
-        this.accountActionTarget = '';
-      });
-  }
 
   private subtitleLine(): string {
     const parts: string[] = [];
@@ -663,26 +602,6 @@ export struct SettingsPage {
               this.settingsQuery = '';
             }
           });
-          Stack({ alignContent: Alignment.Center }) {
-            if (this.switchingSlotId === 'logout') {
-              LoadingProgress().width(21).height(21).color(COLOR_PRIMARY);
-            } else {
-              SymbolGlyph($r('sys.symbol.more'))
-                .fontSize(22)
-                .fontColor([COLOR_TEXT_SECONDARY]);
-            }
-          }
-          .width(TOP_ACTION_SIZE)
-          .height(TOP_ACTION_SIZE)
-          .borderRadius(TOP_ACTION_SIZE / 2)
-          .stateStyles({
-            normal: this.topActionNormalStyle,
-            pressed: this.topActionPressedStyle
-          })
-          .enabled(this.switchingSlotId === '' && !this.moreMenuOpen &&
-            !this.accountNavigationLocked && this.openingSettingPage === '')
-          .accessibilityText('设置更多操作')
-          .onClick((): void => { this.showMoreMenu(); });
         }
         .width('100%')
         .height(TOP_BAR_HEIGHT)
@@ -1083,88 +1002,6 @@ export struct SettingsPage {
       }));
   }
 
-  @Builder
-  settingsActionSheet() {
-    Column({ space: 12 }) {
-      Row() {
-        Column({ space: 2 }) {
-          Text('设置选项')
-            .fontSize(21)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(COLOR_TEXT_PRIMARY);
-          Text(this.name !== '' ? `当前账号：${this.name}` : '当前 Telegram 账号')
-            .fontSize(12)
-            .fontColor(COLOR_TEXT_SECONDARY);
-        }
-        .alignItems(HorizontalAlign.Start)
-        .layoutWeight(1);
-        Row() {
-          SymbolGlyph($r('sys.symbol.xmark'))
-            .fontSize(18)
-            .fontColor([COLOR_TEXT_SECONDARY]);
-        }
-        .width(38)
-        .height(38)
-        .borderRadius(19)
-        .justifyContent(FlexAlign.Center)
-        .stateStyles({
-          normal: this.topActionNormalStyle,
-          pressed: this.topActionPressedStyle
-        })
-        .accessibilityText('关闭设置选项')
-        .onClick((): void => { this.moreMenuOpen = false; });
-      }
-      .width('100%')
-      .height(52)
-      .alignItems(VerticalAlign.Center);
-
-      Row({ space: 12 }) {
-        Stack({ alignContent: Alignment.Center }) {
-          SymbolGlyph($r('sys.symbol.xmark_circle'))
-            .fontSize(21)
-            .fontColor(['#E64646']);
-        }
-        .width(40)
-        .height(40)
-        .borderRadius(20)
-        .backgroundColor('#18E64646');
-        Column({ space: 2 }) {
-          Text('退出登录')
-            .fontSize(16)
-            .fontWeight(FontWeight.Medium)
-            .fontColor('#E64646');
-          Text('退出当前账号，不会删除云端消息')
-            .fontSize(12)
-            .fontColor(COLOR_TEXT_SECONDARY);
-        }
-        .alignItems(HorizontalAlign.Start)
-        .layoutWeight(1);
-        SymbolGlyph($r('sys.symbol.chevron_right'))
-          .fontSize(16)
-          .fontColor(['#E64646']);
-      }
-      .width('100%')
-      .height(64)
-      .padding({ left: 12, right: 12 })
-      .borderRadius(14)
-      .stateStyles({
-        normal: this.dangerActionNormalStyle,
-        pressed: this.dangerActionPressedStyle
-      })
-      .enabled(!this.logoutDialogOpen && this.switchingSlotId === '' &&
-        !this.accountNavigationLocked && this.openingSettingPage === '')
-      .accessibilityText('退出当前账号')
-      .onClick((): void => { this.requestLogoutFromSheet(); });
-    }
-    .width('100%')
-    .padding({
-      left: 20,
-      right: 20,
-      top: 6,
-      bottom: Math.max(18, this.bottomSafe + 10)
-    })
-    .backgroundColor(CARD_BG);
-  }
 
   @Builder
   settingRow(item: SettingItem) {
@@ -1198,6 +1035,11 @@ export struct SettingsPage {
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1);
+      // 有新版本时在「关于」这一行打红点，作为唯一的更新引导 —— 不弹窗、
+      // 不打断，用户什么时候想看什么时候点。
+      if (item.page === 'pages/main/AboutPage' && this.updateAvailable) {
+        Circle({ width: 8, height: 8 }).fill('#FF3B30').margin({ right: 6 });
+      }
       if (this.openingSettingPage === item.title) {
         LoadingProgress().width(19).height(19).color(COLOR_PRIMARY);
       } else {
@@ -1355,10 +1197,6 @@ export struct SettingsPage {
     .width('100%').height('100%')
     .backgroundColor(PAGE_BG)
     .padding({ top: this.topSafe })
-    .bindSheet($$this.moreMenuOpen, this.settingsActionSheet(), {
-      height: SheetSize.FIT_CONTENT,
-      backgroundColor: CARD_BG,
-      dragBar: true
-    });
+    ;
   }
 }

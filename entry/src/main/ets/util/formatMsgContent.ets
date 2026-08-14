@@ -42,6 +42,10 @@ export interface MsgContent {
   isEmojiSticker?: boolean; // messageAnimatedEmoji/custom emoji, not a regular sticker
   voiceWaveform?: string;  // base64 packed 5-bit waveform for voice notes
   voiceListened?: boolean; // TDLib messageVoiceNote.is_listened
+  // 语音转文字：TDLib 异步识别，结果经 updateMessageContent 回流到
+  // voiceNote.speech_recognition_result，三态之一。
+  speechState?: string;    // '' | 'pending' | 'done' | 'error'
+  speechText?: string;     // pending 时是 partial_text，done 时是最终文本
   audioTitle?: string;     // messageAudio.audio.title
   audioPerformer?: string; // messageAudio.audio.performer
   photoLocalPath?: string; // already downloaded inline sticker/thumbnail
@@ -480,6 +484,41 @@ function giveawayBase(state: string, winnerCount: number, prize: string,
   };
 }
 
+// speech_recognition_result 是 SpeechRecognitionResult 的三个变体之一。
+// 没有该字段表示还没识别过。
+export function speechStateOf(note: TdObject | undefined): string {
+  const result = note !== undefined
+    ? (note['speech_recognition_result'] as TdObject | undefined) : undefined;
+  if (result === undefined) {
+    return '';
+  }
+  const type = (result['@type'] as string | undefined) ?? '';
+  if (type === 'speechRecognitionResultPending') { return 'pending'; }
+  if (type === 'speechRecognitionResultText') { return 'done'; }
+  if (type === 'speechRecognitionResultError') { return 'error'; }
+  return '';
+}
+
+export function speechTextOf(note: TdObject | undefined): string {
+  const result = note !== undefined
+    ? (note['speech_recognition_result'] as TdObject | undefined) : undefined;
+  if (result === undefined) {
+    return '';
+  }
+  const type = (result['@type'] as string | undefined) ?? '';
+  if (type === 'speechRecognitionResultText') {
+    return (result['text'] as string | undefined) ?? '';
+  }
+  if (type === 'speechRecognitionResultPending') {
+    return (result['partial_text'] as string | undefined) ?? '';
+  }
+  if (type === 'speechRecognitionResultError') {
+    const error = result['error'] as TdObject | undefined;
+    return error !== undefined ? ((error['message'] as string | undefined) ?? '') : '';
+  }
+  return '';
+}
+
 export function formatMsgContent(message: TdObject): MsgContent {
   const content = message['content'] as TdObject | undefined;
   const type = content !== undefined ? (content['@type'] as string | undefined) : undefined;
@@ -588,6 +627,40 @@ export function formatMsgContent(message: TdObject): MsgContent {
   }
   // Voice notes also reuse the video* slots (duration / file id / size / mime
   // / local path once downloaded).
+  // 圆形视频。之前只做了发送侧，没有这个分支，导致自己发出去的圆形视频
+  // 在本端落到 contentType 'other'，显示成"暂不支持此消息"。
+  if (type === 'messageVideoNote') {
+    const vn = content!['video_note'] as TdObject | undefined;
+    const videoFile = vn !== undefined ? (vn['video'] as TdObject | undefined) : undefined;
+    const videoSize = videoFile !== undefined
+      ? (((videoFile['size'] as number | undefined) ?? 0)
+        || ((videoFile['expected_size'] as number | undefined) ?? 0)) : 0;
+    const thumb = vn !== undefined ? (vn['thumbnail'] as TdObject | undefined) : undefined;
+    const thumbFile = thumb !== undefined ? (thumb['file'] as TdObject | undefined) : undefined;
+    // length 是正方形边长，宽高相等。
+    const side = vn !== undefined ? ((vn['length'] as number | undefined) ?? 0) : 0;
+    return {
+      contentType: 'videoNote',
+      text: '',
+      photoFileId: thumbFile !== undefined ? ((thumbFile['id'] as number | undefined) ?? 0) : 0,
+      photoWidth: side, photoHeight: side,
+      placeholderLabel: '',
+      entities: [],
+      linkSiteName: '', linkTitle: '', linkDescription: '', linkDescriptionEntities: [],
+      linkPhotoFileId: 0, linkUrl: '',
+      videoDuration: vn !== undefined ? ((vn['duration'] as number | undefined) ?? 0) : 0,
+      videoFileId: videoFile !== undefined ? ((videoFile['id'] as number | undefined) ?? 0) : 0,
+      videoFileSize: videoSize,
+      videoMimeType: 'video/mp4',
+      videoFileName: '',
+      photoFullFileId: 0,
+      voiceWaveform: '',
+      voiceListened: (content!['is_viewed'] as boolean | undefined) ?? false,
+      speechState: speechStateOf(vn),
+      speechText: speechTextOf(vn)
+    };
+  }
+
   if (type === 'messageVoiceNote') {
     const vn = content!['voice_note'] as TdObject | undefined;
     const voiceFile = vn !== undefined ? (vn['voice'] as TdObject | undefined) : undefined;
@@ -607,7 +680,9 @@ export function formatMsgContent(message: TdObject): MsgContent {
       videoFileName: '',
       photoFullFileId: 0,
       voiceWaveform: vn !== undefined ? ((vn['waveform'] as string | undefined) ?? '') : '',
-      voiceListened: (content!['is_listened'] as boolean | undefined) ?? false
+      voiceListened: (content!['is_listened'] as boolean | undefined) ?? false,
+      speechState: speechStateOf(vn),
+      speechText: speechTextOf(vn)
     };
   }
   if (type === 'messageAudio') {
@@ -916,12 +991,21 @@ export function formatMsgContent(message: TdObject): MsgContent {
       contactUserId: contact !== undefined ? ((contact['user_id'] as number | undefined) ?? 0) : 0
     };
   }
-  if (type === 'messageLocation' || type === 'messageVenue') {
+  // messageLiveLocation 是独立的类，且多套了一层：它的 location 字段类型是
+  // liveLocation（内含真正的 location 以及 live_period/heading/proximity），
+  // 只有 expires_in 留在最外层。messageLocation 则是平铺的。
+  if (type === 'messageLocation' || type === 'messageLiveLocation' || type === 'messageVenue') {
     const venue = type === 'messageVenue'
       ? (content!['venue'] as TdObject | undefined) : undefined;
+    // 实时位置的 live_* 字段挂在包装层上，静态位置挂在 content 上。
+    const live = type === 'messageLiveLocation'
+      ? (content!['location'] as TdObject | undefined) : undefined;
+    const liveFields: TdObject = live !== undefined ? live : content!;
     const location = type === 'messageVenue'
       ? (venue !== undefined ? (venue['location'] as TdObject | undefined) : undefined)
-      : (content!['location'] as TdObject | undefined);
+      : (live !== undefined
+        ? (live['location'] as TdObject | undefined)
+        : (content!['location'] as TdObject | undefined));
     const latitude = location !== undefined
       ? ((location['latitude'] as number | undefined) ?? 0) : 0;
     const longitude = location !== undefined
@@ -941,14 +1025,14 @@ export function formatMsgContent(message: TdObject): MsgContent {
       locationAccuracy: location !== undefined
         ? ((location['horizontal_accuracy'] as number | undefined) ?? 0) : 0,
       locationValid: valid,
-      locationLivePeriod: type === 'messageLocation'
-        ? ((content!['live_period'] as number | undefined) ?? 0) : 0,
-      locationExpiresIn: type === 'messageLocation'
+      locationLivePeriod: type !== 'messageVenue'
+        ? ((liveFields['live_period'] as number | undefined) ?? 0) : 0,
+      locationExpiresIn: type !== 'messageVenue'
         ? ((content!['expires_in'] as number | undefined) ?? 0) : 0,
-      locationHeading: type === 'messageLocation'
-        ? ((content!['heading'] as number | undefined) ?? 0) : 0,
-      locationProximityRadius: type === 'messageLocation'
-        ? ((content!['proximity_alert_radius'] as number | undefined) ?? 0) : 0,
+      locationHeading: type !== 'messageVenue'
+        ? ((liveFields['heading'] as number | undefined) ?? 0) : 0,
+      locationProximityRadius: type !== 'messageVenue'
+        ? ((liveFields['proximity_alert_radius'] as number | undefined) ?? 0) : 0,
       venueTitle: venue !== undefined ? ((venue['title'] as string | undefined) ?? '') : '',
       venueAddress: venue !== undefined ? ((venue['address'] as string | undefined) ?? '') : '',
       venueProvider: venue !== undefined ? ((venue['provider'] as string | undefined) ?? '') : '',

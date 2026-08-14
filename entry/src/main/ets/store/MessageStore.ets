@@ -1125,7 +1125,7 @@ export class MessageStore {
   }
 
   // Shared sendMessage plumbing for media content types.
-  private sendContent(content: TdObject, tag: string, replyToId: number = 0): void {
+  private sendContent(content: TdObject, tag: string, replyToId: number = 0): Promise<number> {
     const req: TdRequest = { '@type': 'sendMessage' };
     req['chat_id'] = this.chatId;
     req['input_message_content'] = content;
@@ -1135,12 +1135,14 @@ export class MessageStore {
       req['reply_to'] = replyTo;
     }
     this.applyTopicScope(req);
-    this.client.send(req).then((m: TdObject) => {
+    return this.client.send(req).then((m: TdObject): number => {
       this.upsert(buildMessageEntry(m, this.users));
       this.requestPhotos();
       this.notify();
-    }).catch((e: TdError) => {
+      return (m['id'] as number | undefined) ?? 0;
+    }).catch((e: TdError): number => {
       console.error(`MessageStore.${tag} failed: ${e.message}`);
+      return 0;
     });
   }
 
@@ -1174,6 +1176,61 @@ export class MessageStore {
     const content: TdObject = { '@type': 'inputMessageLocation' };
     content['location'] = location;
     this.sendContent(content, 'sendLocation');
+  }
+
+  // 实时位置：live_period 秒内可持续更新。TDLib 用 0x7FFFFFFF 表示"永久"，
+  // 但那个值一般只在特定场景才被接受，这里只给有限时长。
+  //
+  // 必须用 inputMessageLiveLocation —— 捆绑的 libtdjson.so 把实时位置拆成了
+  // 独立的类（strings 里 inputMessageLocation / inputMessageLiveLocation 并存）。
+  // 挂在 inputMessageLocation 上的 live_period 会被 JSON 解析静默丢弃，发出去
+  // 的是一条静态位置，事后怎么 edit 都不会动。
+  sendLiveLocation(latitude: number, longitude: number, livePeriodSec: number): Promise<number> {
+    const location: TdObject = { '@type': 'location' };
+    location['latitude'] = latitude;
+    location['longitude'] = longitude;
+    // location 字段的类型是 liveLocation（一个包装层），不是裸 location：
+    // live_period/heading/proximity_alert_radius 都挂在包装层上。塞裸 location
+    // 会因为 @type 对不上被判为空 —— "Live location must be non-empty"。
+    const live: TdObject = { '@type': 'liveLocation' };
+    live['location'] = location;
+    live['live_period'] = livePeriodSec;
+    live['heading'] = 0;
+    live['proximity_alert_radius'] = 0;
+    const content: TdObject = { '@type': 'inputMessageLiveLocation' };
+    content['location'] = live;
+    return this.sendContent(content, 'sendLiveLocation');
+  }
+
+  // 更新一条已发出的实时位置。location 传 null 即停止共享（schema 里
+  // "pass null to stop sharing the live location"）。
+  updateLiveLocation(messageId: number, latitude: number, longitude: number,
+    livePeriodSec: number): Promise<void> {
+    const location: TdObject = { '@type': 'location' };
+    location['latitude'] = latitude;
+    location['longitude'] = longitude;
+    const live: TdObject = { '@type': 'liveLocation' };
+    live['location'] = location;
+    live['live_period'] = livePeriodSec;
+    live['heading'] = 0;
+    live['proximity_alert_radius'] = 0;
+    return this.editLiveLocation(messageId, live);
+  }
+
+  // 不带 location（即 null）就是停止共享。
+  stopLiveLocation(messageId: number): Promise<void> {
+    return this.editLiveLocation(messageId, null);
+  }
+
+  // location 是 liveLocation 包装层，不是裸 location —— 详见 LiveLocationService。
+  private editLiveLocation(messageId: number, live: TdObject | null): Promise<void> {
+    const req: TdRequest = { '@type': 'editMessageLiveLocation' };
+    req['chat_id'] = this.chatId;
+    req['message_id'] = messageId;
+    if (live !== null) {
+      req['location'] = live;
+    }
+    return this.client.send(req, 15000).then((): void => {});
   }
 
   sendContact(phoneNumber: string, firstName: string, lastName: string, userId: number): void {
@@ -1359,6 +1416,33 @@ export class MessageStore {
     content['duration'] = durationSec;
     content['length'] = length;
     this.sendContent(content, 'sendVideoNote');
+  }
+
+  // 语音/圆形视频转文字。调用只返回 Ok，识别结果异步经 updateMessageContent
+  // 回流（speech_recognition_result），所以这里只负责发起并把本地状态置为
+  // pending，让气泡立刻有反馈。
+  //
+  // 这是 Premium 功能：非会员账号服务端会直接拒绝，错误原样抛给调用方去提示。
+  recognizeSpeech(messageId: number): Promise<void> {
+    const idx = this.indexOf(messageId);
+    if (idx < 0) {
+      return Promise.reject(new Error('消息不存在'));
+    }
+    this.patch(messageId, (c: MessageEntry): void => {
+      c.speechState = 'pending';
+      c.speechText = '';
+    });
+    const req: TdRequest = { '@type': 'recognizeSpeech' };
+    req['chat_id'] = this.chatId;
+    req['message_id'] = messageId;
+    return this.client.send(req, 30000).then((): void => {}).catch((e: TdError): void => {
+      // 失败要把 pending 撤回，否则气泡会永远转圈。
+      this.patch(messageId, (c: MessageEntry): void => {
+        c.speechState = '';
+        c.speechText = '';
+      });
+      throw e as Error;
+    });
   }
 
   private sendSimple(type: string): void {
@@ -1667,6 +1751,9 @@ export class MessageStore {
         ? previousDownloadActive : rebuilt.mediaDownloadActive;
       c.voiceWaveform = rebuilt.voiceWaveform;
       c.voiceListened = rebuilt.voiceListened;
+      // 语音识别结果就是通过 updateMessageContent 回流的，必须跟着更新。
+      c.speechState = rebuilt.speechState;
+      c.speechText = rebuilt.speechText;
       c.audioTitle = rebuilt.audioTitle;
       c.audioPerformer = rebuilt.audioPerformer;
       c.stickerFileId = rebuilt.stickerFileId;
@@ -2235,6 +2322,7 @@ export class MessageStore {
     this.resolveContactAvatars();
     for (const e of this.messages) {
       if ((e.contentType === 'photo' || e.contentType === 'video' ||
+        e.contentType === 'videoNote' ||
         e.contentType === 'sticker' || e.contentType === 'audio' ||
         e.contentType === 'game' || e.contentType === 'paidMedia' ||
         e.contentType === 'gift' || e.contentType === 'giveaway')

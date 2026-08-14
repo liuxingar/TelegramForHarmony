@@ -142,6 +142,9 @@ export function formatPreview(message: TdObject | null): string {
   if (type === 'messageLocation') {
     return '📍 位置';
   }
+  if (type === 'messageLiveLocation') {
+    return '📍 实时位置';
+  }
   if (type === 'messageVenue') {
     return '📍 地点';
   }

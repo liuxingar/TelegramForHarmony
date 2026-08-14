@@ -21,6 +21,13 @@ export struct VideoNoteRecorderView {
   onCaptured: (path: string, durationSec: number, length: number) => void =
     (): void => {};
   onClose: () => void = (): void => {};
+  // 全屏浮层要自己避让状态栏：不加这个 padding，顶部那行会被压在状态栏
+  // 底下，点击落到系统层而不是应用。
+  @StorageProp('topSafeHeight') topSafe: number = 0;
+  // 前后摄像头。圆形视频默认自拍，所以起手是前置。
+  @State private useFront: boolean = true;
+  @State private canSwitchCamera: boolean = false;
+  @State private previewRotation: number = 0;
 
   @State phase: VideoNotePhase = 'opening';
   @State errorText: string = '';
@@ -58,7 +65,7 @@ export struct VideoNoteRecorderView {
     this.opening = true;
     const recorder: VideoNoteRecorder = new VideoNoteRecorder();
     this.recorder = recorder;
-    recorder.open(getContext(this) as common.UIAbilityContext, surfaceId)
+    recorder.open(getContext(this) as common.UIAbilityContext, surfaceId, this.useFront)
       .then((result: VideoNoteOpenResult): void => {
         this.opening = false;
         if (this.recorder !== recorder) {
@@ -68,6 +75,8 @@ export struct VideoNoteRecorderView {
         }
         if (result === 'ok') {
           this.phase = 'ready';
+          this.canSwitchCamera = recorder.bothCameras;
+          this.previewRotation = recorder.previewRotationDeg;
           return;
         }
         this.phase = 'error';
@@ -99,6 +108,21 @@ export struct VideoNoteRecorderView {
       clearInterval(this.tickTimer);
       this.tickTimer = -1;
     }
+  }
+
+  // 切换前后摄像头：录制中不允许切（会打断这一条），只在待机时生效。
+  private switchCamera(): void {
+    if (this.phase !== 'ready' || this.opening) {
+      return;
+    }
+    const recorder: VideoNoteRecorder | null = this.recorder;
+    this.recorder = null;
+    if (recorder !== null) {
+      recorder.cancel();
+    }
+    this.useFront = !this.useFront;
+    this.phase = 'opening';
+    this.openCamera();
   }
 
   private beginRecord(): void {
@@ -139,8 +163,9 @@ export struct VideoNoteRecorderView {
       return;
     }
     if (this.elapsedMs < MIN_RECORD_MS) {
+      // 按太短只是这一条不算，不该把整个录制界面关掉——用户多半是想重录。
       promptAction.showToast({ message: '按住录制圆形视频', duration: 1600 });
-      this.cancelRecord();
+      this.discardTake();
       return;
     }
     this.stopTick();
@@ -155,6 +180,21 @@ export struct VideoNoteRecorderView {
       console.error(`VideoNoteRecorderView.finish failed: ${JSON.stringify(e)}`);
       this.onClose();
     });
+  }
+
+  // 放弃当前这条录制，但保持摄像头开着、界面不退。和 cancelRecord 的区别
+  // 就在于后者会 onClose()。
+  private discardTake(): void {
+    this.stopTick();
+    const recorder: VideoNoteRecorder | null = this.recorder;
+    if (recorder !== null) {
+      recorder.cancel();
+    }
+    this.recorder = null;
+    this.phase = 'opening';
+    this.elapsedMs = 0;
+    this.willCancel = false;
+    this.openCamera();
   }
 
   private cancelRecord(): void {
@@ -189,7 +229,7 @@ export struct VideoNoteRecorderView {
       return;
     }
     if (this.willCancel) {
-      this.cancelRecord();
+      this.discardTake();
     } else {
       this.finish();
     }
@@ -222,12 +262,33 @@ export struct VideoNoteRecorderView {
     Column() {
       Row() {
         Blank();
-        SymbolGlyph($r('sys.symbol.xmark'))
-          .fontSize(22).fontColor([Color.White])
-          .accessibilityText('关闭圆形视频录制')
-          .onClick((): void => { this.cancelRecord(); });
+        if (this.canSwitchCamera) {
+          Row() {
+            SymbolGlyph($r('sys.symbol.arrow_triangle_2_circlepath_camera'))
+              .fontSize(21).fontColor([Color.White]);
+          }
+          .width(44).height(44).borderRadius(22)
+          .justifyContent(FlexAlign.Center)
+          .backgroundColor('#33FFFFFF')
+          .margin({ right: 10 })
+          .enabled(this.phase === 'ready')
+          .accessibilityText(this.useFront ? '切换到后置摄像头' : '切换到前置摄像头')
+          .onClick((): void => { this.switchCamera(); });
+        }
+        // 点击热区交给容器：裸图标只有 22vp，在屏幕角落几乎点不中。
+        Row() {
+          SymbolGlyph($r('sys.symbol.xmark'))
+            .fontSize(22).fontColor([Color.White]);
+        }
+        .width(44).height(44).borderRadius(22)
+        .justifyContent(FlexAlign.Center)
+        .backgroundColor('#33FFFFFF')
+        .accessibilityText('关闭圆形视频录制')
+        .onClick((): void => { this.cancelRecord(); });
       }
-      .width('100%').height(52).padding({ left: 16, right: 16 });
+      .width('100%').height(56 + this.topSafe)
+      .padding({ left: 16, right: 12, top: this.topSafe })
+      .alignItems(VerticalAlign.Center);
 
       Blank();
 
@@ -253,6 +314,8 @@ export struct VideoNoteRecorderView {
             controller: this.controller
           })
             .width(PREVIEW_SIDE).height(PREVIEW_SIDE)
+            // 取景框是正方形，旋转不影响构图。
+            .rotate({ angle: this.previewRotation })
             .onLoad((): void => { this.openCamera(); });
         }
         .width(PREVIEW_SIDE).height(PREVIEW_SIDE)

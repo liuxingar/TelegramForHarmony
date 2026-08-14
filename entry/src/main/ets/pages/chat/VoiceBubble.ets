@@ -1,5 +1,5 @@
 import { getVoicePlayback, VoiceState } from '../../services/VoicePlayback';
-import { COLOR_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
 import { formatVoiceDuration, voiceWaveformBars } from '../../util/voiceWaveform';
 
 const WAVEFORM_BAR_COUNT: number = 34;
@@ -16,6 +16,10 @@ export struct VoiceBubble {
   @Prop downloadFailed: boolean = false;
   @Prop waveform: string = '';
   @Prop listened: boolean = true;
+  // 语音转文字：'' 未识别 / pending 识别中 / done 已完成 / error 失败
+  @Prop speechState: string = '';
+  @Prop speechText: string = '';
+  onRecognizeTap: () => void = (): void => {};
   onNeedDownload: () => void = (): void => {};
   onPlaybackStarted: () => void = (): void => {};
   @State playbackStatus: string = 'idle';
@@ -100,6 +104,16 @@ export struct VoiceBubble {
 
   private accent(): ResourceColor {
     return this.isOutgoing ? '#55A24D' : COLOR_PRIMARY;
+  }
+
+  // 转文字区的文字颜色。气泡内不能用全局的文本色——发出的消息是绿底，
+  // 次级灰在上面几乎看不见。
+  private speechPrimaryColor(): ResourceColor {
+    return this.isOutgoing ? '#1B3D17' : COLOR_TEXT_PRIMARY;
+  }
+
+  private speechSecondaryColor(): ResourceColor {
+    return this.isOutgoing ? '#4C7A45' : COLOR_TEXT_SECONDARY;
   }
 
   private inactiveWaveColor(): ResourceColor {
@@ -229,7 +243,39 @@ export struct VoiceBubble {
     });
   }
 
+  // 转文字入口与结果。放在波形下方而不是挤进那一行——识别文本可能很长，
+  // 塞进气泡内的横向空间会把波形压没。
+  @Builder
+  speechArea() {
+    if (this.speechState === 'pending') {
+      Row({ space: 6 }) {
+        LoadingProgress().width(13).height(13).color(this.accent());
+        Text(this.speechText !== '' ? this.speechText : '正在转文字…')
+          .fontSize(13).fontColor(this.speechSecondaryColor())
+          .maxLines(4).textOverflow({ overflow: TextOverflow.Ellipsis });
+      }.width(WAVEFORM_WIDTH).alignItems(VerticalAlign.Top);
+    } else if (this.speechState === 'done') {
+      Text(this.speechText).fontSize(13.5).lineHeight(19)
+        .fontColor(this.speechPrimaryColor())
+        .width(WAVEFORM_WIDTH)
+        .textAlign(TextAlign.Start);
+    } else if (this.speechState === 'error') {
+      Text(this.speechText !== '' ? this.speechText : '转文字失败')
+        .fontSize(12.5).fontColor('#FF3B30').width(WAVEFORM_WIDTH);
+    } else {
+      Row({ space: 4 }) {
+        SymbolGlyph($r('sys.symbol.character_square')).fontSize(13)
+          .fontColor([this.speechSecondaryColor()]);
+        Text('转文字').fontSize(12.5).fontColor(this.speechSecondaryColor());
+      }
+      .padding({ top: 3, bottom: 3, right: 8 })
+      .accessibilityText('把这条语音转成文字')
+      .onClick((): void => { this.onRecognizeTap(); });
+    }
+  }
+
   build() {
+    Column({ space: 4 }) {
     Row({ space: 9 }) {
       this.playControl();
       Column({ space: 3 }) {
@@ -283,6 +329,10 @@ export struct VoiceBubble {
       .alignItems(HorizontalAlign.Start);
     }
     .alignItems(VerticalAlign.Center)
-    .padding({ top: 1, bottom: 9, right: 31 });
+    .padding({ top: 1, right: 31 });
+      this.speechArea();
+    }
+    .alignItems(HorizontalAlign.Start)
+    .padding({ bottom: 9 });
   }
 }

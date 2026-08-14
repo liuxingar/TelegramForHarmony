@@ -1,5 +1,5 @@
 import { describe, it, expect } from '@ohos/hypium';
-import { formatMsgContent } from '../main/ets/util/formatMsgContent';
+import { formatMsgContent, speechStateOf, speechTextOf } from '../main/ets/util/formatMsgContent';
 import { TdObject } from '../main/ets/tdkit/TdTypes';
 
 function textMsg(t: string): TdObject {
@@ -715,6 +715,45 @@ export default function formatMsgContentTest() {
       expect(r.contentType).assertEqual('sticker');
       expect(r.photoFileId).assertEqual(0);
       expect(r.stickerFileId).assertEqual(0);
+    });
+
+    // 语音转文字：结果异步经 updateMessageContent 回流到
+    // voiceNote.speech_recognition_result，三个变体各自的取值位置不同。
+    it('reads_completed_speech_recognition', 0, () => {
+      const note: TdObject = { '@type': 'voiceNote' };
+      note['speech_recognition_result'] = {
+        '@type': 'speechRecognitionResultText', 'text': '你好'
+      } as TdObject;
+      expect(speechStateOf(note)).assertEqual('done');
+      expect(speechTextOf(note)).assertEqual('你好');
+    });
+
+    // 识别中会先给出部分文本，界面上要能边识别边显示。
+    it('reads_partial_text_while_pending', 0, () => {
+      const note: TdObject = { '@type': 'voiceNote' };
+      note['speech_recognition_result'] = {
+        '@type': 'speechRecognitionResultPending', 'partial_text': '你'
+      } as TdObject;
+      expect(speechStateOf(note)).assertEqual('pending');
+      expect(speechTextOf(note)).assertEqual('你');
+    });
+
+    it('reads_error_message_from_failed_recognition', 0, () => {
+      const note: TdObject = { '@type': 'voiceNote' };
+      const err: TdObject = { '@type': 'error' };
+      err['message'] = 'PREMIUM_ACCOUNT_REQUIRED';
+      note['speech_recognition_result'] = {
+        '@type': 'speechRecognitionResultError', 'error': err
+      } as TdObject;
+      expect(speechStateOf(note)).assertEqual('error');
+      expect(speechTextOf(note)).assertEqual('PREMIUM_ACCOUNT_REQUIRED');
+    });
+
+    // 没识别过的语音没有这个字段，不能误判成已完成。
+    it('treats_missing_result_as_not_recognized', 0, () => {
+      expect(speechStateOf({ '@type': 'voiceNote' })).assertEqual('');
+      expect(speechStateOf(undefined)).assertEqual('');
+      expect(speechTextOf(undefined)).assertEqual('');
     });
   });
 }

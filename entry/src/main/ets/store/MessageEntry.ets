@@ -89,6 +89,9 @@ export interface MessageEntry {
   mediaDownloadActive: boolean; // full media request is currently active
   voiceWaveform: string;        // base64 packed waveform, '' when unavailable
   voiceListened: boolean;       // incoming voice note has been opened/listened
+  // 语音转文字。'' 表示未识别过；pending 期间可能已有部分文本。
+  speechState: string;          // '' | 'pending' | 'done' | 'error'
+  speechText: string;
   audioTitle: string;           // music metadata; '' falls back to file name
   audioPerformer: string;       // music artist/performer; '' = unknown
   stickerFileId: number;        // animated (TGS) sticker source file id, 0 otherwise
@@ -249,6 +252,7 @@ export function cloneMessage(m: MessageEntry): MessageEntry {
     videoPath: m.videoPath, videoProgress: m.videoProgress, videoFailed: m.videoFailed,
     mediaDownloadActive: m.mediaDownloadActive,
     voiceWaveform: m.voiceWaveform, voiceListened: m.voiceListened,
+    speechState: m.speechState, speechText: m.speechText,
     audioTitle: m.audioTitle, audioPerformer: m.audioPerformer,
     stickerFileId: m.stickerFileId, stickerFormat: m.stickerFormat,
     isEmojiSticker: m.isEmojiSticker, stickerPath: m.stickerPath,
@@ -1004,6 +1008,8 @@ export function buildMessageEntry(message: TdObject, users: UserStore): MessageE
     mediaDownloadActive: c.videoInitialActive ?? false,
     voiceWaveform: c.voiceWaveform ?? '',
     voiceListened: isOutgoing || (c.voiceListened ?? false),
+    speechState: c.speechState ?? '',
+    speechText: c.speechText ?? '',
     audioTitle: c.audioTitle ?? '',
     audioPerformer: c.audioPerformer ?? '',
     stickerFileId: c.stickerFileId ?? 0,

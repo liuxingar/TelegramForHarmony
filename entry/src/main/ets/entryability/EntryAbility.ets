@@ -6,6 +6,7 @@ import { initTdKit, setTdOnlineState, setUiAbilityContext } from '../tdkit/Globa
 import { backgroundGraceTask } from '../services/BackgroundGraceTask';
 import { initSettings, refreshPowerSavingState } from '../store/AppSettings';
 import { beginNetworkMonitoring, refreshNetworkState } from '../services/NetworkStateService';
+import { liveLocation } from '../services/LiveLocationService';
 
 const DOMAIN = 0x0000;
 
@@ -15,6 +16,8 @@ export default class EntryAbility extends UIAbility {
     // mode (which subsumes the old unconditional COLOR_MODE_NOT_SET).
     initSettings(this.context);
     initTdKit(this.context);
+    // 实时位置共享要跨会话、跨前后台存活，服务需要 Ability 上下文申请长时任务。
+    liveLocation.init(this.context);
     setUiAbilityContext(this.context);
     beginNetworkMonitoring();
     // Cold start via a tg:// deep link — stash it; Index routes it once auth

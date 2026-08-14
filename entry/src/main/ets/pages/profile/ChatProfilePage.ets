@@ -57,6 +57,8 @@ struct ChatProfilePage {
   @State avatarPath: string = '';
   // 头像点击放大（'' = 未打开）。
   @State viewerAvatarPath: string = '';
+  @State avatarTapX: number = 0;
+  @State avatarTapY: number = 0;
   @State avatarAnimPath: string = '';
   @State subtitle: string = '';
   @State description: string = '';
@@ -872,8 +874,11 @@ struct ChatProfilePage {
         colorSeed: this.chatId, avatarSize: 100,
         animPath: this.avatarAnimPath
       })
-        .onClick((): void => {
+        // 记下点击处的屏幕坐标，查看器据此决定放大/缩回的中心点。
+        .onClick((event: ClickEvent): void => {
           if (this.avatarPath !== '') {
+            this.avatarTapX = event.windowX;
+            this.avatarTapY = event.windowY;
             this.viewerAvatarPath = this.avatarPath;
           }
         });
@@ -1392,6 +1397,8 @@ struct ChatProfilePage {
     if (this.viewerAvatarPath !== '') {
       AvatarViewer({
         imagePath: this.viewerAvatarPath,
+        originX: this.avatarTapX,
+        originY: this.avatarTapY,
         onClose: (): void => { this.viewerAvatarPath = ''; }
       });
     }

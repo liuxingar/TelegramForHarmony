@@ -11,6 +11,7 @@ import {
 import { TgsStickerView } from './TgsStickerView';
 import { WebmStickerView } from './WebmStickerView';
 import { SmartLoopVideo } from '../common/SmartLoopVideo';
+import { AvLoopVideo } from '../common/AvLoopVideo';
 import { VoiceBubble } from './VoiceBubble';
 import { MusicBubble } from './MusicBubble';
 import { FileBubble } from './FileBubble';
@@ -29,6 +30,9 @@ import { packAlbumRows, AlbumCell } from '../../util/packAlbumRows';
 import { linkPreviewPresentation, LinkPreviewPresentation } from '../../util/linkPreview';
 import { reactionKeyFrom } from '../../util/reactions';
 import { COLOR_PRIMARY, COLOR_TEXT_SECONDARY, COLOR_BUBBLE_OUT, COLOR_BUBBLE_IN, COLOR_BUBBLE_TEXT, AVATAR_PALETTE, botButtonBg } from '../../util/theme';
+
+// 圆形视频气泡直径。和 Telegram 的观感接近，同时不至于挤占整行宽度。
+const VIDEO_NOTE_SIDE: number = 180;
 
 const ALBUM_MAX_WIDTH: number = 280;
 const STICKER_MAX: number = 160;
@@ -52,6 +56,9 @@ export struct MessageBubble {
   // Chat-theme outgoing bubble color ('' = the standard theme resource color).
   @Prop themeBubbleOut: string = '';
   @Prop nowSec: number;
+  // 本机正在共享实时位置的那条消息 id（0 = 没有共享）。
+  @Prop liveSharingId: number = 0;
+  onStopLiveLocation: () => void = (): void => {};
   @Prop isGroup: boolean;
   @Prop isChannel: boolean;
   @Prop showUnreadDivider: boolean;
@@ -140,6 +147,10 @@ export struct MessageBubble {
   // channel/chat origin, user id for a user origin.
   onForwardTap: (chatId: number, messageId: number, userId: number) => void = (): void => {};
   onOpenReactions: (messageId: number) => void = (): void => {};
+  onRecognizeSpeech: (messageId: number) => void = (): void => {};
+  onVideoNoteDownload: (messageId: number) => void = (): void => {};
+  // 圆形视频原地播放的开关，逐条独立。
+  @State private videoNotePlaying: boolean = false;
   // Chat's currently active video chat, if any (0 = none live) — lets a
   // "started" system pill know whether it's still tappable, and supplies the
   // id to hand off on tap. Sourced from ChatPage's existing updateChatVideoChat
@@ -542,6 +553,23 @@ export struct MessageBubble {
   private timeReserve(): string {
     const editReserve = this.msg.editDate > 0 ? '         ' : '';
     return `${editReserve}  ${this.messageTimeText()}${this.msg.isOutgoing ? '   ' : ''}`;
+  }
+
+  // 点击：没下载好先触发下载（下载完成后 videoPath 到位，用户再点一次即可），
+  // 已就绪则切换播放态。
+  private toggleVideoNote(): void {
+    if (this.msg.videoPath === '') {
+      this.onVideoNoteDownload(this.msg.id);
+      return;
+    }
+    this.videoNotePlaying = !this.videoNotePlaying;
+  }
+
+  private videoNoteDuration(): string {
+    const total: number = Math.max(0, this.msg.videoDuration);
+    const m: number = Math.floor(total / 60);
+    const sec: number = total % 60;
+    return `${m}:${`${sec}`.padStart(2, '0')}`;
   }
 
   private fallbackLabel(): string {
@@ -1440,6 +1468,55 @@ export struct MessageBubble {
             this.timeReserveInText());
         }.margin({ top: 6 });
       }
+    } else if (this.msg.contentType === 'videoNote') {
+      // 圆形视频：点一下原地播放，不进全屏——它本来就是个小圆，放大到全屏
+      // 既没有更多信息，还要处理旋转元数据（ijk 不读，会转 90 度）。
+      Stack({ alignContent: Alignment.Center }) {
+        // 封面始终垫在底下，播放器叠上去。做成 if/else 的话切换瞬间封面已经
+        // 卸载、首帧还没到，中间会空一帧——表现就是点下去闪一下。
+        if (this.msg.photoPath !== '') {
+          Image(this.msg.photoPath.startsWith('/')
+            ? `file://${this.msg.photoPath}` : this.msg.photoPath)
+            .width(VIDEO_NOTE_SIDE).height(VIDEO_NOTE_SIDE)
+            .objectFit(ImageFit.Cover)
+            .draggable(false);
+        } else {
+          Column()
+            .width(VIDEO_NOTE_SIDE).height(VIDEO_NOTE_SIDE)
+            .backgroundColor($r('app.color.surface_alt'));
+        }
+        if (this.videoNotePlaying && this.msg.videoPath !== '') {
+          AvLoopVideo({
+            videoPath: this.msg.videoPath,
+            boxWidth: VIDEO_NOTE_SIDE,
+            boxHeight: VIDEO_NOTE_SIDE,
+            loop: false,
+            muted: false,
+            onFinished: (): void => { this.videoNotePlaying = false; },
+            onFailed: (): void => { this.videoNotePlaying = false; }
+          });
+        }
+        if (!this.videoNotePlaying) {
+          Row() {
+            SymbolGlyph($r('sys.symbol.play_fill')).fontSize(22).fontColor([Color.White]);
+          }
+          .width(46).height(46).borderRadius(23)
+          .justifyContent(FlexAlign.Center)
+          .backgroundColor('#66000000');
+        }
+        // 时长压在圆底，和 Telegram 一致。
+        Text(this.videoNoteDuration())
+          .fontSize(11).fontColor(Color.White)
+          .padding({ left: 7, right: 7, top: 2, bottom: 2 })
+          .backgroundColor('#66000000').borderRadius(9)
+          .offset({ y: VIDEO_NOTE_SIDE / 2 - 18 });
+      }
+      .width(VIDEO_NOTE_SIDE).height(VIDEO_NOTE_SIDE)
+      .borderRadius(VIDEO_NOTE_SIDE / 2)
+      .clip(true)
+      .accessibilityText(this.videoNotePlaying
+        ? '圆形视频播放中，点击停止' : `圆形视频，${this.videoNoteDuration()}，点击播放`)
+      .onClick((): void => { this.toggleVideoNote(); });
     } else if (this.msg.contentType === 'voice') {
       // Voice note with live playback progress — VoiceBubble subscribes to the
       // shared player itself, so ticks don't depend on this row re-rendering.
@@ -1453,8 +1530,11 @@ export struct MessageBubble {
         downloadFailed: this.msg.videoFailed,
         waveform: this.msg.voiceWaveform,
         listened: this.msg.voiceListened,
+        speechState: this.msg.speechState,
+        speechText: this.msg.speechText,
         onNeedDownload: (): void => { this.onVoiceTap(this.msg.id); },
-        onPlaybackStarted: (): void => { this.onVoicePlaybackStarted(this.msg.id); }
+        onPlaybackStarted: (): void => { this.onVoicePlaybackStarted(this.msg.id); },
+        onRecognizeTap: (): void => { this.onRecognizeSpeech(this.msg.id); }
       });
     } else if (this.msg.contentType === 'audio') {
       // Music is intentionally distinct from a voice note: album artwork and
@@ -1544,6 +1624,8 @@ export struct MessageBubble {
         venueProvider: this.msg.venueProvider,
         proximityRadius: this.msg.locationProximityRadius,
         maxWidth: this.inlineMaxW(),
+        sharing: this.liveSharingId !== 0 && this.liveSharingId === this.msg.id,
+        onStopLive: (): void => { this.onStopLiveLocation(); },
         onOpen: (): void => {
           this.onLocationOpen(
             this.msg.locationLatitude,
@@ -1807,9 +1889,11 @@ export struct MessageBubble {
   }
 
   // Big bare emoji / stickers render without bubble background/tail, like bare media.
+  // 圆形视频同理：在 Telegram 里圆本身就是消息，外面再套一层圆角矩形气泡
+  // 会变成"方框里嵌个圆"，很难看。
   private isBareEmoji(): boolean {
     return this.msg.contentType === 'emoji' || this.msg.contentType === 'sticker'
-      || this.msg.contentType === 'customEmoji';
+      || this.msg.contentType === 'customEmoji' || this.msg.contentType === 'videoNote';
   }
 
   // Sticker display box: longest side capped, aspect preserved (512 fallback).

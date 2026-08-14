@@ -1,4 +1,5 @@
 import { camera } from '@kit.CameraKit';
+import { display } from '@kit.ArkUI';
 import { media } from '@kit.MediaKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
@@ -7,6 +8,9 @@ const MIC_PERMISSION: Permissions = 'ohos.permission.MICROPHONE';
 const CAMERA_PERMISSION: Permissions = 'ohos.permission.CAMERA';
 
 // Telegram 圆形视频消息的官方上限就是 60 秒，超过会被服务端拒绝。
+// TEXTURE 类型的 XComponent 拿到的预览画面，相当于已按这个镜头角度补偿过。
+const TEXTURE_BASE_ROTATION: number = 90;
+
 export const VIDEO_NOTE_MAX_SECONDS: number = 60;
 
 // 圆形视频只在气泡里显示成一个小圆，采集分辨率越高越浪费流量；官方客户端
@@ -34,6 +38,10 @@ export class VideoNoteRecorder {
   private file: fs.File | null = null;
   private cameraInput: camera.CameraInput | null = null;
   private previewOutput: camera.PreviewOutput | null = null;
+  // 设备是否同时具备前后摄像头，决定 UI 上要不要给切换按钮。
+  bothCameras: boolean = false;
+  // 取景需要补的旋转角度，由 UI 层套在 XComponent 上。
+  previewRotationDeg: number = 0;
   private videoOutput: camera.VideoOutput | null = null;
   private session: camera.VideoSession | null = null;
   private startedAtMs: number = 0;
@@ -111,20 +119,34 @@ export class VideoNoteRecorder {
   }
 
   // 前置摄像头是圆形视频的默认取景（自拍），没有前置时退回第一个设备。
-  private static pickDevice(devices: camera.CameraDevice[]): camera.CameraDevice | null {
+  private static pickDevice(devices: camera.CameraDevice[],
+    position: camera.CameraPosition): camera.CameraDevice | null {
     if (devices.length === 0) {
       return null;
     }
     for (const device of devices) {
-      if (device.cameraPosition === camera.CameraPosition.CAMERA_POSITION_FRONT) {
+      if (device.cameraPosition === position) {
         return device;
       }
     }
     return devices[0];
   }
 
+  // 设备上是否同时有前后摄像头——只有一个时不该显示切换按钮。
+  static hasBothCameras(devices: camera.CameraDevice[]): boolean {
+    let front: boolean = false;
+    let back: boolean = false;
+    for (const device of devices) {
+      if (device.cameraPosition === camera.CameraPosition.CAMERA_POSITION_FRONT) { front = true; }
+      if (device.cameraPosition === camera.CameraPosition.CAMERA_POSITION_BACK) { back = true; }
+    }
+    return front && back;
+  }
+
   // 起预览。previewSurfaceId 来自 XComponent；返回 'ok' 才允许后续录制。
-  async open(context: common.UIAbilityContext, previewSurfaceId: string): Promise<VideoNoteOpenResult> {
+  // useFront=true 用前置（自拍，圆形视频的默认），false 用后置。
+  async open(context: common.UIAbilityContext, previewSurfaceId: string,
+    useFront: boolean = true): Promise<VideoNoteOpenResult> {
     if (previewSurfaceId === '') {
       return 'failed';
     }
@@ -134,7 +156,11 @@ export class VideoNoteRecorder {
     }
     try {
       const manager: camera.CameraManager = camera.getCameraManager(context);
-      const device: camera.CameraDevice | null = VideoNoteRecorder.pickDevice(manager.getSupportedCameras());
+      const devices: camera.CameraDevice[] = manager.getSupportedCameras();
+      this.bothCameras = VideoNoteRecorder.hasBothCameras(devices);
+      const device: camera.CameraDevice | null = VideoNoteRecorder.pickDevice(devices,
+        useFront ? camera.CameraPosition.CAMERA_POSITION_FRONT
+          : camera.CameraPosition.CAMERA_POSITION_BACK);
       if (device === null) {
         return 'failed';
       }
@@ -173,12 +199,52 @@ export class VideoNoteRecorder {
       session.addOutput(videoOutput);
       await session.commitConfig();
       await session.start();
+      // 方向必须在会话 start 之后再取。之前放在 createPreviewOutput 紧后面，
+      // 那时会话还没 commitConfig，getPreviewRotation 直接抛异常，于是预览
+      // 方向从未被设置过（前置取景上下颠倒就是这么来的）。
+      this.applyPreviewRotation();
       this.applyRotation(videoOutput);
       return 'ok';
     } catch (e) {
       console.error(`VideoNoteRecorder.open failed: ${e}`);
       await this.release();
       return 'failed';
+    }
+  }
+
+  // display.rotation 是 0/1/2/3 的枚举而不是角度，官方示例里要乘 90 才是
+  // 传给相机接口的度数。
+  private static displayRotationDegrees(): number {
+    try {
+      return display.getDefaultDisplaySync().rotation * camera.ImageRotation.ROTATION_90;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  // 预览旋转只能在 UI 层做。
+  //
+  // 官方公式是「镜头安装角度 + 屏幕旋转角度」，getPreviewRotation 会算好；
+  // 但 setPreviewRotation 作用于 surface 的显示变换，只有 SURFACE 类型的
+  // XComponent 会遵从。我们用的是 TEXTURE（SURFACE 是独立图层，叠上圆形
+  // 裁剪会黑屏），画面走 ArkUI 合成，系统那层旋转对它不生效——实测调用
+  // 返回成功、角度也正确，画面却纹丝不动。
+  //
+  // TEXTURE 呈现的画面相当于已按 90° 镜头补偿过（后置的常见值，所以后置
+  // 看着是正的），因此我们只需补上差值。这一点依赖框架行为，换机型若发现
+  // 方向不对，先打印这里的 previewRotation 再调整。
+  private applyPreviewRotation(): void {
+    const previewOutput: camera.PreviewOutput | null = this.previewOutput;
+    if (previewOutput === null) {
+      return;
+    }
+    try {
+      const target: number =
+        previewOutput.getPreviewRotation(VideoNoteRecorder.displayRotationDegrees());
+      this.previewRotationDeg = ((target - TEXTURE_BASE_ROTATION) % 360 + 360) % 360;
+    } catch (e) {
+      console.error(`VideoNoteRecorder.getPreviewRotation failed: ${e}`);
+      this.previewRotationDeg = 0;
     }
   }
 
@@ -190,7 +256,10 @@ export class VideoNoteRecorder {
       return;
     }
     try {
-      const rotation: number = videoOutput.getVideoRotation(0);
+      // 同样按屏幕旋转角度取，而不是写死 0——竖屏时两者等价，横屏录制时
+      // 只有传了真实值才对。
+      const rotation: number = videoOutput.getVideoRotation(
+        VideoNoteRecorder.displayRotationDegrees());
       recorder.updateRotation(rotation).catch((e: Object): void => {
         console.error(`VideoNoteRecorder.updateRotation failed: ${JSON.stringify(e)}`);
       });

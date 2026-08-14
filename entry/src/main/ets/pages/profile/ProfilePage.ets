@@ -68,6 +68,8 @@ struct ProfilePage {
   @State avatarPath: string = '';
   // 头像点击放大（'' = 未打开）。
   @State viewerAvatarPath: string = '';
+  @State avatarTapX: number = 0;
+  @State avatarTapY: number = 0;
   @State avatarAnimPath: string = '';
   @State statusEmojiPath: string = '';
   @State statusEmojiFormat: string = '';
@@ -571,8 +573,11 @@ struct ProfilePage {
         animPath: this.avatarAnimPath
       })
         // 没有头像文件时（仅首字母占位）点击无意义，不给反馈。
-        .onClick((): void => {
+        // 记下点击处的屏幕坐标，查看器据此决定放大/缩回的中心点。
+        .onClick((event: ClickEvent): void => {
           if (this.avatarPath !== '') {
+            this.avatarTapX = event.windowX;
+            this.avatarTapY = event.windowY;
             this.viewerAvatarPath = this.avatarPath;
           }
         });
@@ -1222,6 +1227,8 @@ struct ProfilePage {
       if (this.viewerAvatarPath !== '') {
         AvatarViewer({
           imagePath: this.viewerAvatarPath,
+          originX: this.avatarTapX,
+          originY: this.avatarTapY,
           onClose: (): void => { this.viewerAvatarPath = ''; }
         });
       }

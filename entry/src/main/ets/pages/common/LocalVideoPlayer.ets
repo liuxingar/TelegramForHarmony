@@ -14,6 +14,8 @@ export struct LocalVideoPlayer {
   @Prop videoPath: string;
   @Prop title: string = '';
   onClose: () => void = (): void => {};
+  // 全屏浮层要自己避让状态栏，否则关闭按钮会被压在状态栏下点不到。
+  @StorageProp('topSafeHeight') topSafe: number = 0;
   @State private playing: boolean = false;
   @State private durationMs: number = 0;
   @State private positionMs: number = 0;
@@ -268,8 +270,8 @@ export struct LocalVideoPlayer {
               .layoutWeight(1);
           }
         }
-        .width('100%').height(56)
-        .padding({ left: 12, right: 16 })
+        .width('100%').height(56 + this.topSafe)
+        .padding({ left: 12, right: 16, top: this.topSafe })
         .alignItems(VerticalAlign.Center)
         .position({ x: 0, y: 0 });
       }

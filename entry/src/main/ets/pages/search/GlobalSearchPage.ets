@@ -512,6 +512,8 @@ struct GlobalSearchPage {
   // 应用内预览的目标。图片走 AvatarViewer（同一套缩放/拖动/下滑关闭），
   // 视频走 LocalVideoPlayer；文档类没有通用渲染器，仍交给系统应用。
   @State previewItem: DownloadItem | null = null;
+  @State previewTapX: number = 0;
+  @State previewTapY: number = 0;
   @State removeAlsoDeletesFile: boolean = false;
   @State removeSheetShown: boolean = false;
   private unsubFile: (() => void) | null = null;
@@ -2202,7 +2204,11 @@ struct GlobalSearchPage {
         pressed: this.resultRowPressedStyle
       })
       .accessibilityText(`${it.name}，${it.progress < 100 ? '下载中' : it.sizeLabel}`)
-      .onClick(() => { this.openDownloadItem(it); })
+      .onClick((event: ClickEvent) => {
+        this.previewTapX = event.windowX;
+        this.previewTapY = event.windowY;
+        this.openDownloadItem(it);
+      })
       .bindContextMenu(this.downloadRowMenu(it), ResponseType.LongPress);
     }
   }
@@ -3019,6 +3025,8 @@ struct GlobalSearchPage {
       } else {
         AvatarViewer({
           imagePath: it.path,
+          originX: this.previewTapX,
+          originY: this.previewTapY,
           onClose: (): void => { this.previewItem = null; }
         });
       }

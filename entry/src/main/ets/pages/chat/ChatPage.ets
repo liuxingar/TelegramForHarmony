@@ -67,6 +67,7 @@ import { TdObject, TdRequest, TdError } from '../../tdkit/TdTypes';
 import { searchMentions, loadBotCommands, MentionItem, CommandItem } from '../../store/InputSuggestions';
 import { floatingLiveWindow } from './LiveFloatingWindow';
 import { MUTE_LONG, setMute } from '../../store/ChatActions';
+import { liveLocation, LiveLocationState } from '../../services/LiveLocationService';
 
 // One emoji-triggered sticker hint shown above the composer.
 interface StickerSuggestion {
@@ -88,6 +89,11 @@ const VIEWER_DOUBLE_TAP_SCALE: number = 2.5;
 // 等上下文菜单收起再弹确认框：菜单是独立子窗口，收起过程中弹出的
 // 对话框会挂死（Promise 既不 resolve 也不 reject）。
 const MENU_DISMISS_MS: number = 150;
+const NOW_SEC_TICK_MS: number = 30000;
+// 绝对像素半径。在高密度屏上 18 远达不到"糊掉"的观感。
+const HEADER_BLUR_RADIUS: number = 140;
+// 实时位置的上报间隔。Telegram 官方客户端也是分钟级——秒级上报既费电又没有
+// 实际意义，收到的一方看到的地图精度远达不到那个粒度。
 
 const CHAT_HEADER_ACTION_SIZE: number = 42;
 const CHAT_HEADER_RADIUS: number = 22;
@@ -170,6 +176,7 @@ struct ChatPage {
   private chatBackgroundSignature: string = '';
   private chatBackgroundResolveSeq: number = 0;
   private unsubChatBackground: (() => void) | null = null;
+  private unsubTranslatable: (() => void) | null = null;
   private unsubChatTheme: (() => void) | null = null;
   private unsubDefaultBackground: (() => void) | null = null;
   private unsubBackgroundFile: (() => void) | null = null;
@@ -211,6 +218,7 @@ struct ChatPage {
   private forwardMessageIds: number[] = [];
   private forwardPickerSeq: number = 0;
   @State nowSec: number = 0;
+  private nowSecTimer: number = -1;
   @State viewerMsgId: number = 0;
   @State chromeVisible: boolean = true;
   @State viewerVideoLandscape: boolean = false;
@@ -312,6 +320,13 @@ struct ChatPage {
   private lastMaxId: number = 0;
   @State atBottom: boolean = true;
   @State isMuted: boolean = false;
+  // 会话级自动翻译（chat.is_translatable）。单条翻译走 translateMessage，
+  // 这个开关让 TDLib 对整个会话建议翻译。
+  @State isTranslatable: boolean = false;
+  // 是否正在共享实时位置（全局单例状态，不限于当前会话）。
+  @State liveLocationActive: boolean = false;
+  @State liveLocationMessageId: number = 0;
+  private unsubLiveLocation: (() => void) | null = null;
   @State unreadBadge: number = 0;
   private firstUnreadId: number = 0;
   // Set once the initial scroll parks on the unread boundary; suppresses every
@@ -742,6 +757,18 @@ struct ChatPage {
     // Chat backgrounds have their own TDLib update and can change without a
     // title/message update. Listen directly so setting or clearing one is
     // visible while the conversation is open.
+    this.unsubLiveLocation = liveLocation.subscribe((st: LiveLocationState): void => {
+      this.liveLocationActive = st.active;
+      // 只有共享发生在当前会话时才在气泡上显示停止按钮。
+      this.liveLocationMessageId = st.active && st.chatId === this.chatId ? st.messageId : 0;
+    });
+    // 在其它设备改了这个开关时同步过来，否则菜单文案会和实际状态不符。
+    this.unsubTranslatable = getTdClient().onUpdate('updateChatIsTranslatable',
+      (u: TdObject): void => {
+        if ((u['chat_id'] as number | undefined) === this.chatId) {
+          this.isTranslatable = (u['is_translatable'] as boolean | undefined) ?? false;
+        }
+      });
     this.unsubChatBackground = getTdClient().onUpdate('updateChatBackground', (u: TdObject) => {
       if ((u['chat_id'] as number | undefined) === this.chatId) {
         const seq = ++this.chatBackgroundResolveSeq;
@@ -1202,7 +1229,56 @@ struct ChatPage {
     }
   }
 
+  // nowSec 驱动实时位置的倒计时和"已结束"判定，以及消息时间的相对显示。
+  // 以前只在 aboutToAppear 赋值一次，于是共享结束后必须重进会话才看得出来。
+  // 30 秒一跳：这些标签都是分钟粒度的，再密只是白白唤醒渲染。
+  private armNowSecTimer(): void {
+    if (this.nowSecTimer !== -1) {
+      return;
+    }
+    this.nowSecTimer = setInterval((): void => {
+      this.nowSec = Math.floor(Date.now() / 1000);
+    }, NOW_SEC_TICK_MS);
+  }
+
+  private clearNowSecTimer(): void {
+    if (this.nowSecTimer !== -1) {
+      clearInterval(this.nowSecTimer);
+      this.nowSecTimer = -1;
+    }
+  }
+
+  // 停止共享是不可撤销的：一旦结束，那条消息就再也编辑不回来了（服务端直接
+  // 判定为不可编辑），只能重新发一条。所以先确认。
+  private confirmStopLiveLocation(): void {
+    promptAction.showDialog({
+      title: '停止共享实时位置',
+      message: '停止后这条消息将不再更新位置，且无法恢复共享。',
+      buttons: [
+        { text: '取消', color: '#8E8E93' },
+        { text: '停止共享', color: '#D95B57' }
+      ]
+    }).then((result: promptAction.ShowDialogSuccessResponse): void => {
+      if (result.index !== 1) {
+        return;
+      }
+      liveLocation.stopSharing();
+      promptAction.showToast({ message: '已停止共享实时位置', duration: 1500 });
+    }).catch((e: Object): void => {
+      console.error(`ChatPage.confirmStopLiveLocation failed: ${JSON.stringify(e)}`);
+    });
+  }
+
+  onPageHide(): void {
+    console.info(`[ChatDiag] hide msgs=${this.messages.length} groups=${this.groups.length} ds=${this.groupsData.totalCount()}`);
+    // 页面不可见时停表，回来时补一次即时值再续上。
+    this.clearNowSecTimer();
+  }
+
   onPageShow(): void {
+    console.info(`[ChatDiag] show msgs=${this.messages.length} groups=${this.groups.length} ds=${this.groupsData.totalCount()}`);
+    this.nowSec = Math.floor(Date.now() / 1000);
+    this.armNowSecTimer();
     // The chat page is cached underneath the live viewer. A successful
     // pushUrl can therefore leave the entry button in its transient busy
     // state when this page becomes visible again. Treat page visibility as
@@ -1215,6 +1291,7 @@ struct ChatPage {
   }
 
   aboutToDisappear(): void {
+    this.clearNowSecTimer();
     if (this.unsubChatAction !== null) {
       this.unsubChatAction();
       this.unsubChatAction = null;
@@ -1290,6 +1367,14 @@ struct ChatPage {
     if (this.unsubMsg !== null) { this.unsubMsg(); this.unsubMsg = null; }
     if (this.unsubSub !== null) { this.unsubSub(); this.unsubSub = null; }
     if (this.unsubChat !== null) { this.unsubChat(); this.unsubChat = null; }
+    if (this.unsubLiveLocation !== null) {
+      this.unsubLiveLocation();
+      this.unsubLiveLocation = null;
+    }
+    if (this.unsubTranslatable !== null) {
+      this.unsubTranslatable();
+      this.unsubTranslatable = null;
+    }
     if (this.unsubChatBackground !== null) {
       this.unsubChatBackground();
       this.unsubChatBackground = null;
@@ -1741,6 +1826,7 @@ struct ChatPage {
   }
 
   private mediaEntryIsVideo(entry: MessageEntry): boolean {
+    // 圆形视频不进全屏查看器——它在气泡里原地播放（见 MessageBubble）。
     return entry.contentType === 'video' ||
       (entry.contentType === 'paidMedia' && !entry.paidMediaLocked &&
         entry.paidMediaKind === 'video');
@@ -2165,6 +2251,7 @@ struct ChatPage {
     const settings = chat['notification_settings'] as TdObject | undefined;
     if (settings !== undefined && !this.headerMuteUpdating) {
       this.isMuted = isMutedFrom(settings);
+      this.isTranslatable = (chat['is_translatable'] as boolean | undefined) ?? false;
     }
     const photo = chat['photo'] as TdObject | undefined;
     const small = photo !== undefined ? (photo['small'] as TdObject | undefined) : undefined;
@@ -4778,7 +4865,16 @@ struct ChatPage {
       this.headerMenuRow('sys.symbol.clock', '自动删除消息', false, () => { this.chooseAutoDelete(); });
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
       this.headerMenuRow('sys.symbol.calendar', '定时消息', false, () => { this.openScheduledSheet(); });
+      this.headerMenuRow('sys.symbol.calendar_badge_clock', '跳转到日期', false,
+        () => { this.pickJumpDate(); });
+      if (this.liveLocationActive) {
+        this.headerMenuRow('sys.symbol.stop_circle', '停止共享位置', true,
+          () => { this.confirmStopLiveLocation(); });
+      }
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
+      this.headerMenuRow('sys.symbol.translate',
+        this.isTranslatable ? '关闭自动翻译' : '开启自动翻译', false,
+        () => { this.toggleTranslatable(); });
       this.headerMenuRow('sys.symbol.xmark_circle', '清空聊天记录', false, () => { this.confirmClearHistory(); });
       if (this.isGroup && this.membershipState === 'writable') {
         Divider().color($r('app.color.divider')).strokeWidth(0.7);
@@ -4797,6 +4893,9 @@ struct ChatPage {
   // the emoji panel scales out of / back into.
   private emojiBtnCx: number = 48;
   @State inputBarH: number = 64;
+  // 顶部悬浮 chrome（标题栏 + 横幅）的实测高度，用来给列表让位。
+  @State headerChromeH: number = 0;
+  @State listViewportH: number = 0;
   // Height of every persistent bottom surface (composer/reply/Bot keyboard or
   // membership/search bar). The List uses it only as END offset: rows still
   // travel behind the floating input, while the final row can clear it.
@@ -4825,6 +4924,30 @@ struct ChatPage {
       lines += Math.max(1, Math.ceil(chunks[i].length / 18));
     }
     return Math.min(104, 40 + Math.max(0, lines - 1) * 20);
+  }
+
+  // 渐变模糊：只在顶部 chrome 那一条区域内从"全糊"过渡到"清晰"。
+  // fractionStops 是 [模糊比例, 位置]，位置沿 direction 从 0 到 1；
+  // direction 取 Bottom 时 0 就是列表顶端。
+  private headerBlurStops(): [number, number][] {
+    const viewport: number = this.listViewportH;
+    if (viewport <= 0 || this.headerChromeH <= 0) {
+      return [[0, 0], [0, 1]];
+    }
+    // 过渡带正好是 chrome 那一条：列表顶端（也就是屏幕最上沿）全糊，到 bar
+    // 的下边缘归零。消息往上滑时是连续糊掉的，不是撞上一条硬边。
+    //
+    // 上半段是**全糊的平台段**而不是单点：只在位置 0 取 1 的话，全糊处是条
+    // 零宽度的线，肉眼看到的最糊程度远达不到 100%。
+    const end: number = Math.min(0.6, this.headerChromeH / viewport);
+    return [[1, 0], [1, end * 0.62], [0, end]];
+  }
+
+  // 只看省电：这里的顾虑是逐帧实时渲染的功耗，跟"聊天背景特效"是两回事。
+  // 先前误用了 backgroundEffectsEnabled()，它还附带自定义背景/特效开关的条件，
+  // 会把模糊直接打成 0。
+  private headerBlurRadius(): number {
+    return !this.powerSaving && this.headerChromeH > 0 ? HEADER_BLUR_RADIUS : 0;
   }
 
   private updateBottomChromeHeight(height: number): void {
@@ -5416,7 +5539,7 @@ struct ChatPage {
       } } as MenuElement,
       { value: '位置', action: (): void => {
         this.setEmojiPanel(false);
-        this.sendCurrentLocation();
+        this.chooseLocationKind();
       } } as MenuElement,
       { value: '联系人', action: (): void => {
         this.setEmojiPanel(false);
@@ -5487,6 +5610,77 @@ struct ChatPage {
     }).catch((e: Object) => {
       console.error(`ChatPage.pickAndSendAudio select failed: ${JSON.stringify(e)}`);
     });
+  }
+
+  // 位置入口：先问是发静态点还是实时共享。
+  private chooseLocationKind(): void {
+    this.getUIContext().getPromptAction().showActionMenu({
+      title: '发送位置',
+      buttons: [
+        { text: '当前位置', color: COLOR_TEXT_PRIMARY as string },
+        { text: '实时位置 · 15 分钟', color: COLOR_TEXT_PRIMARY as string },
+        { text: '实时位置 · 1 小时', color: COLOR_TEXT_PRIMARY as string },
+        { text: '实时位置 · 8 小时', color: COLOR_TEXT_PRIMARY as string }
+      ]
+    }).then((res: promptAction.ActionMenuSuccessResponse): void => {
+      const periods: number[] = [0, 15 * 60, 3600, 8 * 3600];
+      const period: number = periods[res.index] ?? 0;
+      if (period === 0) {
+        this.sendCurrentLocation();
+      } else {
+        this.startLiveLocation(period);
+      }
+    }).catch((): void => {});
+  }
+
+  // 实时位置：发出后按固定间隔用新坐标 editMessageLiveLocation。TDLib 不会
+  // 替我们采集位置，更新完全由客户端驱动，所以这里自己维护定时器；页面销毁
+  // 或时长到期就停，避免后台一直定位耗电。
+  private startLiveLocation(periodSec: number): void {
+    this.withLocationPermission((): void => {
+      this.currentLocation(10000).then((loc: geoLocationManager.Location): void => {
+        const store = this.store;
+        if (store === null) { return; }
+        this.atBottom = true;
+        store.sendLiveLocation(loc.latitude, loc.longitude, periodSec)
+          .then((messageId: number): void => {
+            if (messageId === 0) {
+              promptAction.showToast({ message: '实时位置发送失败', duration: 1800 });
+              return;
+            }
+            // 交给独立服务：退出会话、切后台都要继续共享。
+            liveLocation.start(this.chatId, messageId, periodSec);
+            promptAction.showToast({ message: '已开始共享实时位置', duration: 1600 });
+          });
+      }).catch((): void => {
+        promptAction.showToast({ message: '定位失败，请确认已开启定位服务', duration: 2000 });
+      });
+    });
+  }
+
+  private withLocationPermission(run: () => void): void {
+    const context = getContext(this) as common.UIAbilityContext;
+    const permissions: Permissions[] =
+      ['ohos.permission.APPROXIMATELY_LOCATION', 'ohos.permission.LOCATION'];
+    abilityAccessCtrl.createAtManager().requestPermissionsFromUser(context, permissions)
+      .then((result): void => {
+        if (result.authResults.length > 0 && result.authResults[0] === 0) {
+          run();
+          return;
+        }
+        promptAction.showToast({ message: '需要定位权限才能发送位置', duration: 1800 });
+      })
+      .catch((e: BusinessError): void => {
+        console.error(`ChatPage location permission failed: ${e.message}`);
+      });
+  }
+
+  private currentLocation(timeoutMs: number): Promise<geoLocationManager.Location> {
+    const request: geoLocationManager.SingleLocationRequest = {
+      locatingPriority: geoLocationManager.LocatingPriority.PRIORITY_LOCATING_SPEED,
+      locatingTimeoutMs: timeoutMs
+    };
+    return geoLocationManager.getCurrentLocation(request);
   }
 
   // 位置：申请定位权限 → 取当前坐标 → 发送。无地图选点（Map Kit 需 AGC 凭据）。
@@ -5866,6 +6060,97 @@ struct ChatPage {
       }
       console.error(`ChatPage.toggleReaction failed: ${e.message}`);
       promptAction.showToast({ message: '回应失败，请重试', duration: 1600 });
+    });
+  }
+
+  // 语音转文字。Premium 功能，非会员会被服务端拒绝，这里把原始错误呈现出来
+  // 而不是笼统说"失败"——用户能据此判断是要开会员还是网络问题。
+  // 会话级自动翻译开关。本地先翻转让菜单立刻反映，失败再回滚——这个操作
+  // 很轻，等一次往返反而显得迟钝。
+  // 跳转到某一天。用 getChatMessageByDate 而不是 getChatMessageCalendar——
+  // 后者明确不支持 searchMessagesFilterEmpty，只能按媒体类型分日统计，做不了
+  // "跳到任意一天"。前者直接返回不晚于给定时刻的最后一条消息，正是所需。
+  private pickJumpDate(): void {
+    const now = new Date();
+    // 会话第一条消息之前的日期没有意义，但客户端不知道那是哪天，
+    // 下界给 2013（Telegram 上线年份）足够宽松。
+    this.getUIContext().showDatePickerDialog({
+      start: new Date('2013-01-01'),
+      end: now,
+      selected: now,
+      onDateAccept: (value: Date): void => { this.jumpToDate(value); }
+    });
+  }
+
+  private jumpToDate(day: Date): void {
+    const store = this.store;
+    if (store === null) { return; }
+    // 取当天 23:59:59：getChatMessageByDate 返回"不晚于该时刻"的最后一条，
+    // 用当天结束时刻才能落在这一天之内，用 00:00 会落到前一天。
+    const end = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 23, 59, 59);
+    const req: TdRequest = { '@type': 'getChatMessageByDate' };
+    req['chat_id'] = this.chatId;
+    req['date'] = Math.floor(end.getTime() / 1000);
+    getTdClient().send(req, 15000).then((message: TdObject): void => {
+      const id: number = (message['id'] as number | undefined) ?? 0;
+      if (id === 0) {
+        promptAction.showToast({ message: '那天没有消息', duration: 1600 });
+        return;
+      }
+      this.jumpToMessageId(id);
+    }).catch((e: TdError): void => {
+      // 404 是合法结果：该日期之前没有任何消息。
+      const code: number = e.code !== undefined ? e.code : 0;
+      promptAction.showToast({
+        message: code === 404 ? '这个日期之前没有消息' : `跳转失败：${e.message}`,
+        duration: 1600
+      });
+    });
+  }
+
+  // 跳到指定消息：已在当前页就直接滚动并高亮，否则围绕它重新拉一页。
+  private jumpToMessageId(targetId: number): void {
+    const gidx: number = groupIndexOf(this.groups, targetId);
+    if (gidx >= 0) {
+      this.scroller.scrollToIndex(gidx, false, ScrollAlign.START);
+      this.flashAtIndex(gidx);
+      return;
+    }
+    this.pendingJumpId = targetId;
+    this.store?.loadAround(targetId, (found: boolean): void => {
+      if (!found && this.pendingJumpId === targetId) {
+        this.pendingJumpId = 0;
+        promptAction.showToast({ message: '无法定位到那条消息', duration: 1500 });
+      }
+    });
+  }
+
+  private toggleTranslatable(): void {
+    const previous: boolean = this.isTranslatable;
+    const next: boolean = !previous;
+    this.isTranslatable = next;
+    const req: TdRequest = { '@type': 'toggleChatIsTranslatable' };
+    req['chat_id'] = this.chatId;
+    req['is_translatable'] = next;
+    getTdClient().send(req).then((): void => {
+      promptAction.showToast({
+        message: next ? '已开启自动翻译' : '已关闭自动翻译', duration: 1500
+      });
+    }).catch((e: TdError): void => {
+      this.isTranslatable = previous;
+      console.error(`ChatPage.toggleTranslatable failed: ${e.message}`);
+      promptAction.showToast({ message: `设置失败：${e.message}`, duration: 1800 });
+    });
+  }
+
+  private recognizeSpeech(messageId: number): void {
+    this.store?.recognizeSpeech(messageId).catch((e: TdError): void => {
+      const message: string = e.message !== undefined ? e.message : '';
+      promptAction.showToast({
+        message: message.indexOf('PREMIUM') >= 0 || message.indexOf('premium') >= 0
+          ? '转文字是 Telegram Premium 功能' : `转文字失败：${message}`,
+        duration: 2200
+      });
     });
   }
 
@@ -6775,7 +7060,35 @@ struct ChatPage {
         }
       });
       Row() {
-        SymbolGlyph($r('sys.symbol.more')).fontSize(22).fontColor([COLOR_TEXT_PRIMARY]);
+        // 菜单展开时汉堡变叉。两个图标叠着做交叉淡入淡出 + 反向旋转，比直接
+        // 替换更像"同一个东西转过去了"。SVG 是位图路径、没法真正形变，这是
+        // 视觉上最接近的做法。
+        //
+        // 系统符号库里没有汉堡线条（list_bullet 带项目符号，不是一回事），
+        // 所以横线用自带的 SVG；fillColor 能染色，深浅色主题下跟其它图标一致。
+        Stack() {
+          Image($r('app.media.ic_header_menu'))
+            .width(18).height(18)
+            .fillColor(COLOR_TEXT_PRIMARY)
+            .draggable(false)
+            .opacity(this.headerMenuShow ? 0 : 1)
+            .rotate({ angle: this.headerMenuShow ? 90 : 0 })
+            // animation 必须挂在**属性发生变化的那个节点**上。挂在外层 Stack
+            // 上不会生效——隐式动画只作用于同一节点自身的属性变化。
+            .animation({
+              duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+              curve: Curve.EaseInOut
+            });
+          SymbolGlyph($r('sys.symbol.xmark'))
+            .fontSize(19).fontColor([COLOR_TEXT_PRIMARY])
+            .opacity(this.headerMenuShow ? 1 : 0)
+            .rotate({ angle: this.headerMenuShow ? 0 : -90 })
+            .animation({
+              duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+              curve: Curve.EaseInOut
+            });
+        }
+        .width(CHAT_HEADER_ACTION_SIZE).height(CHAT_HEADER_ACTION_SIZE);
       }
       .width(CHAT_HEADER_ACTION_SIZE)
       .height(CHAT_HEADER_ACTION_SIZE)
@@ -8305,16 +8618,6 @@ struct ChatPage {
     Stack() {
       this.chatPowerBackground();
       Column() {
-        if (this.selecting) {
-          this.selectionHeader();
-        } else if (this.searchMode) {
-          this.searchHeader();
-        } else {
-          this.header();
-        }
-        if (this.topCardShouldShow()) {
-          this.topBanners();
-        }
         Stack() {
         List({ scroller: this.scroller }) {
           // LazyForEach (not ForEach) is required for maintainVisibleContentPosition
@@ -8342,6 +8645,8 @@ struct ChatPage {
               }
               Column() {
               MessageBubble({ msg: g.head, nowSec: this.nowSec, isGroup: this.isGroup, isChannel: this.isChannel,
+                liveSharingId: this.liveLocationMessageId,
+                onStopLiveLocation: (): void => { this.confirmStopLiveLocation(); },
                 themeBubbleOut: this.themeBubbleOutColor,
                 showUnreadDivider: this.firstUnreadId !== 0 &&
                   g.memberIds.indexOf(this.firstUnreadId) >= 0,
@@ -8450,6 +8755,10 @@ struct ChatPage {
                 onReportMsg: (id: number): void => { promptAction.showToast({ message: '举报功能开发中', duration: 1500 }); },
                 onSelectMsg: (id: number): void => { this.enterSelect(id); },
                 onOpenReactions: (id: number): void => { this.openReactionSheet(id); },
+                onRecognizeSpeech: (id: number): void => { this.recognizeSpeech(id); },
+                onVideoNoteDownload: (id: number): void => {
+                  this.store?.requestVideoDownload(id, true);
+                },
                 liveGroupCallId: this.liveCallIsActive ? this.liveGroupCallId : 0,
                 // Reuses the same navigation as the "正在直播" banner (onLiveStreamTap
                 // already reads this.liveGroupCallId and no-ops if it's gone stale).
@@ -8482,6 +8791,16 @@ struct ChatPage {
             `message_group_${g.head.id}_${g.memberIds.join('_')}`);
         }
         .width('100%').height('100%')
+        // 顶部 chrome 是悬浮的，用 contentStartOffset 让位——和底部的
+        // contentEndOffset 对称。不用 padding：padding 会改变内容区尺寸，
+        // 而滚动锚点、getItemRect 那一套都吃列表几何。
+        .contentStartOffset(this.headerChromeH)
+        // 消息滑到标题栏下面时逐渐糊掉，而不是被一条硬边切断。
+        // 省电模式下关掉——渐变模糊是逐帧实时渲染，代价不低。
+        .linearGradientBlur(this.headerBlurRadius(), {
+          fractionStops: this.headerBlurStops(),
+          direction: GradientDirection.Bottom
+        })
         .contentEndOffset(this.bottomChromeH + 8)
         // Pre-build a few offscreen rows so a fling doesn't pay the full
         // MessageBubble construction cost inside the visible frame.
@@ -8585,7 +8904,7 @@ struct ChatPage {
           }
           .width('100%')
           .justifyContent(FlexAlign.Center)
-          .margin({ top: 8 })
+          .margin({ top: this.headerChromeH + 8 })
           .opacity(this.floatDateShown ? 1 : 0)
           .scale({ x: this.floatDateShown ? 1 : 0.9, y: this.floatDateShown ? 1 : 0.9 })
           .translate({ y: this.floatDateShown ? 0 : -5 })
@@ -8612,13 +8931,38 @@ struct ChatPage {
         .width('100%').height('100%')
         .justifyContent(FlexAlign.End)
         .hitTestBehavior(HitTestMode.None);
+
+        // 顶部 chrome 放在最后 = 叠在最上层，消息从它下面穿过去。
+        Column() {
+          if (this.selecting) {
+            this.selectionHeader();
+          } else if (this.searchMode) {
+            this.searchHeader();
+          } else {
+            this.header();
+          }
+          if (this.topCardShouldShow()) {
+            this.topBanners();
+          }
+        }
+        .width('100%')
+        .onAreaChange((_old: Area, area: Area): void => {
+          const h: number = area.height as number;
+          if (Math.abs(h - this.headerChromeH) > 0.5) {
+            this.headerChromeH = h;
+          }
+        });
         }
         .layoutWeight(1).width('100%')
         .alignContent(Alignment.TopStart)
         // RESIZE changes this viewport in step with the system keyboard. The
         // area callback runs after the new List height is known, so pinning
         // here keeps message and composer motion visually locked together.
-        .onAreaChange((_old: Area, _area: Area) => {
+        .onAreaChange((_old: Area, area: Area) => {
+          const h: number = area.height as number;
+          if (Math.abs(h - this.listViewportH) > 0.5) {
+            this.listViewportH = h;
+          }
           if (this.keyboardH > 0 && this.imeTailPinned) {
             this.syncTailOnImeFrame();
           }

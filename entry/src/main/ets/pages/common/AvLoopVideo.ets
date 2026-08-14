@@ -12,6 +12,9 @@ export struct AvLoopVideo {
   @Prop boxWidth: number = 100;
   @Prop boxHeight: number = 100;
   @Prop loop: boolean = true;
+  // 圆形视频是"点一下放一遍并出声"，和贴纸/GIF 的静音循环不是一回事。
+  @Prop muted: boolean = true;
+  onFinished: () => void = (): void => {};
   onFailed: () => void = (): void => {};   // codec/demux failure — caller may fall back
   onWorking: () => void = (): void => {};  // first successful playback
   private player: media.AVPlayer | null = null;
@@ -65,7 +68,7 @@ export struct AvLoopVideo {
           });
         } else if (state === 'prepared') {
           p.loop = this.loop;
-          p.setVolume(0);
+          p.setVolume(this.muted ? 0 : 1);
           p.play().catch((e: Object) => {
             console.error(`AvLoopVideo.play failed: ${JSON.stringify(e)}`);
             this.onFailed();
@@ -73,6 +76,9 @@ export struct AvLoopVideo {
         } else if (state === 'playing') {
           console.info(`AvLoopVideo playing: ${this.videoPath}`);
           this.onWorking();
+        } else if (state === 'completed') {
+          // 非循环播放（圆形视频）播完要通知调用方收回播放态。
+          this.onFinished();
         }
       });
       p.on('error', (err: Object) => {

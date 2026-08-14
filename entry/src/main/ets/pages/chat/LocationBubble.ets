@@ -15,7 +15,11 @@ export struct LocationBubble {
   @Prop venueProvider: string = '';
   @Prop proximityRadius: number = 0;
   @Prop maxWidth: number = 250;
+  // 本机正在共享的就是这一条。停止入口必须长在气泡上——之前只放在会话页顶部
+  // 的「⋯」菜单里，用户盯着气泡根本找不到。
+  @Prop sharing: boolean = false;
   onOpen: () => void = (): void => {};
+  onStopLive: () => void = (): void => {};
 
   @Styles
   private cardNormalStyle(): void {
@@ -33,14 +37,20 @@ export struct LocationBubble {
     return this.valid || this.venueTitle.trim() !== '' || this.venueAddress.trim() !== '';
   }
 
+  // 判活必须以 expires_in 为准，不能只看"发送时间 + 时长"这个窗口：主动停止
+  // 共享后 live_period 不变，窗口照旧是开的，左上角就会一直亮着绿色"实时"。
+  // 服务端结束共享时把 expires_in 置 0，这才是唯一能反映"提前停止"的信号。
   private liveActive(): boolean {
     if (this.livePeriod <= 0) {
+      return false;
+    }
+    if (this.expiresIn <= 0) {
       return false;
     }
     if (this.messageDate > 0) {
       return this.nowSec < this.messageDate + this.livePeriod;
     }
-    return this.expiresIn > 0;
+    return true;
   }
 
   private liveRemaining(): number {
@@ -163,7 +173,22 @@ export struct LocationBubble {
             .fontSize(13).fontColor([COLOR_TEXT_SECONDARY]);
         }
       }
-      .padding({ left: 2, right: 30, bottom: 10 });
+      .padding({ left: 2, right: 30, bottom: this.sharing ? 4 : 10 });
+      if (this.sharing) {
+        Row({ space: 6 }) {
+          SymbolGlyph($r('sys.symbol.stop_circle')).fontSize(16).fontColor(['#D95B57']);
+          Text('停止共享')
+            .fontSize(13).fontWeight(FontWeight.Medium).fontColor('#D95B57');
+        }
+        .justifyContent(FlexAlign.Center)
+        .width('100%').height(34)
+        .backgroundColor('#14D95B57')
+        .borderRadius(8)
+        // 气泡右下角浮着时间和已读对号（详情行靠 right:30 给它让位）。这一条
+        // 是整宽的，只能靠下方留一条空带让浮层落在它外面。
+        .margin({ bottom: 22 })
+        .onClick((): void => { this.onStopLive(); });
+      }
     }
     .width(Math.max(210, Math.min(270, this.maxWidth)))
     .stateStyles({

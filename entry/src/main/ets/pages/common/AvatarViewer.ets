@@ -8,10 +8,15 @@ const MAX_SCALE: number = 4;
 export struct AvatarViewer {
   @Prop imagePath: string;
   onClose: () => void = (): void => {};
+  // 全屏浮层要自己避让状态栏，否则关闭按钮会被压在状态栏下点不到。
+  @StorageProp('topSafeHeight') topSafe: number = 0;
+  // 打开/关闭动画的缩放中心，取头像被点击时的屏幕坐标。不传就退化成从
+  // 屏幕中心放大，观感上仍然连贯。
+  @Prop originX: number = 0;
+  @Prop originY: number = 0;
   @State private zoom: number = MIN_SCALE;
   @State private offsetX: number = 0;
   @State private offsetY: number = 0;
-  @State private closing: boolean = false;
   // 手势起始基准：pinch/pan 的增量都相对手势开始时的值，避免累积漂移。
   private baseScale: number = MIN_SCALE;
   private baseOffsetX: number = 0;
@@ -31,13 +36,25 @@ export struct AvatarViewer {
     return this.imagePath.startsWith('/') ? `file://${this.imagePath}` : this.imagePath;
   }
 
+  // 未传点击坐标时不指定中心，ArkUI 会退回元素中心——比固定成左上角(0,0)
+  // 自然得多（下载列表预览就是这种没有明确来源点的场景）。
+  private openTransition(): TransitionEffect {
+    const scaled: ScaleOptions = this.originX > 0 || this.originY > 0
+      ? { x: 0.25, y: 0.25, centerX: this.originX, centerY: this.originY }
+      : { x: 0.25, y: 0.25 };
+    return TransitionEffect.scale(scaled)
+      .combine(TransitionEffect.OPACITY)
+      .animation({ duration: 300, curve: Curve.Friction });
+  }
+
   build() {
     Stack({ alignContent: Alignment.TopEnd }) {
       Column()
         .width('100%').height('100%')
         .backgroundColor(Color.Black)
         // 未放大时下滑关闭；放大后该手势让位给拖动。
-        .opacity(this.closing ? 0 : 1);
+        // 淡出交给根节点的 transition，这里不再单独改透明度，否则黑底会先
+        // 于图片瞬间消失。
       Image(this.imageSource())
         .width('100%')
         .height('100%')
@@ -75,7 +92,6 @@ export struct AvatarViewer {
               })
               .onActionEnd((): void => {
                 if (this.zoom <= MIN_SCALE + 0.01 && this.offsetY > 120) {
-                  this.closing = true;
                   this.onClose();
                   return;
                 }
@@ -116,9 +132,12 @@ export struct AvatarViewer {
       .width(40).height(40).borderRadius(20)
       .backgroundColor('#4D000000')
       .justifyContent(FlexAlign.Center)
-      .margin({ top: 12, right: 12 })
+      .margin({ top: this.topSafe + 12, right: 12 })
       .onClick((): void => this.onClose());
     }
-    .width('100%').height('100%');
+    .width('100%').height('100%')
+    // 和聊天页媒体查看器同一套过渡：从点击处放大 + 淡入，关闭时原路缩回。
+    // 时长与曲线保持一致，两个入口的观感才统一。
+    .transition(this.openTransition());
   }
 }

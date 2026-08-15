@@ -99,18 +99,22 @@ scripts/             TDLib/tgcalls 拉取与编译脚本、本地测试门禁
   `targetSdkVersion 6.1.1(24)`），含自带的 OpenHarmony SDK/NDK
 - `curl` 与 `file`（macOS/Linux 自带）
 
-### 1. 获取 `libtdjson.so`
+### 1. 获取原生库 `libtdjson.so` / `libtgcalls_ohos.so`
 
-应用以预编译原生库的形式内置 TDLib，路径为
-`entry/libs/arm64-v8a/libtdjson.so`（约 32 MB，未提交到仓库）。二选一：
+应用以预编译原生库的形式内置 TDLib 和 tgcalls，路径为
+`entry/libs/arm64-v8a/`（合计约 50 MB，未提交到仓库）。`libentry.so` 同时链接
+这两个库，**缺任何一个都会让构建停在 ninja 的
+`missing and no known rule to make it`**。二选一：
 
 **方式 A — 下载预编译产物（推荐）：**
 
 ```bash
-bash scripts/fetch-tdlib.sh [tag]   # 从本仓库的 GitHub Releases 下载
+bash scripts/fetch-libs.sh [tag]   # 两个库一起从本仓库的 GitHub Releases 下载
 ```
 
-在包含该产物的 Release 发布之前，脚本会有意地以 404 失败，并提示你改用方式 B。
+不带参数时脚本会自动解析最新的 Release。注意不要退回用滚动 tag
+`tdlib-latest`：它的 `libtdjson.so` 保持更新，但 `libtgcalls_ohos.so` 落后于各个
+版本化 Release，在两个库都必需之后已不适合作为默认值。
 
 **方式 B — 从源码编译（较新的 Mac 上约 10-15 分钟）：**
 
@@ -122,7 +126,7 @@ bash scripts/build-tdlib.sh
 
 该脚本端到端封装了
 [`ErBWs/tdlib-ohos-build`](https://github.com/ErBWs/tdlib-ohos-build)：用 DevEco
-NDK 为 arm64-v8a 交叉编译 OpenSSL（静态，`1_1_1w`）与 TDLib（release **1.8.54**），
+NDK 为 arm64-v8a 交叉编译 OpenSSL（静态，`1_1_1w`）与 TDLib（release **1.8.65**），
 在宿主机预先生成 TDLib 的 TL-schema 源码（交叉编译时必需），用 `patchelf` 把
 SONAME 规范化为 `libtdjson.so`（不做这一步，原生桥会**静默**加载失败），
 最后把产物拷贝到 `entry/libs/arm64-v8a/`。脚本还修复了上游构建脚本的若干 macOS
@@ -134,7 +138,8 @@ SONAME 规范化为 `libtdjson.so`（不做这一步，原生桥会**静默**加
 并提供 RTC 与频道广播的音视频收发。当前支持普通视频聊天的本机开麦、前后摄像头
 切换、系统录屏推流和多路远端摄像头/屏幕共享，同时支持 TDLib 分片直播及 RTMP
 unified 直播观看；画面直接渲染到 ArkUI XComponent，音频通过 OHAudio 播放/采集。
-该原生库同样不提交到仓库，首次构建前运行：
+
+如果上一步用了方式 A，这个库已经一并下载好了，本节可跳过。只有需要自行编译时才运行：
 
 ```bash
 bash scripts/build-tgcalls-ohos.sh

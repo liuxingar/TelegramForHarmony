@@ -12,14 +12,12 @@ import { common, abilityAccessCtrl, Permissions } from '@kit.AbilityKit';
 import { geoLocationManager } from '@kit.LocationKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { PollComposeSheet } from './PollComposeSheet';
-import { formatPreview } from '../../util/formatPreview';
 import { ContactPickerSheet, PickedContact } from './ContactPickerSheet';
 import { VideoNoteRecorderView } from './VideoNoteRecorderView';
 import { picker, fileIo as fs } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { VoiceRecorder } from '../../services/VoiceRecorder';
 import { formatDateSeparator } from '../../util/formatDateSeparator';
-import { formatTime } from '../../util/formatTime';
 import { fileOpenMimeType } from '../../util/fileMessage';
 import { resolveEmojiStatus } from '../../util/emojiStatus';
 import { TgsStickerView } from './TgsStickerView';
@@ -31,13 +29,25 @@ import { getVoicePlayback } from '../../services/VoicePlayback';
 import { openLocalFile } from '../../util/openLocalFile';
 import { saveMediaToGallery, saveFileToLocal } from '../../util/mediaSaver';
 import { getTdClient, getUserStore, getChatStore, getChatThemeStore } from '../../tdkit/Globals';
-import { fillColorsOf } from '../../util/backgroundPresentation';
 import { MessageStore, MediaSendItem } from '../../store/MessageStore';
 import { MessageEntry, buildMessageEntry } from '../../store/MessageEntry';
 import { ReplyKeyboard, KeyboardBtn, KB_TEXT } from '../../store/ReplyKeyboard';
 import { ChatEntry, computeInitials, isMutedFrom } from '../../store/ChatEntry';
 import { MessageBubble } from './MessageBubble';
-import { StreamingVideoPlayer } from './StreamingVideoPlayer';
+import { MediaViewerOverlay } from './MediaViewerOverlay';
+import { ForwardSheet } from './ForwardSheet';
+import { ScheduledSheet } from './ScheduledSheet';
+import { ReactionSheet } from './ReactionSheet';
+import { cacheDestPath, isVideoPath } from '../../util/mediaPick';
+import {
+  ChatBackgroundState, ChatBackgroundStore, emptyChatBackground
+} from '../../store/ChatBackgroundStore';
+import { gradientStops } from '../../util/backgroundPresentation';
+import {
+  chatHeaderPresentation, chatHeaderTitle, ChatHeaderPresentation
+} from '../../util/chatHeaderPresentation';
+import { MusicQueue } from '../../services/MusicQueue';
+import { VoiceState } from '../../services/VoicePlayback';
 import { setMediaViewerOrientation } from './LiveViewerUi';
 import { AlbumGroupDataSource } from './AlbumGroupDataSource';
 import { collapseAlbums, groupIndexOf, AlbumGroup } from '../../util/collapseAlbums';
@@ -59,10 +69,8 @@ import {
 } from '../../util/openTelegramLink';
 import { openUrl } from '../../util/openUrl';
 import {
-  AvailableReactionSet, customEmojiReactionKey, parseAvailableReactions, reactionDisplayLabel,
-  reactionKeyFrom, reactionTypeOf
+  reactionDisplayLabel, reactionTypeOf
 } from '../../util/reactions';
-import { resolveCustomEmojiThumbs } from '../../util/customEmojiThumbs';
 import { openWebUrl } from '../../util/webBrowserNav';
 import { TdObject, TdRequest, TdError } from '../../tdkit/TdTypes';
 import { searchMentions, loadBotCommands, MentionItem, CommandItem } from '../../store/InputSuggestions';
@@ -83,10 +91,6 @@ const PINNED_SEG_MAX: number = 5;
 const JUMP_RELOAD_THRESHOLD: number = 40;
 // Grace period before an entered-from-global-search chat runs its in-chat search.
 const SEARCH_ENTRY_DELAY_MS: number = 400;
-const VIEWER_CHROME_BG: string = '#6e3e3e40';
-const VIEWER_MIN_SCALE: number = 1;
-const VIEWER_MAX_SCALE: number = 4;
-const VIEWER_DOUBLE_TAP_SCALE: number = 2.5;
 // 等上下文菜单收起再弹确认框：菜单是独立子窗口，收起过程中弹出的
 // 对话框会挂死（Promise 既不 resolve 也不 reject）。
 const MENU_DISMISS_MS: number = 150;
@@ -104,28 +108,8 @@ const CHAT_HEADER_NAV_GUARD_MS: number = 700;
 const TOP_CARD_LOADING_DELAY_MS: number = 180;
 const TOP_CARD_ACTION_GUARD_MS: number = 650;
 
-// Contain-fitted display size (vp) of the fullscreen photo at 1x.
-interface ViewerFit {
-  w: number;
-  h: number;
-}
 // Emoji offered in the full reaction picker (opened from the long-press menu's
 // chevron). Ordered roughly like the official client's reaction sheet.
-const REACTION_EMOJIS: string[] = [
-  '❤️', '👍', '👎', '🔥', '🥰', '👏', '😁', '🤔', '🤯', '😱', '🤬', '😢',
-  '🎉', '🤩', '🤮', '💩', '🙏', '👌', '🕊️', '🤡', '🥱', '🥴', '😍', '🐳',
-  '❤️‍🔥', '🌚', '🌭', '💯', '🤣', '⚡', '🍌', '🏆', '💔', '🤨', '😐', '🍓',
-  '🍾', '💋', '🖕', '😈', '😴', '😭', '🤓', '👻', '👀', '🎃', '🙈', '😇',
-  '😨', '🤝', '✍️', '🤗', '🫡', '🎅', '🎄', '☃️', '💅', '🤪', '🗿', '🆒',
-  '💘', '🙉', '🦄', '😘', '💊', '🙊', '😎', '👾', '🤷', '😡'
-];
-
-// 反应面板里的一枚自定义 emoji：位图路径为 '' 表示还在下载。
-interface CustomEmojiOption {
-  id: string;
-  path: string;
-}
-
 @Entry
 @Preview
 @Component
@@ -143,10 +127,16 @@ struct ChatPage {
   // Rendered through the LazyForEach data source (incremental notifications keep
   // scroll position on prepend); the plain array mirror serves index lookups.
   // Keep the count reactive because groups itself is intentionally not @State.
-  private groups: AlbumGroup[] = [];
+  // @State (not a plain field) so MediaViewerOverlay can take it by @Link:
+  // @Link requires its source to be a state variable, and a plain field handed
+  // to a child would freeze at its construction-time value, breaking album
+  // paging in the viewer once more history loads.
+  @State groups: AlbumGroup[] = [];
   private groupsData: AlbumGroupDataSource = new AlbumGroupDataSource();
   @State subtitle: string = '';
-  @State typingLabel: string = '';   // "×× 正在输入…" — overrides subtitle while live
+  // "×× 正在输入…" — shown as the composer placeholder while live, not in the
+  // header subtitle (see composerPlaceholder).
+  @State typingLabel: string = '';
   private typingSenders: Map<number, number> = new Map(); // senderId -> expiry ms
   private typingTimer: number = -1;
   private unsubChatAction: (() => void) | null = null;
@@ -167,22 +157,13 @@ struct ChatPage {
   @State powerBackgroundPhase: boolean = false;
   // TDLib per-chat wallpaper. Solid/gradient fills render immediately;
   // wallpaper and pattern documents appear as soon as downloadFile completes.
-  @State chatBackgroundCustom: boolean = false;
-  @State chatBackgroundColors: string[] = [];
-  @State chatBackgroundAngle: number = 180;
-  @State chatBackgroundPath: string = '';
-  @State chatBackgroundImageOpacity: number = 1;
-  @State chatBackgroundDimming: number = 0;
-  @State chatBackgroundBlurred: boolean = false;
-  @State themeBubbleOutColor: string = '';
-  private chatBackgroundFileId: number = 0;
-  private chatBackgroundSignature: string = '';
-  private chatBackgroundResolveSeq: number = 0;
-  private unsubChatBackground: (() => void) | null = null;
+  // One snapshot in place of the nine background state variables this replaces.
+  // Resolution (chat background → theme → account default → installed default)
+  // and its four TDLib subscriptions live in ChatBackgroundStore.
+  @State chatBg: ChatBackgroundState = emptyChatBackground();
+  private bgStore: ChatBackgroundStore | null = null;
+  private unsubBg: (() => void) | null = null;
   private unsubTranslatable: (() => void) | null = null;
-  private unsubChatTheme: (() => void) | null = null;
-  private unsubDefaultBackground: (() => void) | null = null;
-  private unsubBackgroundFile: (() => void) | null = null;
   private powerBackgroundTimer: number = -1;
   private readonly powerParticleIds: number[] = [0, 1, 2, 3, 4, 5, 6, 7];
   @State replyToId: number = 0;      // message being replied to (0 = none)
@@ -194,13 +175,9 @@ struct ChatPage {
   private draftBeforeEdit: string = ''; // composer text stashed while editing
   @State showReactionSheet: boolean = false; // full emoji reaction picker
   @State reactionTargetId: number = 0;
-  // Reactions this chat actually allows for the sheet's target message,
-  // fetched per open; the static list is only the instant fallback.
-  @State sheetReactions: string[] = [];
-  // 自定义 emoji（Premium）反应：仅当服务端 allow_custom_emoji 为 true 时展示，
-  // 位图异步下载，未就绪时先渲染占位格子。
-  @State sheetCustomEmojis: CustomEmojiOption[] = [];
-  @State sheetAllowCustomEmoji: boolean = false;
+  // The allowed-emoji list and custom-emoji thumbnails live in ReactionSheet,
+  // which fetches them per open. Only the in-flight key stays here: the quick
+  // reaction row on each bubble issues the same request and shares the guard.
   @State reactionPendingKey: string = '';
   @State paidMediaPendingIds: number[] = [];
   // Forwarding is deliberately kept as an in-page sheet: leaving ChatPage to
@@ -209,17 +186,11 @@ struct ChatPage {
   @State showPollSheet: boolean = false;
   @State showContactSheet: boolean = false;
   @State showVideoNoteRecorder: boolean = false;
+  // The list itself lives in ScheduledSheet and reloads on each open.
   @State showScheduledSheet: boolean = false;
-  @State scheduledIds: number[] = [];
-  @State scheduledPreviews: string[] = [];   // 与 scheduledIds 平行
-  @State scheduledTimeLabels: string[] = []; // 与 scheduledIds 平行
-  @State scheduledLoadState: string = 'idle'; // idle | loading | ready | error
-  @State forwardChats: ChatEntry[] = [];
-  @State forwardQuery: string = '';
-  @State forwardLoadState: string = 'ready'; // loading | ready | error
-  @State forwardSendingChatId: number = 0;
+  // Which messages the picker will forward. The picker's own list/query/send
+  // state lives in ForwardSheet and resets with it on each open.
   private forwardMessageIds: number[] = [];
-  private forwardPickerSeq: number = 0;
   @State nowSec: number = 0;
   private nowSecTimer: number = -1;
   @State viewerMsgId: number = 0;
@@ -232,34 +203,10 @@ struct ChatPage {
   @State pausedAnimationIds: number[] = [];
   @State forcedAnimationIds: number[] = [];
   @State failedAnimationIds: number[] = [];
-  @State viewerInitIdx: number = 0; // Swiper's initial page when the viewer opens
-  // Fullscreen-photo zoom is viewer-owned. Keeping it separate from the
-  // message thumbnail prevents the preview gesture/transition from mutating a
-  // recycled Image node in the chat list.
-  //
-  // Model (per the official picture-preview best practice): the Image scales
-  // around its own center and pans via translate, so screen = offset + scale
-  // * content-point (measured from the image center). Pinch anchoring and
-  // boundary clamping are both computed against that model.
-  @State viewerPhotoScale: number = VIEWER_MIN_SCALE;
-  @State viewerPhotoOffsetX: number = 0;
-  @State viewerPhotoOffsetY: number = 0;
-  private viewerPinchStartScale: number = VIEWER_MIN_SCALE;
-  private viewerPinchStartOffsetX: number = 0;
-  private viewerPinchStartOffsetY: number = 0;
-  // Pinch anchor relative to the viewer center (vp) — the content point that
-  // was under the fingers at pinch start stays under them while zooming.
-  private viewerPinchAnchorX: number = 0;
-  private viewerPinchAnchorY: number = 0;
-  private viewerPanStartOffsetX: number = 0;
-  private viewerPanStartOffsetY: number = 0;
-  // Viewer viewport size in vp, captured via onAreaChange on the Swiper.
-  private viewerAreaW: number = 0;
-  private viewerAreaH: number = 0;
-  // Some devices synthesize a click when the last finger of a pinch lifts.
-  // Ignore that click briefly so a completed zoom is not immediately reset.
-  private viewerIgnoreTapUntilMs: number = 0;
-  private viewerSwiperCtrl: SwiperController = new SwiperController();
+  // Swiper's initial page when the viewer opens. Plain field, not @State: it is
+  // read once when MediaViewerOverlay is constructed, which happens after this
+  // has already been set by onMediaTap.
+  private viewerInitIdx: number = 0;
   @State swipeDir: number = 1; // 1 = advancing forward (next), -1 = going back — drives the slide direction
   // Window coordinates (vp) of the tap that opened the viewer — anchor for its
   // expand-from-tap open / shrink-back-to-tap close transition.
@@ -405,7 +352,25 @@ struct ChatPage {
   // A tapped music message starts automatically once its on-demand download
   // completes. Only the latest tap owns this slot, so rapid track changes
   // cannot make an older download steal playback later.
-  private pendingMusicPlayId: number = 0;
+  // Audio playback queue over this chat's music messages. Its logic (ordering,
+  // the download-then-play hand-off, previous-vs-rewind) lives in MusicQueue and
+  // is unit-tested there; this page only supplies the I/O.
+  private musicQueue: MusicQueue = new MusicQueue({
+    currentState: (): VoiceState => getVoicePlayback().current(),
+    toggleMusic: (id: number, path: string, dur: number): void => {
+      getVoicePlayback().toggleMusic(id, path, dur);
+    },
+    startMusic: (id: number, path: string, dur: number): void => {
+      getVoicePlayback().startMusic(id, path, dur);
+    },
+    seek: (id: number, fraction: number): void => { getVoicePlayback().seek(id, fraction); },
+    requestDownload: (id: number, failed: boolean): void => {
+      this.store?.requestVideoDownload(id, false, failed);
+    },
+    toast: (message: string, durationMs: number): void => {
+      promptAction.showToast({ message, duration: durationMs });
+    }
+  });
   // Messages with id above this slide in from the bottom (live arrivals only —
   // 0 disables, so rows created while scrolling history never animate).
   @State freshSinceId: number = 0;
@@ -524,7 +489,7 @@ struct ChatPage {
     this.pendingFileOpenId = 0;
     this.pendingFileSaveId = 0;
     this.fileOpenInFlightId = 0;
-    this.pendingMusicPlayId = 0;
+    this.musicQueue.reset();
     this.olderArmed = true;
     this.freshSinceId = 0;
     this.freshClearSeq++;
@@ -581,13 +546,7 @@ struct ChatPage {
     this.reactionTargetId = 0;
     this.reactionPendingKey = '';
     this.paidMediaPendingIds = [];
-    this.forwardPickerSeq++;
-    this.showForwardSheet = false;
-    this.forwardChats = [];
-    this.forwardQuery = '';
-    this.forwardLoadState = 'ready';
-    this.forwardSendingChatId = 0;
-    this.forwardMessageIds = [];
+    this.closeForwardSheet();
   }
 
   private isRealClientJoinNotice(message: MessageEntry): boolean {
@@ -704,7 +663,7 @@ struct ChatPage {
       this.clientJoinNoticeEntryCache = null;
     }
     getVoicePlayback().setMusicCompletionListener((messageId: number): void => {
-      this.onMusicCompleted(messageId);
+      this.musicQueue.onCompleted(this.messages, messageId);
     });
     let scrollResumeWaiting: boolean = this.resumeScrollPending &&
       this.resumeScrollChatId === this.chatId &&
@@ -760,11 +719,10 @@ struct ChatPage {
     this.refreshHeader();
     this.unsubChatAction = getTdClient().onUpdate('updateChatAction',
       (u: TdObject): void => this.onChatAction(u));
-    this.unsubChat = getChatStore().subscribe((list: ChatEntry[]) => {
+    // ForwardSheet subscribes to the chat list itself while it is open, so this
+    // no longer has to push updates into it.
+    this.unsubChat = getChatStore().subscribe(() => {
       this.refreshHeader();
-      if (this.showForwardSheet) {
-        this.updateForwardChats(list);
-      }
     }, 'main');
     // Chat backgrounds have their own TDLib update and can change without a
     // title/message update. Listen directly so setting or clearing one is
@@ -781,54 +739,16 @@ struct ChatPage {
           this.isTranslatable = (u['is_translatable'] as boolean | undefined) ?? false;
         }
       });
-    this.unsubChatBackground = getTdClient().onUpdate('updateChatBackground', (u: TdObject) => {
-      if ((u['chat_id'] as number | undefined) === this.chatId) {
-        const seq = ++this.chatBackgroundResolveSeq;
-        const background = this.objectOrNull(u['background']);
-        if (background !== null) {
-          this.applyChatBackground(background);
-        } else {
-          this.applyDefaultBackground(seq);
-        }
-      }
+    // Background resolution and its four TDLib subscriptions now live in the
+    // store; the page only mirrors its snapshot into state.
+    this.bgStore = new ChatBackgroundStore(
+      getTdClient(), getChatStore(), getChatThemeStore(),
+      (): boolean => this.darkResourceMode()
+    );
+    this.unsubBg = this.bgStore.subscribe((state: ChatBackgroundState): void => {
+      this.chatBg = state;
     });
-    this.unsubChatTheme = getTdClient().onUpdate('updateChatTheme', (u: TdObject) => {
-      if ((u['chat_id'] as number | undefined) !== this.chatId) {
-        return;
-      }
-      const seq = ++this.chatBackgroundResolveSeq;
-      const themeName = (u['theme_name'] as string | undefined) ?? '';
-      if (themeName === '') {
-        const specific = getChatStore().entryOf(this.chatId)?.background ?? null;
-        if (specific !== null) {
-          this.applyChatBackground(specific);
-        } else {
-          this.applyDefaultBackground(seq);
-        }
-      } else {
-        this.resolveThemeBackground(themeName, seq);
-      }
-    });
-    this.unsubDefaultBackground = getTdClient().onUpdate('updateDefaultBackground', (u: TdObject) => {
-      const forDarkTheme = (u['for_dark_theme'] as boolean | undefined) ?? false;
-      if (forDarkTheme !== this.darkResourceMode() || this.hasSpecificBackground()) {
-        return;
-      }
-      const seq = ++this.chatBackgroundResolveSeq;
-      const background = this.objectOrNull(u['background']);
-      if (background !== null) {
-        this.applyChatBackground(background);
-      } else {
-        this.loadInstalledDefaultBackground(forDarkTheme, seq);
-      }
-    });
-    this.unsubBackgroundFile = getTdClient().onUpdate('updateFile', (u: TdObject) => {
-      const file = u['file'] as TdObject | undefined;
-      if (file !== undefined) {
-        this.applyBackgroundFile(file);
-      }
-    });
-    this.refreshChatBackground();
+    this.bgStore.open(this.chatId);
     this.unsubMembershipSupergroup = getTdClient().onUpdate('updateSupergroup', (u: TdObject) => {
       const supergroup = u['supergroup'] as TdObject | undefined;
       if (supergroup !== undefined &&
@@ -940,7 +860,7 @@ struct ChatPage {
         this.closeViewer();
       }
       const updateKind: string = this.groupsData.update(groups);
-      this.settlePendingMusic(list);
+      this.musicQueue.settlePending(list);
       // Incremental ops (the normal prepend) keep the viewport anchored via
       // maintainVisibleContentPosition; forcing scrollToIndex on top of that
       // cancelled the user's fling mid-scroll — the load-more stutter. Only a
@@ -1317,10 +1237,7 @@ struct ChatPage {
     this.store?.saveDraft(
       this.editingId !== 0 ? this.draftBeforeEdit : this.draft, this.replyToId
     );
-    if (this.viewerVideoLandscape) {
-      this.viewerVideoLandscape = false;
-      setMediaViewerOrientation(getContext(this) as common.UIAbilityContext, false);
-    }
+    this.exitViewerLandscape();
     this.captureScrollResume();
     this.bottomChromeLayoutSeq++;
     this.imeTailPinned = false;
@@ -1329,9 +1246,7 @@ struct ChatPage {
     this.headerMenuShow = false;
     this.showReactionSheet = false;
     this.reactionTargetId = 0;
-    this.forwardPickerSeq++;
-    this.showForwardSheet = false;
-    this.forwardSendingChatId = 0;
+    this.closeForwardSheet();
     this.headerProfileOpening = false;
     this.headerMuteUpdating = false;
     this.pageClosing = false;
@@ -1371,7 +1286,7 @@ struct ChatPage {
     this.pendingFileOpenId = 0;
     this.pendingFileSaveId = 0;
     this.fileOpenInFlightId = 0;
-    this.pendingMusicPlayId = 0;
+    this.musicQueue.reset();
     this.autoSavePendingIds = [];
     this.autoSaveInFlight = false;
     getVoicePlayback().setMusicCompletionListener(null);
@@ -1387,21 +1302,13 @@ struct ChatPage {
       this.unsubTranslatable();
       this.unsubTranslatable = null;
     }
-    if (this.unsubChatBackground !== null) {
-      this.unsubChatBackground();
-      this.unsubChatBackground = null;
+    if (this.unsubBg !== null) {
+      this.unsubBg();
+      this.unsubBg = null;
     }
-    if (this.unsubChatTheme !== null) {
-      this.unsubChatTheme();
-      this.unsubChatTheme = null;
-    }
-    if (this.unsubDefaultBackground !== null) {
-      this.unsubDefaultBackground();
-      this.unsubDefaultBackground = null;
-    }
-    if (this.unsubBackgroundFile !== null) {
-      this.unsubBackgroundFile();
-      this.unsubBackgroundFile = null;
+    if (this.bgStore !== null) {
+      this.bgStore.close();
+      this.bgStore = null;
     }
     if (this.unsubPinned !== null) { this.unsubPinned(); this.unsubPinned = null; }
     if (this.unsubHeaderAvatar !== null) { this.unsubHeaderAvatar(); this.unsubHeaderAvatar = null; }
@@ -1769,13 +1676,6 @@ struct ChatPage {
     return powerGroupAnimationDuration(KEY_POWER_CHAT_EFFECTS, key, duration);
   }
 
-  private reactionEffectDuration(duration: number): number {
-    if (!powerGroupFeatureEnabled(KEY_POWER_EMOJI, KEY_POWER_EMOJI_REACTIONS)) {
-      return 0;
-    }
-    return this.chatEffectDuration(KEY_POWER_EFFECT_REACTION, duration);
-  }
-
   private animationPaused(messageId: number): boolean {
     return this.pausedAnimationIds.indexOf(messageId) >= 0;
   }
@@ -1895,33 +1795,36 @@ struct ChatPage {
         this.store?.requestVideoDownload(messageId, false, true);
       }
     }
-    this.viewerIgnoreTapUntilMs = 0;
-    this.resetViewerPhotoZoom(false);
     animateTo({ duration: this.chatEffectDuration(KEY_POWER_EFFECT_BLUR, 300), curve: Curve.Friction }, () => {
       this.onMediaTap(messageId);
     });
   }
 
+  // Zoom/pan state no longer needs resetting here: MediaViewerOverlay owns it
+  // and is destroyed with the `viewerMsgId !== 0` branch, so the next open
+  // starts from a fresh instance at 1x.
   private closeViewer(): void {
     if (this.viewerMsgId === 0 || this.viewerClosing) {
       return;
     }
-    if (this.viewerVideoLandscape) {
-      this.setViewerVideoLandscape(false);
-    }
+    this.exitViewerLandscape();
     const duration: number = this.chatEffectDuration(KEY_POWER_EFFECT_BLUR, 260);
     this.viewerClosing = true;
     animateTo({ duration, curve: Curve.Friction }, () => {
-      this.viewerPhotoScale = VIEWER_MIN_SCALE;
-      this.viewerPhotoOffsetX = 0;
-      this.viewerPhotoOffsetY = 0;
-      this.viewerPinchStartScale = VIEWER_MIN_SCALE;
-      this.viewerIgnoreTapUntilMs = 0;
       this.viewerMsgId = 0;
       this.viewerInitIdx = 0;
       this.chromeVisible = true;
     });
     setTimeout((): void => { this.viewerClosing = false; }, Math.max(80, duration));
+  }
+
+  // Leaving the viewer in landscape would strand the chat page sideways.
+  private exitViewerLandscape(): void {
+    if (!this.viewerVideoLandscape) {
+      return;
+    }
+    this.viewerVideoLandscape = false;
+    setMediaViewerOrientation(getContext(this) as common.UIAbilityContext, false);
   }
 
   // System back (gesture/hardware button): close the fullscreen viewer first
@@ -1946,7 +1849,7 @@ struct ChatPage {
     }
     if (this.viewerMsgId !== 0) {
       if (this.viewerVideoLandscape) {
-        this.setViewerVideoLandscape(false);
+        this.exitViewerLandscape();
         return true;
       }
       this.closeViewer();
@@ -2154,13 +2057,6 @@ struct ChatPage {
     }
   }
 
-  // Bottom inset for bars (empirically tuned on device): with the keyboard up
-  // the bar needs lifting clear of the IME edge; without it the layout already
-  // sits above the gesture bar, so only minimal padding applies.
-  private bottomInset(): number {
-    return this.keyboardH > 0 ? Math.max(this.bottomSafe, 12) : this.bottomSafe;
-  }
-
   // Fire at most one loadOlder per arm (see olderArmed).
   private maybeLoadOlder(): void {
     if (this.olderArmed && this.store !== null) {
@@ -2213,14 +2109,10 @@ struct ChatPage {
     this.subtitle = '';
     this.avatarPath = '';
     this.initials = '?';
-    this.title = this.forumTopicId > 0
-      ? (this.topicName !== '' ? this.topicName : '话题')
-      : (this.threadRootId > 0 ? (this.topicName !== '' ? this.topicName : '评论') : '');
+    this.title = this.chatHeaderTitleNow('');
     this.isMuted = false;
     if (cached !== undefined) {
-      if (this.threadRootId === 0 && this.forumTopicId === 0) {
-        this.title = cached.title;
-      }
+      this.title = this.chatHeaderTitleNow(cached.title);
       this.initials = cached.initials;
       this.avatarPath = cached.avatarPath;
       this.isMuted = cached.isMuted;
@@ -2318,6 +2210,27 @@ struct ChatPage {
     this.fetchHeaderEmojiStatus();
   }
 
+  // Header title/subtitle wording lives in chatHeaderPresentation, where the
+  // "cached title beats a pending load" and error-fallback rules are tested.
+  private chatHeaderTitleNow(chatTitle: string): string {
+    return chatHeaderTitle({
+      chatTitle,
+      topicName: this.topicName,
+      forumTopicId: this.forumTopicId,
+      threadRootId: this.threadRootId
+    });
+  }
+
+  private headerText(): ChatHeaderPresentation {
+    return chatHeaderPresentation({
+      title: this.title,
+      subtitle: this.subtitle,
+      state: this.headerState,
+      loadError: this.headerLoadError,
+      kind: this.headerKind
+    });
+  }
+
   private resolveHeaderIdentity(): void {
     if (this.chatId === 0) {
       this.headerState = 'error';
@@ -2345,46 +2258,12 @@ struct ChatPage {
     });
   }
 
-  private headerTitleText(): string {
-    if (this.title !== '') {
-      return this.title;
-    }
-    return this.headerState === 'error' ? '无法读取聊天' : '正在加载';
-  }
-
-  private headerSubtitleText(): string {
-    if (this.subtitle !== '') {
-      return this.subtitle;
-    }
-    if (this.headerState === 'loading') {
-      return '正在获取会话信息…';
-    }
-    if (this.headerState === 'error') {
-      return this.headerLoadError !== '' ? this.headerLoadError : '点击重试';
-    }
-    if (this.headerKind === 'channel') {
-      return '频道';
-    }
-    if (this.headerKind === 'group') {
-      return '群组';
-    }
-    if (this.headerKind === 'secret') {
-      return '加密聊天';
-    }
-    return 'Telegram 用户';
-  }
-
   private refreshHeader(): void {
-    if (this.threadRootId > 0) {
-      // Comment-thread view: fixed title, the rest of the header still shows
-      // the discussion group's avatar/mute state.
-      this.title = '评论';
-    }
     const e: ChatEntry | undefined = getChatStore().entryOf(this.chatId);
+    // A topic/thread view keeps its own name; the rest of the header still
+    // shows the underlying chat's avatar and mute state.
+    this.title = this.chatHeaderTitleNow(e !== undefined ? e.title : this.title);
     if (e !== undefined) {
-      if (this.threadRootId === 0 && this.forumTopicId === 0) {
-        this.title = e.title;
-      }
       // Don't clobber a MessageStore-resolved avatar (channels/folders) with an empty one.
       if (e.avatarPath !== '') { this.avatarPath = e.avatarPath; }
       this.initials = e.initials;
@@ -2407,7 +2286,7 @@ struct ChatPage {
         }
       }
       if (e.background !== null) {
-        this.applyChatBackground(e.background);
+        this.bgStore?.applyKnownBackground(e.background);
       }
       this.syncLiveFromChatEntry(e);
     }
@@ -2436,206 +2315,6 @@ struct ChatPage {
     this.settleTopCardLoading();
   }
 
-  private objectOrNull(value: Object | null | undefined): TdObject | null {
-    return value !== undefined && value !== null ? value as TdObject : null;
-  }
-
-  private tdColor(value: number): string {
-    let hex = (value & 0xFFFFFF).toString(16).toUpperCase();
-    while (hex.length < 6) {
-      hex = `0${hex}`;
-    }
-    return `#${hex}`;
-  }
-
-  private fillColors(fill: TdObject | null): string[] {
-    if (fill === null) {
-      return [];
-    }
-    const type = (fill['@type'] as string | undefined) ?? '';
-    if (type === 'backgroundFillSolid') {
-      return [this.tdColor((fill['color'] as number | undefined) ?? 0)];
-    }
-    if (type === 'backgroundFillGradient') {
-      return [
-        this.tdColor((fill['top_color'] as number | undefined) ?? 0),
-        this.tdColor((fill['bottom_color'] as number | undefined) ?? 0)
-      ];
-    }
-    if (type === 'backgroundFillFreeformGradient') {
-      const values = (fill['colors'] as number[] | undefined) ?? [];
-      return values.map((color: number): string => this.tdColor(color));
-    }
-    return [];
-  }
-
-  private backgroundFile(background: TdObject, pattern: boolean): TdObject | null {
-    const document = this.objectOrNull(background['document']);
-    if (document === null) {
-      return null;
-    }
-    if (pattern) {
-      const thumbnail = this.objectOrNull(document['thumbnail']);
-      const thumbnailFile = thumbnail !== null ? this.objectOrNull(thumbnail['file']) : null;
-      if (thumbnailFile !== null) {
-        return thumbnailFile;
-      }
-    }
-    return this.objectOrNull(document['document']);
-  }
-
-  private localFilePath(file: TdObject): string {
-    const local = this.objectOrNull(file['local']);
-    if (local === null ||
-      !((local['is_downloading_completed'] as boolean | undefined) ?? false)) {
-      return '';
-    }
-    return (local['path'] as string | undefined) ?? '';
-  }
-
-  private applyBackgroundFile(file: TdObject): void {
-    const fileId = (file['id'] as number | undefined) ?? 0;
-    if (fileId === 0 || fileId !== this.chatBackgroundFileId) {
-      return;
-    }
-    const path = this.localFilePath(file);
-    if (path !== '' && path !== this.chatBackgroundPath) {
-      this.chatBackgroundPath = path;
-      console.info(`[ChatBackground] chat=${this.chatId} file=${fileId} ready=true`);
-    }
-  }
-
-  private requestBackgroundFile(file: TdObject): void {
-    const fileId = (file['id'] as number | undefined) ?? 0;
-    this.chatBackgroundFileId = fileId;
-    if (fileId <= 0) {
-      return;
-    }
-    const localPath = this.localFilePath(file);
-    if (localPath !== '') {
-      this.chatBackgroundPath = localPath;
-      console.info(`[ChatBackground] chat=${this.chatId} file=${fileId} cached=true`);
-      return;
-    }
-    console.info(`[ChatBackground] chat=${this.chatId} file=${fileId} download=true`);
-    const request: TdRequest = { '@type': 'downloadFile' };
-    request['file_id'] = fileId;
-    request['priority'] = 1;
-    request['offset'] = 0;
-    request['limit'] = 0;
-    request['synchronous'] = false;
-    getTdClient().send(request).then((downloaded: TdObject): void => {
-      this.applyBackgroundFile(downloaded);
-    }).catch((error: TdError): void => {
-      console.error(`ChatPage background download ${fileId} failed: ${error.message}`);
-    });
-  }
-
-  private applyChatBackground(chatBackground: TdObject | null): void {
-    const signature = chatBackground !== null ? JSON.stringify(chatBackground) : 'none';
-    if (signature === this.chatBackgroundSignature) {
-      return;
-    }
-    this.chatBackgroundSignature = signature;
-    this.chatBackgroundCustom = false;
-    this.chatBackgroundColors = [];
-    this.chatBackgroundAngle = 180;
-    this.chatBackgroundPath = '';
-    this.chatBackgroundImageOpacity = 1;
-    this.chatBackgroundDimming = 0;
-    this.chatBackgroundBlurred = false;
-    this.chatBackgroundFileId = 0;
-    if (chatBackground === null) {
-      return;
-    }
-
-    // Chat.background is a chatBackground wrapper around the reusable
-    // background object. Accept a bare background too for API compatibility.
-    const nested = this.objectOrNull(chatBackground['background']);
-    const background = nested !== null ? nested : chatBackground;
-    const type = this.objectOrNull(background['type']);
-    if (type === null) {
-      return;
-    }
-    const typeName = (type['@type'] as string | undefined) ?? '';
-    if (typeName === 'backgroundTypeChatTheme') {
-      const themeName = (type['theme_name'] as string | undefined) ?? '';
-      if (themeName !== '') {
-        const seq = ++this.chatBackgroundResolveSeq;
-        this.resolveThemeBackground(themeName, seq);
-      }
-      return;
-    }
-    let fill: TdObject | null = null;
-    let pattern = false;
-    if (typeName === 'backgroundTypeFill' || typeName === 'backgroundTypePattern') {
-      fill = this.objectOrNull(type['fill']);
-      pattern = typeName === 'backgroundTypePattern';
-    }
-    const colors = this.fillColors(fill);
-    const rotation = fill !== null
-      ? ((fill['rotation_angle'] as number | undefined) ?? 180) : 180;
-    const file = this.backgroundFile(background, pattern);
-    const fileId = file !== null ? ((file['id'] as number | undefined) ?? 0) : 0;
-    console.info(
-      `[ChatBackground] chat=${this.chatId} type=${typeName} colors=${colors.length} file=${fileId}`
-    );
-    if (colors.length === 0 && fileId === 0) {
-      return;
-    }
-
-    this.chatBackgroundCustom = true;
-    this.chatBackgroundColors = colors;
-    this.chatBackgroundAngle = rotation;
-    this.chatBackgroundDimming = Math.max(0, Math.min(
-      1, ((chatBackground['dark_theme_dimming'] as number | undefined) ?? 0) / 100
-    ));
-    this.chatBackgroundBlurred =
-      typeName === 'backgroundTypeWallpaper' &&
-      ((type['is_blurred'] as boolean | undefined) ?? false);
-    if (pattern) {
-      const intensity = Math.abs((type['intensity'] as number | undefined) ?? 50);
-      this.chatBackgroundImageOpacity = Math.max(0.08, Math.min(1, intensity / 100));
-    }
-    if (file !== null) {
-      this.requestBackgroundFile(file);
-    }
-  }
-
-  private refreshChatBackground(): void {
-    // Reset the theme bubble tint; the theme path below re-derives it in the
-    // same tick when this chat still carries a theme.
-    this.themeBubbleOutColor = '';
-    const cached = getChatStore().entryOf(this.chatId);
-    if (cached?.background !== null && cached?.background !== undefined) {
-      this.applyChatBackground(cached.background);
-    }
-    const seq = ++this.chatBackgroundResolveSeq;
-    const request: TdRequest = { '@type': 'getChat' };
-    request['chat_id'] = this.chatId;
-    getTdClient().send(request).then((chat: TdObject): void => {
-      if (seq !== this.chatBackgroundResolveSeq) {
-        return;
-      }
-      const background = this.objectOrNull(chat['background']);
-      const themeName = (chat['theme_name'] as string | undefined) ?? '';
-      console.info(
-        `[ChatBackground] getChat chat=${this.chatId} background=${background !== null} theme=${themeName !== ''}`
-      );
-      if (background !== null || themeName === '') {
-        if (background !== null) {
-          this.applyChatBackground(background);
-        } else {
-          this.applyDefaultBackground(seq);
-        }
-      } else {
-        this.resolveThemeBackground(themeName, seq);
-      }
-    }).catch((error: TdError): void => {
-      console.error(`ChatPage background getChat failed: ${error.message}`);
-    });
-  }
-
   private darkResourceMode(): boolean {
     try {
       const color = (getContext(this) as common.UIAbilityContext)
@@ -2649,108 +2328,6 @@ struct ChatPage {
     }
   }
 
-  private hasSpecificBackground(): boolean {
-    const entry = getChatStore().entryOf(this.chatId);
-    return entry !== undefined &&
-      (entry.background !== null || entry.themeName !== '');
-  }
-
-  private applyDefaultBackground(seq: number): void {
-    const forDarkTheme = this.darkResourceMode();
-    const store = getChatStore();
-    if (store.defaultBackgroundKnown(forDarkTheme)) {
-      const background = store.defaultBackground(forDarkTheme);
-      if (background !== null) {
-        console.info(
-          `[ChatBackground] chat=${this.chatId} source=default-cache dark=${forDarkTheme}`
-        );
-        this.applyChatBackground(background);
-        return;
-      }
-    }
-    this.loadInstalledDefaultBackground(forDarkTheme, seq);
-  }
-
-  private loadInstalledDefaultBackground(forDarkTheme: boolean, seq: number): void {
-    const request: TdRequest = { '@type': 'getInstalledBackgrounds' };
-    request['for_dark_theme'] = forDarkTheme;
-    getTdClient().send(request).then((result: TdObject): void => {
-      if (seq !== this.chatBackgroundResolveSeq || this.hasSpecificBackground()) {
-        return;
-      }
-      const backgrounds = (result['backgrounds'] as TdObject[] | undefined) ?? [];
-      const matchingDefaults = backgrounds.filter((item: TdObject): boolean =>
-        ((item['is_default'] as boolean | undefined) ?? false) &&
-        (((item['is_dark'] as boolean | undefined) ?? false) === forDarkTheme)
-      );
-      const matchingTheme = backgrounds.filter((item: TdObject): boolean =>
-        (((item['is_dark'] as boolean | undefined) ?? false) === forDarkTheme)
-      );
-      const selected = matchingDefaults.length > 0
-        ? matchingDefaults[0] : (matchingTheme.length > 0 ? matchingTheme[0] : null);
-      console.info(
-        `[ChatBackground] chat=${this.chatId} source=installed dark=${forDarkTheme} ` +
-        `count=${backgrounds.length} defaults=${matchingDefaults.length} ` +
-        `selectedDark=${selected !== null
-          ? ((selected['is_dark'] as boolean | undefined) ?? false) : 'none'}`
-      );
-      // Never use an arbitrary background from the opposite color scheme.
-      // When TDLib has no matching candidate, the renderer keeps chat_bg.
-      this.applyChatBackground(selected);
-    }).catch((error: TdError): void => {
-      console.error(`ChatPage getInstalledBackgrounds failed: ${error.message}`);
-      if (seq === this.chatBackgroundResolveSeq) {
-        this.applyChatBackground(null);
-      }
-    });
-  }
-
-  // theme_name backgrounds are stored in TDLib's chat theme catalog rather
-  // than directly on Chat.background. Resolve the settings matching the
-  // currently active light/dark resource mode.
-  private resolveThemeBackground(themeName: string, seq: number): void {
-    // TDLib has no getChatThemes request — the list arrives once per connection
-    // via updateChatThemes and is cached by ChatThemeStore.
-    if (seq !== this.chatBackgroundResolveSeq) {
-      return;
-    }
-    const themes = getChatThemeStore().chatThemes();
-    const theme = themes.find((item: TdObject): boolean =>
-      ((item['name'] as string | undefined) ?? '') === themeName
-    );
-    if (theme === undefined) {
-      this.themeBubbleOutColor = '';
-      this.applyChatBackground(null);
-      return;
-    }
-    const settingsName = this.darkResourceMode() ? 'dark_settings' : 'light_settings';
-    const settings = this.objectOrNull(theme[settingsName]);
-    const bubbleColors = fillColorsOf(settings !== null
-      ? this.objectOrNull(settings['outgoing_message_fill']) : null);
-    this.themeBubbleOutColor = bubbleColors.length > 0 ? bubbleColors[0] : '';
-    this.applyChatBackground(settings !== null
-      ? this.objectOrNull(settings['background']) : null);
-  }
-
-  private backgroundGradientStops(): Array<[ResourceColor, number]> {
-    const result: Array<[ResourceColor, number]> = [];
-    if (this.chatBackgroundColors.length === 0) {
-      return result;
-    }
-    if (this.chatBackgroundColors.length === 1) {
-      result.push([this.chatBackgroundColors[0], 0]);
-      result.push([this.chatBackgroundColors[0], 1]);
-      return result;
-    }
-    const last = this.chatBackgroundColors.length - 1;
-    this.chatBackgroundColors.forEach((color: string, index: number): void => {
-      result.push([color, index / last]);
-    });
-    return result;
-  }
-
-  // Resolve the underlying group object because chat itself doesn't contain
-  // the current user's membership status.
   private refreshMembership(): void {
     const seq: number = ++this.membershipSeq;
     const req: TdRequest = { '@type': 'getChat' };
@@ -3336,22 +2913,6 @@ struct ChatPage {
     return [messageId];
   }
 
-  private toggleChrome(): void {
-    this.chromeVisible = !this.chromeVisible;
-  }
-
-  private setViewerVideoLandscape(landscape: boolean): void {
-    if (landscape && !this.viewerIsVideo()) {
-      return;
-    }
-    if (this.viewerVideoLandscape === landscape) {
-      return;
-    }
-    this.viewerVideoLandscape = landscape;
-    this.chromeVisible = true;
-    setMediaViewerOrientation(getContext(this) as common.UIAbilityContext, landscape);
-  }
-
   private onAppForegroundChanged(): void {
     // 停留在会话页切后台时必须 closeChat，否则 TDLib 认为用户正在看这个
     // 会话，不会为它生成任何通知。
@@ -3363,233 +2924,9 @@ struct ChatPage {
     if (!this.appIsForeground) {
       getVoicePlayback().pauseForBackground();
     }
-    if (!this.appIsForeground && this.viewerVideoLandscape) {
-      this.setViewerVideoLandscape(false);
+    if (!this.appIsForeground) {
+      this.exitViewerLandscape();
     }
-  }
-
-  private viewerZoomed(): boolean {
-    return this.viewerPhotoScale > VIEWER_MIN_SCALE + 0.01;
-  }
-
-  // Contain-fitted display size of the current photo at 1x, in vp. Falls back
-  // to the viewport itself when the photo's pixel size is unknown.
-  private viewerFittedSize(): ViewerFit {
-    const w = this.viewerAreaW;
-    const h = this.viewerAreaH;
-    const e = this.viewerEntry();
-    const pw = e !== null ? e.photoWidth : 0;
-    const ph = e !== null ? e.photoHeight : 0;
-    if (w <= 0 || h <= 0 || pw <= 0 || ph <= 0) {
-      return { w: w, h: h };
-    }
-    const fit = Math.min(w / pw, h / ph);
-    return { w: pw * fit, h: ph * fit };
-  }
-
-  // Boundary restriction (per the official best practice): an axis whose
-  // scaled size still fits the viewport stays centered; otherwise the photo
-  // edge stops at the viewport edge — no black gaps, never dragged off-screen.
-  private clampViewerOffset(): void {
-    const s = this.viewerPhotoScale;
-    const fitted = this.viewerFittedSize();
-    const maxX = Math.max(0, (fitted.w * s - this.viewerAreaW) / 2);
-    const maxY = Math.max(0, (fitted.h * s - this.viewerAreaH) / 2);
-    this.viewerPhotoOffsetX = Math.min(maxX, Math.max(-maxX, this.viewerPhotoOffsetX));
-    this.viewerPhotoOffsetY = Math.min(maxY, Math.max(-maxY, this.viewerPhotoOffsetY));
-  }
-
-  private resetViewerPhotoZoom(animated: boolean): void {
-    this.viewerPinchStartScale = VIEWER_MIN_SCALE;
-    if (animated) {
-      animateTo({
-        duration: this.chatEffectDuration(KEY_POWER_EFFECT_BLUR, 180), curve: Curve.EaseOut
-      }, () => {
-        this.viewerPhotoScale = VIEWER_MIN_SCALE;
-        this.viewerPhotoOffsetX = 0;
-        this.viewerPhotoOffsetY = 0;
-      });
-    } else {
-      this.viewerPhotoScale = VIEWER_MIN_SCALE;
-      this.viewerPhotoOffsetX = 0;
-      this.viewerPhotoOffsetY = 0;
-    }
-  }
-
-  private onViewerPinchStart(event: GestureEvent): void {
-    this.viewerPinchStartScale = this.viewerPhotoScale;
-    this.viewerPinchStartOffsetX = this.viewerPhotoOffsetX;
-    this.viewerPinchStartOffsetY = this.viewerPhotoOffsetY;
-    this.viewerPinchAnchorX = event.pinchCenterX - this.viewerAreaW / 2;
-    this.viewerPinchAnchorY = event.pinchCenterY - this.viewerAreaH / 2;
-    this.viewerIgnoreTapUntilMs = Number.MAX_VALUE;
-  }
-
-  // Keep the content point that was under the initial pinch center glued to
-  // the CURRENT pinch center: zooming follows the fingers and moving both
-  // fingers together doubles as a two-finger pan.
-  private onViewerPinchUpdate(event: GestureEvent): void {
-    const s0 = this.viewerPinchStartScale;
-    const next = Math.max(VIEWER_MIN_SCALE, Math.min(VIEWER_MAX_SCALE, s0 * event.scale));
-    const ratio = next / s0;
-    const px = event.pinchCenterX - this.viewerAreaW / 2;
-    const py = event.pinchCenterY - this.viewerAreaH / 2;
-    this.viewerPhotoScale = next;
-    this.viewerPhotoOffsetX = px - (this.viewerPinchAnchorX - this.viewerPinchStartOffsetX) * ratio;
-    this.viewerPhotoOffsetY = py - (this.viewerPinchAnchorY - this.viewerPinchStartOffsetY) * ratio;
-    this.clampViewerOffset();
-  }
-
-  private onViewerPinchEnd(): void {
-    this.viewerIgnoreTapUntilMs = Date.now() + 200;
-    if (!this.viewerZoomed()) {
-      this.resetViewerPhotoZoom(false);
-    } else {
-      this.viewerPinchStartScale = this.viewerPhotoScale;
-    }
-  }
-
-  private onViewerPanStart(): void {
-    this.viewerPanStartOffsetX = this.viewerPhotoOffsetX;
-    this.viewerPanStartOffsetY = this.viewerPhotoOffsetY;
-    this.viewerEdgeOverscroll = 0;
-  }
-
-  // 放大态下拖到左右边界后继续拖动的累计量。达到阈值即翻页，
-  // 让"滑到边上还能翻下一张"在放大时也成立（此时 Swiper 收不到手势）。
-  private viewerEdgeOverscroll: number = 0;
-
-  private onViewerPanEnd(): void {
-    if (!this.viewerZoomed() || Math.abs(this.viewerEdgeOverscroll) < 60) {
-      this.viewerEdgeOverscroll = 0;
-      return;
-    }
-    const forward: boolean = this.viewerEdgeOverscroll < 0; // 向左拖 = 看下一张
-    this.viewerEdgeOverscroll = 0;
-    // 翻页前回到 1x，否则新图会沿用上一张的缩放与偏移。
-    this.resetViewerPhotoZoom(false);
-    if (forward) {
-      this.viewerSwiperCtrl.showNext();
-    } else {
-      this.viewerSwiperCtrl.showPrevious();
-    }
-  }
-
-  // One-finger drag pans the zoomed photo; clamping keeps it on-screen. At
-  // the fitted 1x size this is a no-op and the Swiper keeps paging instead.
-  private onViewerPanUpdate(event: GestureEvent): void {
-    if (!this.viewerZoomed()) {
-      return;
-    }
-    const desiredX: number = this.viewerPanStartOffsetX + event.offsetX;
-    this.viewerPhotoOffsetX = desiredX;
-    this.viewerPhotoOffsetY = this.viewerPanStartOffsetY + event.offsetY;
-    this.clampViewerOffset();
-    // clamp 吃掉的水平位移就是"已经贴边还在继续拖"的量。
-    this.viewerEdgeOverscroll = desiredX - this.viewerPhotoOffsetX;
-  }
-
-  // A single tap toggles chrome at every zoom level. Closing is explicit via
-  // the top-left button/back gesture, preventing an ordinary inspection tap
-  // from unexpectedly throwing the user back into the chat.
-  private onViewerPhotoTap(): void {
-    if (Date.now() < this.viewerIgnoreTapUntilMs) {
-      return;
-    }
-    this.toggleChrome();
-  }
-
-  // Double tap zooms around the actual touch point instead of the center of the
-  // screen. A second double tap is a quick way back to the fitted 1x image.
-  private onViewerPhotoDoubleTap(event: GestureEvent): void {
-    if (this.viewerZoomed()) {
-      this.resetViewerPhotoZoom(true);
-      return;
-    }
-    let px = 0;
-    let py = 0;
-    if (event.fingerList.length > 0) {
-      px = event.fingerList[0].localX - this.viewerAreaW / 2;
-      py = event.fingerList[0].localY - this.viewerAreaH / 2;
-    }
-    this.viewerPinchStartScale = VIEWER_DOUBLE_TAP_SCALE;
-    animateTo({
-      duration: this.chatEffectDuration(KEY_POWER_EFFECT_BLUR, 200), curve: Curve.EaseOut
-    }, () => {
-      this.viewerPhotoScale = VIEWER_DOUBLE_TAP_SCALE;
-      this.viewerPhotoOffsetX = px * (1 - VIEWER_DOUBLE_TAP_SCALE);
-      this.viewerPhotoOffsetY = py * (1 - VIEWER_DOUBLE_TAP_SCALE);
-      this.clampViewerOffset();
-    });
-  }
-
-  private viewerEntry(): MessageEntry | null {
-    const idx = this.messages.findIndex((m: MessageEntry) => m.id === this.viewerMsgId);
-    return idx >= 0 ? this.messages[idx] : null;
-  }
-
-  private viewerFileName(): string {
-    const e = this.viewerEntry();
-    return e !== null ? e.videoFileName : '';
-  }
-
-  private viewerInfoTitle(): string {
-    const e: MessageEntry | null = this.viewerEntry();
-    if (e === null) {
-      return this.title;
-    }
-    if (this.mediaEntryIsVideo(e) && e.videoFileName !== '') {
-      return e.videoFileName;
-    }
-    return e.senderName !== '' ? e.senderName : this.title;
-  }
-
-  private viewerInfoSubtitle(): string {
-    const e: MessageEntry | null = this.viewerEntry();
-    if (e === null) {
-      return '';
-    }
-    const ids: number[] = this.viewerSiblingIds();
-    const index: number = ids.indexOf(this.viewerMsgId);
-    const position: string = ids.length > 1 && index >= 0 ? `${index + 1} / ${ids.length} · ` : '';
-    return `${position}${formatTime(e.date, this.nowSec)}`;
-  }
-
-  // The album (media group) containing the viewer's current message, if any.
-  private viewerGroup(): AlbumGroup | null {
-    for (const g of this.groups) {
-      if (g.memberIds.indexOf(this.viewerMsgId) >= 0) {
-        return g;
-      }
-    }
-    return null;
-  }
-
-  // Sibling message ids for swipe/filmstrip navigation — just the current
-  // message when it isn't part of a multi-item album.
-  private viewerSiblingIds(): number[] {
-    const g = this.viewerGroup();
-    if (g !== null && g.memberIds.length > 1) {
-      return g.memberIds;
-    }
-    return this.viewerMsgId !== 0 ? [this.viewerMsgId] : [];
-  }
-
-  private viewerSiblingPath(id: number): string {
-    const g = this.viewerGroup();
-    if (g !== null) {
-      const idx = g.memberIds.indexOf(id);
-      if (idx >= 0 && idx < g.photoPaths.length) {
-        return g.photoPaths[idx];
-      }
-    }
-    const idx2 = this.messages.findIndex((m: MessageEntry) => m.id === id);
-    return idx2 >= 0 ? this.messages[idx2].photoPath : '';
-  }
-
-  private viewerSiblingIsVideo(id: number): boolean {
-    const idx = this.messages.findIndex((m: MessageEntry) => m.id === id);
-    return idx >= 0 && this.mediaEntryIsVideo(this.messages[idx]);
   }
 
   private entryById(id: number): MessageEntry | null {
@@ -3598,355 +2935,6 @@ struct ChatPage {
   }
 
   // Best available image for a viewer page: full-res once downloaded, else thumbnail.
-  private photoSrcFor(id: number): string {
-    const e = this.entryById(id);
-    if (e === null) {
-      return '';
-    }
-    const p = e.photoFullPath !== '' ? e.photoFullPath : e.photoPath;
-    return p.startsWith('/') ? `file://${p}` : p;
-  }
-
-  // Programmatic paging: the Swiper animates the transition; onChange keeps
-  // viewerMsgId in sync.
-  private switchViewer(delta: number): void {
-    if (delta > 0) {
-      this.viewerSwiperCtrl.showNext();
-    } else {
-      this.viewerSwiperCtrl.showPrevious();
-    }
-  }
-
-  // Filmstrip tap: page the Swiper to the tapped album member.
-  private jumpToSibling(id: number): void {
-    const i = this.viewerSiblingIds().indexOf(id);
-    if (i >= 0) {
-      this.viewerSwiperCtrl.changeIndex(i, true);
-    }
-  }
-
-  private onViewerPageChange(index: number): void {
-    const ids = this.viewerSiblingIds();
-    if (index < 0 || index >= ids.length) {
-      return;
-    }
-    const id = ids[index];
-    if (id === this.viewerMsgId) {
-      this.viewerInitIdx = index;
-      return;
-    }
-    if (this.viewerVideoLandscape) {
-      this.setViewerVideoLandscape(false);
-    }
-    this.resetViewerPhotoZoom(false);
-    this.viewerInitIdx = index;
-    this.viewerMsgId = id;
-    if (this.store !== null && !this.viewerSiblingIsVideo(id)) {
-      this.store.requestFullPhoto(id);
-    }
-  }
-
-  private viewerIsVideo(): boolean {
-    const e = this.viewerEntry();
-    return e !== null && this.mediaEntryIsVideo(e);
-  }
-
-  private viewerVideoLocalPath(): string {
-    const e = this.viewerEntry();
-    return e !== null ? e.videoPath : '';
-  }
-
-  private viewerVideoProgress(): number {
-    const e = this.viewerEntry();
-    return e !== null ? e.videoProgress : 0;
-  }
-
-  private viewerVideoReady(): boolean {
-    const e = this.viewerEntry();
-    return e !== null && e.videoPath !== '';
-  }
-
-  private viewerVideoFileId(): number {
-    const e = this.viewerEntry();
-    return e !== null ? e.videoFileId : 0;
-  }
-
-  private viewerVideoFileSize(): number {
-    const e = this.viewerEntry();
-    return e !== null ? e.videoFileSize : 0;
-  }
-
-  private viewerVideoMimeType(): string {
-    const e = this.viewerEntry();
-    return e !== null ? e.videoMimeType : '';
-  }
-
-  private viewerVideoWidth(): number {
-    const e = this.viewerEntry();
-    return e !== null ? e.photoWidth : 0;
-  }
-
-  private viewerVideoHeight(): number {
-    const e = this.viewerEntry();
-    return e !== null ? e.photoHeight : 0;
-  }
-
-  private viewerPhotoSrc(): string {
-    const e = this.viewerEntry();
-    if (e === null) {
-      return '';
-    }
-    const p = e.photoFullPath !== '' ? e.photoFullPath : e.photoPath;
-    return p.startsWith('/') ? `file://${p}` : p;
-  }
-
-  private viewerPhotoUpgrading(): boolean {
-    const e = this.viewerEntry();
-    return e !== null && e.photoFullPath === '' && e.photoFullFileId !== 0 &&
-      !e.photoFullFailed;
-  }
-
-  private viewerPhotoProgress(): number {
-    const e = this.viewerEntry();
-    if (e === null) {
-      return 0;
-    }
-    return e.photoFullProgress > 0 ? e.photoFullProgress : e.photoProgress;
-  }
-
-  private viewerPhotoFailed(): boolean {
-    const e: MessageEntry | null = this.viewerEntry();
-    if (e === null) {
-      return true;
-    }
-    if (e.photoFullFailed) {
-      return true;
-    }
-    return e.photoPath === '' && e.photoFullPath === '' &&
-      e.photoFileId === 0 && e.photoFullFileId === 0;
-  }
-
-  private retryViewerPhoto(): void {
-    if (this.store === null || this.viewerMsgId === 0) {
-      return;
-    }
-    this.store.retryPhoto(this.viewerMsgId);
-  }
-
-  @Builder
-  viewerPhotoLoadingState() {
-    Column({ space: 10 }) {
-      if (this.viewerPhotoProgress() > 0) {
-        Stack() {
-          Progress({ value: this.viewerPhotoProgress(), total: 100, type: ProgressType.Ring })
-            .width(44).height(44).color(Color.White);
-          Text(`${this.viewerPhotoProgress()}%`).fontSize(10).fontColor(Color.White);
-        }
-      } else {
-        LoadingProgress().width(38).height(38).color(Color.White);
-      }
-      Text('正在加载图片').fontSize(13).fontColor('#D9FFFFFF');
-    }
-    .padding({ left: 18, right: 18, top: 16, bottom: 16 })
-    .backgroundColor(VIEWER_CHROME_BG).borderRadius(16)
-    .transition(TransitionEffect.OPACITY
-      .combine(TransitionEffect.scale({ x: 0.92, y: 0.92 }))
-      .animation({ duration: this.chatEffectDuration(KEY_POWER_EFFECT_BLUR, 180), curve: Curve.EaseOut }));
-  }
-
-  @Builder
-  viewerPhotoErrorState() {
-    Column({ space: 10 }) {
-      SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
-        .fontSize(30).fontColor([Color.White]);
-      Text('图片加载失败').fontSize(14).fontColor(Color.White).fontWeight(FontWeight.Medium);
-      Text('点击重试').fontSize(12).fontColor('#D9FFFFFF');
-    }
-    .padding({ left: 22, right: 22, top: 16, bottom: 16 })
-    .backgroundColor(VIEWER_CHROME_BG).borderRadius(16)
-    .stateStyles({
-      normal: this.suggestionRowNormalStyle,
-      pressed: this.suggestionRowPressedStyle
-    })
-    .animation({ duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 120), curve: Curve.EaseOut })
-    .onClick((): void => { this.retryViewerPhoto(); });
-  }
-
-  // Fullscreen viewer content: a Swiper over the album's members, so pages
-  // follow the finger and slide continuously to the neighbor. Only the CURRENT
-  // page mounts a video player; inactive video pages show their thumbnail.
-  @Builder
-  viewerContent() {
-    Swiper(this.viewerSwiperCtrl) {
-      ForEach(this.viewerSiblingIds(), (id: number) => {
-        Stack() {
-          if (this.viewerSiblingIsVideo(id)) {
-            if (id === this.viewerMsgId && this.viewerVideoFileId() !== 0) {
-              StreamingVideoPlayer({
-                fileId: this.viewerVideoFileId(),
-                fileSize: this.viewerVideoFileSize(),
-                mimeType: this.viewerVideoMimeType(),
-                videoWidth: this.viewerVideoWidth(),
-                videoHeight: this.viewerVideoHeight(),
-                localPath: this.viewerVideoLocalPath(),
-                posterPath: this.viewerSiblingPath(id),
-                showControls: this.chromeVisible,
-                landscape: this.viewerVideoLandscape,
-                onBackgroundTap: () => { this.toggleChrome(); },
-                onSwipeNext: () => { this.switchViewer(1); },
-                onSwipePrev: () => { this.switchViewer(-1); },
-                onOrientationChange: (landscape: boolean) => {
-                  this.setViewerVideoLandscape(landscape);
-                }
-              });
-            } else {
-              if (this.viewerSiblingPath(id) !== '') {
-                Image(this.viewerSiblingPath(id).startsWith('/')
-                  ? `file://${this.viewerSiblingPath(id)}` : this.viewerSiblingPath(id))
-                  .objectFit(ImageFit.Contain).width('100%').height('100%');
-              }
-              Stack() {
-                Circle({ width: 56, height: 56 }).fill('#00000066');
-                Text('▶').fontSize(24).fontColor(Color.White);
-              }.width(56).height(56);
-            }
-          } else {
-            // Gestures live on this UNSCALED wrapper, not on the Image: a
-            // scaled component reports gesture coordinates/offsets in its own
-            // scaled space, which made panning lag the finger by the zoom
-            // factor. The Image only carries the scale/translate transform.
-            Stack() {
-              if (this.photoSrcFor(id) !== '') {
-                Image(this.photoSrcFor(id))
-                  .objectFit(ImageFit.Contain).width('100%').height('100%')
-                  .scale({
-                    x: id === this.viewerMsgId ? this.viewerPhotoScale : VIEWER_MIN_SCALE,
-                    y: id === this.viewerMsgId ? this.viewerPhotoScale : VIEWER_MIN_SCALE
-                  })
-                  .translate({
-                    x: id === this.viewerMsgId ? this.viewerPhotoOffsetX : 0,
-                    y: id === this.viewerMsgId ? this.viewerPhotoOffsetY : 0
-                  });
-              }
-            }
-            .width('100%').height('100%')
-            // Exclusive tap recognition delays the single-tap action just
-            // enough to determine whether the user is double tapping.
-            .gesture(
-              GestureGroup(GestureMode.Exclusive,
-                TapGesture({ count: 2, fingers: 1 })
-                  .onAction((event: GestureEvent) => { this.onViewerPhotoDoubleTap(event); }),
-                TapGesture({ count: 1, fingers: 1 })
-                  .onAction(() => { this.onViewerPhotoTap(); })
-              )
-            )
-            .priorityGesture(
-              GestureGroup(GestureMode.Parallel,
-                PinchGesture({ fingers: 2 })
-                  .onActionStart((event: GestureEvent) => { this.onViewerPinchStart(event); })
-                  .onActionUpdate((event: GestureEvent) => { this.onViewerPinchUpdate(event); })
-                  .onActionEnd(() => { this.onViewerPinchEnd(); })
-                  .onActionCancel(() => { this.onViewerPinchEnd(); }),
-                // Dynamic distance resolves the Swiper conflict (official
-                // best practice): a large threshold at 1x lets the Swiper's
-                // own pan win and page the album; a small one while zoomed
-                // keeps single-finger panning responsive.
-                PanGesture({ fingers: 1, distance: this.viewerZoomed() ? 3 : 50 })
-                  .onActionStart(() => { this.onViewerPanStart(); })
-                  .onActionUpdate((event: GestureEvent) => { this.onViewerPanUpdate(event); })
-                  .onActionEnd(() => { this.onViewerPanEnd(); })
-              )
-            );
-          }
-        }.width('100%').height('100%');
-      }, (id: number) => `vm_${id}`);
-    }
-    .indicator(false)
-    .loop(false)
-    .index(this.viewerInitIdx)
-    // While enlarged, one-finger movement must not page the album out from
-    // under the zoomed photo. Resetting to 1x re-enables normal paging.
-    .disableSwipe(this.viewerZoomed() || this.viewerVideoLandscape)
-    .onChange((i: number) => { this.onViewerPageChange(i); })
-    .onAreaChange((_old: Area, area: Area) => {
-      this.viewerAreaW = Number(area.width);
-      this.viewerAreaH = Number(area.height);
-    })
-    .width('100%').height('100%');
-    if (!this.viewerIsVideo() && this.viewerPhotoSrc() === '') {
-      Column() {
-        if (this.viewerPhotoFailed()) {
-          this.viewerPhotoErrorState();
-        } else {
-          this.viewerPhotoLoadingState();
-        }
-      }
-      .width('100%').height('100%')
-      .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
-      .hitTestBehavior(HitTestMode.Transparent);
-    } else if (!this.viewerIsVideo() && this.viewerPhotoUpgrading() && this.chromeVisible) {
-      Row({ space: 7 }) {
-        LoadingProgress().width(15).height(15).color(Color.White);
-        Text(this.viewerPhotoProgress() > 0
-          ? `正在加载原图 ${this.viewerPhotoProgress()}%` : '正在加载原图')
-          .fontSize(12).fontColor(Color.White);
-      }
-      .padding({ left: 11, right: 11, top: 7, bottom: 7 })
-      .backgroundColor(VIEWER_CHROME_BG).borderRadius(16)
-      .position({ x: 14, y: this.topSafe + 76 })
-      .hitTestBehavior(HitTestMode.None)
-      .transition(TransitionEffect.OPACITY
-        .combine(TransitionEffect.translate({ y: -5 }))
-        .animation({ duration: this.chatEffectDuration(KEY_POWER_EFFECT_BLUR, 160), curve: Curve.EaseOut }));
-    } else if (!this.viewerIsVideo() && this.viewerPhotoFailed() && this.chromeVisible) {
-      Row({ space: 6 }) {
-        SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(14).fontColor([Color.White]);
-        Text('原图加载失败，点击重试').fontSize(12).fontColor(Color.White);
-      }
-      .padding({ left: 11, right: 11, top: 7, bottom: 7 })
-      .backgroundColor(VIEWER_CHROME_BG).borderRadius(16)
-      .position({ x: 14, y: this.topSafe + 76 })
-      .onClick((): void => { this.retryViewerPhoto(); });
-    }
-  }
-
-  // Thumbnail strip for the current message's album (photo/video list) —
-  // tap a thumbnail to switch the viewer to that item.
-  @Builder
-  viewerFilmstrip() {
-    Scroll() {
-      Row({ space: 6 }) {
-        ForEach(this.viewerSiblingIds(), (id: number) => {
-          Stack() {
-            if (this.viewerSiblingPath(id) !== '') {
-              Image(this.viewerSiblingPath(id).startsWith('/') ? `file://${this.viewerSiblingPath(id)}` : this.viewerSiblingPath(id))
-                .width(52).height(52).borderRadius(6).objectFit(ImageFit.Cover);
-            } else {
-              Column().width(52).height(52).borderRadius(6).backgroundColor('#333333');
-            }
-            if (this.viewerSiblingIsVideo(id)) {
-              Text('▶').fontSize(14).fontColor(Color.White);
-            }
-          }
-          .width(52).height(52)
-          .border({ width: id === this.viewerMsgId ? 2 : 0, color: Color.White })
-          .borderRadius(6)
-          .opacity(id === this.viewerMsgId ? 1 : 0.68)
-          .scale({ x: id === this.viewerMsgId ? 1 : 0.92, y: id === this.viewerMsgId ? 1 : 0.92 })
-          .animation({
-            duration: this.chatEffectDuration(KEY_POWER_EFFECT_BLUR, 160),
-            curve: Curve.EaseOut
-          })
-          .onClick(() => { this.jumpToSibling(id); });
-        }, (id: number) => `film_${id}`);
-      }.padding({ left: 12, right: 12 });
-    }.scrollable(ScrollDirection.Horizontal).width('100%');
-  }
-
-  // Bot inline-keyboard callback button: send the payload to the bot. The bot
-  // reacts by editing the message / sending a new one (handled by updates).
-  // Callback answers may also carry a toast/dialog or URL; ignoring those made
-  // valid game and interaction buttons appear to do nothing.
   private onBotCallback(messageId: number, data: string): void {
     const payload: TdObject = { '@type': 'callbackQueryPayloadData' };
     payload['data'] = data;
@@ -5096,12 +4084,12 @@ struct ChatPage {
   }
 
   // Copy a picker URI into the sandbox so TDLib can read it; '' on failure.
+  // Single copy path for every picker (media, document, audio): they used to
+  // inline three near-copies of this, two of them without the sequence counter.
   private copyUriToCache(uri: string): string {
     try {
-      const name = decodeURIComponent(uri.substring(uri.lastIndexOf('/') + 1));
-      const copyId = ++this.mediaCopySeq;
-      const dest =
-        `${(getContext(this) as common.UIAbilityContext).cacheDir}/send_${Date.now()}_${copyId}_${name}`;
+      const cacheDir = (getContext(this) as common.UIAbilityContext).cacheDir;
+      const dest = cacheDestPath(cacheDir, uri, ++this.mediaCopySeq, Date.now());
       const src = fs.openSync(uri, fs.OpenMode.READ_ONLY);
       fs.copyFileSync(src.fd, dest);
       fs.closeSync(src);
@@ -5135,137 +4123,6 @@ struct ChatPage {
     this.store?.markVoiceListened(messageId);
   }
 
-  private musicQueueLength(): number {
-    let count: number = 0;
-    for (const entry of this.messages) {
-      if (entry.contentType === 'audio') {
-        count++;
-      }
-    }
-    return count;
-  }
-
-  private musicQueuePosition(messageId: number): number {
-    let position: number = 0;
-    for (const entry of this.messages) {
-      if (entry.contentType !== 'audio') {
-        continue;
-      }
-      position++;
-      if (entry.id === messageId) {
-        return position;
-      }
-    }
-    return 0;
-  }
-
-  private adjacentMusicEntry(messageId: number, direction: number): MessageEntry | null {
-    const music: MessageEntry[] =
-      this.messages.filter((entry: MessageEntry): boolean => entry.contentType === 'audio');
-    const index: number = music.findIndex((entry: MessageEntry): boolean => entry.id === messageId);
-    const nextIndex: number = index + (direction < 0 ? -1 : 1);
-    return index >= 0 && nextIndex >= 0 && nextIndex < music.length ? music[nextIndex] : null;
-  }
-
-  private musicHasPrevious(messageId: number): boolean {
-    return this.adjacentMusicEntry(messageId, -1) !== null;
-  }
-
-  private musicHasNext(messageId: number): boolean {
-    return this.adjacentMusicEntry(messageId, 1) !== null;
-  }
-
-  private playMusicEntry(messageId: number, forceStart: boolean): void {
-    const entry: MessageEntry | null = this.entryById(messageId);
-    if (entry === null || entry.contentType !== 'audio') {
-      return;
-    }
-    if (entry.videoFileId === 0 && entry.videoPath === '') {
-      this.pendingMusicPlayId = 0;
-      promptAction.showToast({ message: '这个音频文件暂时不可用', duration: 1600 });
-      return;
-    }
-    if (entry.videoPath === '') {
-      this.pendingMusicPlayId = messageId;
-      if (this.store !== null) {
-        this.store.requestVideoDownload(messageId, false, entry.videoFailed);
-      }
-      promptAction.showToast({
-        message: entry.videoFailed ? '正在重新下载音乐'
-          : (entry.mediaDownloadActive ? '音乐正在下载' : '开始下载音乐'),
-        duration: 1400
-      });
-      return;
-    }
-    this.pendingMusicPlayId = 0;
-    if (forceStart) {
-      getVoicePlayback().startMusic(messageId, entry.videoPath, entry.videoDuration);
-    } else {
-      getVoicePlayback().toggleMusic(messageId, entry.videoPath, entry.videoDuration);
-    }
-  }
-
-  private onAudioTap(messageId: number): void {
-    this.playMusicEntry(messageId, false);
-  }
-
-  private onAudioPrevious(messageId: number): void {
-    const current = getVoicePlayback().current();
-    if (current.mode === 'music' && current.playingId === messageId && current.positionMs > 3000) {
-      getVoicePlayback().seek(messageId, 0);
-      return;
-    }
-    const previous: MessageEntry | null = this.adjacentMusicEntry(messageId, -1);
-    if (previous !== null) {
-      this.playMusicEntry(previous.id, true);
-    } else if (current.mode === 'music' && current.playingId === messageId) {
-      getVoicePlayback().seek(messageId, 0);
-    }
-  }
-
-  private onAudioNext(messageId: number): void {
-    const next: MessageEntry | null = this.adjacentMusicEntry(messageId, 1);
-    if (next !== null) {
-      this.playMusicEntry(next.id, true);
-    }
-  }
-
-  private onAudioSeek(messageId: number, fraction: number): void {
-    getVoicePlayback().seek(messageId, fraction);
-  }
-
-  private onMusicCompleted(messageId: number): void {
-    const next: MessageEntry | null = this.adjacentMusicEntry(messageId, 1);
-    if (next !== null) {
-      this.playMusicEntry(next.id, true);
-    }
-  }
-
-  private settlePendingMusic(list: MessageEntry[]): void {
-    if (this.pendingMusicPlayId === 0) {
-      return;
-    }
-    const pendingId: number = this.pendingMusicPlayId;
-    const entry: MessageEntry | undefined =
-      list.find((item: MessageEntry): boolean => item.id === pendingId);
-    if (entry === undefined || entry.contentType !== 'audio') {
-      this.pendingMusicPlayId = 0;
-      return;
-    }
-    if (entry.videoFailed) {
-      this.pendingMusicPlayId = 0;
-      promptAction.showToast({ message: '音乐下载失败，请重试', duration: 1800 });
-      return;
-    }
-    if (entry.videoPath !== '') {
-      this.pendingMusicPlayId = 0;
-      getVoicePlayback().startMusic(entry.id, entry.videoPath, entry.videoDuration);
-    }
-  }
-
-  // Paperclip → 照片或视频: system photo picker, send each as photo/video.
-  // Replace the media of an already-sent photo/video message, keeping its
-  // caption (editMessageMedia).
   private replaceMedia(messageId: number): void {
     const msg = this.findMsg(messageId);
     const store = this.store;
@@ -5283,8 +4140,7 @@ struct ChatPage {
         promptAction.showToast({ message: '无法读取所选文件', duration: 1600 });
         return;
       }
-      const isVideo = path.toLowerCase().endsWith('.mp4') || path.toLowerCase().endsWith('.mov');
-      store.editMediaAsync(messageId, path, isVideo, msg.text).then((): void => {
+      store.editMediaAsync(messageId, path, isVideoPath(path), msg.text).then((): void => {
         promptAction.showToast({ message: '媒体已替换', duration: 1500 });
       }).catch((e: TdError): void => {
         console.error(`ChatPage.replaceMedia failed: ${e.message}`);
@@ -5318,9 +4174,7 @@ struct ChatPage {
           skipped++;
           continue;
         }
-        const ext = path.substring(path.lastIndexOf('.') + 1).toLowerCase();
-        const isVideo = ext === 'mp4' || ext === 'mov' || ext === 'mkv' || ext === 'avi' || ext === 'webm';
-        items.push({ path, isVideo });
+        items.push({ path, isVideo: isVideoPath(path) });
       }
       if (items.length === 0) {
         promptAction.showToast({ message: '所选媒体读取失败', duration: 1800 });
@@ -5439,134 +4293,11 @@ struct ChatPage {
 
   // --- 定时消息管理 ---
 
+  // Loading and the send-now/delete actions live in ScheduledSheet, which
+  // fetches on mount.
   private openScheduledSheet(): void {
     this.headerMenuShow = false;
     this.showScheduledSheet = true;
-    this.loadScheduled();
-  }
-
-  private loadScheduled(): void {
-    this.scheduledLoadState = 'loading';
-    const req: TdRequest = { '@type': 'getChatScheduledMessages' };
-    req['chat_id'] = this.chatId;
-    getTdClient().send(req).then((res: TdObject): void => {
-      const messages: TdObject[] = (res['messages'] as TdObject[] | undefined) ?? [];
-      const ids: number[] = [];
-      const previews: string[] = [];
-      const timeLabels: string[] = [];
-      for (const message of messages) {
-        const id: number = (message['id'] as number | undefined) ?? 0;
-        if (id === 0) {
-          continue;
-        }
-        ids.push(id);
-        previews.push(formatPreview(message));
-        const scheduling = message['scheduling_state'] as TdObject | undefined;
-        const schedulingType: string = scheduling !== undefined
-          ? ((scheduling['@type'] as string | undefined) ?? '') : '';
-        if (schedulingType === 'messageSchedulingStateSendWhenOnline') {
-          timeLabels.push('对方上线时发送');
-        } else {
-          const sendDate: number = scheduling !== undefined
-            ? ((scheduling['send_date'] as number | undefined) ?? 0) : 0;
-          const at = new Date(sendDate * 1000);
-          const two = (n: number): string => (n < 10 ? `0${n}` : `${n}`);
-          timeLabels.push(sendDate > 0
-            ? `${at.getMonth() + 1}月${at.getDate()}日 ${two(at.getHours())}:${two(at.getMinutes())}`
-            : '');
-        }
-      }
-      this.scheduledIds = ids;
-      this.scheduledPreviews = previews;
-      this.scheduledTimeLabels = timeLabels;
-      this.scheduledLoadState = 'ready';
-    }).catch((e: TdError): void => {
-      console.error(`ChatPage.loadScheduled failed: ${e.message}`);
-      this.scheduledLoadState = 'error';
-    });
-  }
-
-  // 立即发送：不带 scheduling_state 的 editMessageSchedulingState。
-  private sendScheduledNow(messageId: number): void {
-    const req: TdRequest = { '@type': 'editMessageSchedulingState' };
-    req['chat_id'] = this.chatId;
-    req['message_id'] = messageId;
-    getTdClient().send(req).then((): void => {
-      this.loadScheduled();
-    }).catch((e: TdError): void => {
-      console.error(`ChatPage.sendScheduledNow failed: ${e.message}`);
-      promptAction.showToast({ message: '发送失败，请稍后重试', duration: 1700 });
-    });
-  }
-
-  private deleteScheduled(messageId: number): void {
-    const req: TdRequest = { '@type': 'deleteMessages' };
-    req['chat_id'] = this.chatId;
-    req['message_ids'] = [messageId];
-    req['revoke'] = true;
-    getTdClient().send(req).then((): void => {
-      this.loadScheduled();
-    }).catch((e: TdError): void => {
-      console.error(`ChatPage.deleteScheduled failed: ${e.message}`);
-      promptAction.showToast({ message: '删除失败，请稍后重试', duration: 1700 });
-    });
-  }
-
-  @Builder
-  scheduledSheet() {
-    Column() {
-      Column().layoutWeight(1).onClick((): void => {
-        this.showScheduledSheet = false;
-      });
-      Column({ space: 10 }) {
-        Row().width(40).height(4).borderRadius(2).backgroundColor('#D0D0D0');
-        Text('定时消息').fontSize(17).fontWeight(FontWeight.Medium)
-          .fontColor(COLOR_TEXT_PRIMARY);
-        if (this.scheduledLoadState === 'loading') {
-          LoadingProgress().width(28).height(28).margin({ top: 24, bottom: 24 });
-        } else if (this.scheduledLoadState === 'error') {
-          Text('定时消息加载失败').fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
-            .margin({ top: 24, bottom: 24 });
-        } else if (this.scheduledIds.length === 0) {
-          Text('没有待发送的定时消息').fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
-            .margin({ top: 24, bottom: 24 });
-        } else {
-          List({ space: 6 }) {
-            ForEach(this.scheduledIds, (id: number, itemIndex: number) => {
-              ListItem() {
-                Row({ space: 10 }) {
-                  Column({ space: 3 }) {
-                    Text(this.scheduledPreviews[itemIndex] ?? '')
-                      .fontSize(14).fontColor(COLOR_TEXT_PRIMARY)
-                      .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
-                    Text(this.scheduledTimeLabels[itemIndex] ?? '')
-                      .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
-                  }
-                  .alignItems(HorizontalAlign.Start).layoutWeight(1);
-                  Button('立即发送').fontSize(12).height(30)
-                    .onClick((): void => this.sendScheduledNow(id));
-                  Row() {
-                    SymbolGlyph($r('sys.symbol.trash')).fontSize(17)
-                      .fontColor(['#E5484D']);
-                  }
-                  .width(34).height(34).borderRadius(17)
-                  .justifyContent(FlexAlign.Center)
-                  .onClick((): void => this.deleteScheduled(id));
-                }
-                .width('100%').padding({ top: 6, bottom: 6 });
-              }
-            }, (id: number): string => `scheduled_${id}`);
-          }
-          .constraintSize({ maxHeight: 320 });
-        }
-      }
-      .width('100%')
-      .padding({ left: 16, right: 16, top: 10, bottom: 24 })
-      .backgroundColor($r('app.color.surface'))
-      .borderRadius({ topLeft: 16, topRight: 16 });
-    }
-    .width('100%').height('100%')
-    .backgroundColor('#66000000');
   }
 
   private attachMenuItems(): MenuElement[] {
@@ -5641,21 +4372,15 @@ struct ChatPage {
       if (uris.length === 0) {
         return;
       }
-      try {
-        const uri = uris[0];
-        const name = decodeURIComponent(uri.substring(uri.lastIndexOf('/') + 1));
-        const dest = `${(getContext(this) as common.UIAbilityContext).cacheDir}/send_${Date.now()}_${name}`;
-        const src = fs.openSync(uri, fs.OpenMode.READ_ONLY);
-        fs.copyFileSync(src.fd, dest);
-        fs.closeSync(src);
-        if (this.store !== null) {
-          this.atBottom = true;
-          this.store.sendAudio(dest, this.draft.trim());
-          this.draft = '';
-        }
-      } catch (e) {
-        console.error(`ChatPage.pickAndSendAudio copy failed: ${e}`);
+      const dest = this.copyUriToCache(uris[0]);
+      if (dest === '') {
         promptAction.showToast({ message: '音频读取失败', duration: 2000 });
+        return;
+      }
+      if (this.store !== null) {
+        this.atBottom = true;
+        this.store.sendAudio(dest, this.draft.trim());
+        this.draft = '';
       }
     }).catch((e: Object) => {
       console.error(`ChatPage.pickAndSendAudio select failed: ${JSON.stringify(e)}`);
@@ -5797,21 +4522,15 @@ struct ChatPage {
       if (uris.length === 0) {
         return;
       }
-      try {
-        const uri = uris[0];
-        const name = decodeURIComponent(uri.substring(uri.lastIndexOf('/') + 1));
-        const dest = `${(getContext(this) as common.UIAbilityContext).cacheDir}/send_${Date.now()}_${name}`;
-        const src = fs.openSync(uri, fs.OpenMode.READ_ONLY);
-        fs.copyFileSync(src.fd, dest);
-        fs.closeSync(src);
-        if (this.store !== null) {
-          this.atBottom = true;
-          this.store.sendDocument(dest, this.draft.trim());
-          this.draft = '';
-        }
-      } catch (e) {
-        console.error(`ChatPage.pickAndSendFile copy failed: ${e}`);
+      const dest = this.copyUriToCache(uris[0]);
+      if (dest === '') {
         promptAction.showToast({ message: '文件读取失败', duration: 2000 });
+        return;
+      }
+      if (this.store !== null) {
+        this.atBottom = true;
+        this.store.sendDocument(dest, this.draft.trim());
+        this.draft = '';
       }
     }).catch((e: Object) => {
       console.error(`ChatPage.pickAndSendFile select failed: ${JSON.stringify(e)}`);
@@ -6034,7 +4753,7 @@ struct ChatPage {
     }
     this.deleteDialog = new CustomDialogController({
       builder: DeleteMessagesDialog({
-        peerName: this.isGroup || this.isChannel ? '' : this.headerTitleText(),
+        peerName: this.isGroup || this.isChannel ? '' : this.headerText().titleText,
         onConfirm: (revoke: boolean): void => { this.doDeleteMessages(ids, revoke); }
       }),
       autoCancel: true,
@@ -6211,49 +4930,9 @@ struct ChatPage {
       return;
     }
     this.reactionTargetId = messageId;
-    this.sheetReactions = REACTION_EMOJIS;
-    this.sheetCustomEmojis = [];
-    this.sheetAllowCustomEmoji = false;
     this.showReactionSheet = true;
-    this.loadAvailableReactions(messageId);
   }
 
-  // Channels/groups can restrict which reactions are allowed; ask TDLib for
-  // the real list so the sheet never offers an emoji the server would reject.
-  private loadAvailableReactions(messageId: number): void {
-    const req: TdRequest = { '@type': 'getMessageAvailableReactions' };
-    req['chat_id'] = this.chatId;
-    req['message_id'] = messageId;
-    req['row_size'] = 8;
-    getTdClient().send(req, 10000).then((result: TdObject): void => {
-      if (this.reactionTargetId !== messageId || !this.showReactionSheet) { return; }
-      const available: AvailableReactionSet = parseAvailableReactions(result);
-      if (available.emojis.length > 0) { this.sheetReactions = available.emojis; }
-      this.sheetAllowCustomEmoji = available.allowCustomEmoji;
-      if (!available.allowCustomEmoji || available.customEmojiIds.length === 0) { return; }
-      this.sheetCustomEmojis = available.customEmojiIds.map((id: string): CustomEmojiOption => {
-        return { id, path: '' };
-      });
-      resolveCustomEmojiThumbs(available.customEmojiIds, (id: string, path: string): void => {
-        if (this.reactionTargetId !== messageId || !this.showReactionSheet) { return; }
-        this.applyCustomEmojiThumb(id, path);
-      });
-    }).catch((e: TdError): void => {
-      console.error(`ChatPage.availableReactions failed: ${e.message}`);
-    });
-  }
-
-  // 逐个替换而不是整批重建：先到的位图立刻可见，其余仍显示占位。
-  private applyCustomEmojiThumb(customEmojiId: string, path: string): void {
-    this.sheetCustomEmojis = this.sheetCustomEmojis.map(
-      (option: CustomEmojiOption): CustomEmojiOption => {
-        return option.id === customEmojiId ? { id: option.id, path } : option;
-      });
-  }
-
-  // 从长按菜单里直接调全局 promptAction.showDialog 会静默挂死：菜单是独立
-  // 子窗口，收起过程中弹出的对话框没有可依附的 UI 上下文，Promise 既不
-  // resolve 也不 reject（见 ChatRow.showConfirm 的同类修复）。
   private showMenuConfirm(
     options: promptAction.ShowDialogOptions, what: string,
     onConfirm: (index: number) => void
@@ -6565,40 +5244,6 @@ struct ChatPage {
   private closeReactionSheet(): void {
     this.showReactionSheet = false;
     this.reactionTargetId = 0;
-    this.sheetCustomEmojis = [];
-    this.sheetAllowCustomEmoji = false;
-  }
-
-  private targetReactionChosen(reactionKey: string): boolean {
-    const m: MessageEntry | null = this.findMsg(this.reactionTargetId);
-    if (m === null) {
-      return false;
-    }
-    for (const reaction of m.reactions) {
-      if (reactionKeyFrom(reaction.emoji, reaction.customEmojiId) === reactionKey) {
-        return reaction.isChosen;
-      }
-    }
-    return false;
-  }
-
-  // The full sheet mirrors the quick row: tapping an already-selected emoji
-  // removes it instead of issuing a redundant add request.
-  private pickReaction(reactionKey: string): void {
-    const targetId: number = this.reactionTargetId;
-    if (targetId === 0 || this.reactionPendingKey !== '') {
-      return;
-    }
-    const chosen: boolean = this.targetReactionChosen(reactionKey);
-    this.closeReactionSheet();
-    this.toggleReaction(targetId, reactionKey, chosen);
-  }
-
-  private updateForwardChats(list: ChatEntry[]): void {
-    this.forwardChats = list.filter((chat: ChatEntry): boolean => chat.id > 0);
-    if (this.forwardChats.length > 0) {
-      this.forwardLoadState = 'ready';
-    }
   }
 
   private forwardableMessageIds(ids: number[]): number[] {
@@ -6613,6 +5258,8 @@ struct ChatPage {
     return result;
   }
 
+  // Only decides *whether* the picker opens and what it will forward — the chat
+  // list, filtering and the forwardMessages request live in ForwardSheet.
   private openForwardPicker(ids: number[]): void {
     const validIds: number[] = this.forwardableMessageIds(ids);
     ContextMenu.close();
@@ -6623,94 +5270,12 @@ struct ChatPage {
     this.closeReactionSheet();
     this.setEmojiPanel(false);
     this.forwardMessageIds = validIds;
-    this.forwardQuery = '';
-    this.forwardSendingChatId = 0;
-    this.updateForwardChats(getChatStore().getChats('main'));
-    this.forwardLoadState = this.forwardChats.length > 0 ? 'ready' : 'loading';
     this.showForwardSheet = true;
-    const seq: number = ++this.forwardPickerSeq;
-    getChatStore().ensureLoaded('main').then((success: boolean): void => {
-      if (seq !== this.forwardPickerSeq || !this.showForwardSheet) {
-        return;
-      }
-      this.updateForwardChats(getChatStore().getChats('main'));
-      if (!success && this.forwardChats.length === 0) {
-        this.forwardLoadState = 'error';
-      } else {
-        this.forwardLoadState = 'ready';
-      }
-    });
-  }
-
-  private retryForwardChats(): void {
-    if (!this.showForwardSheet || this.forwardLoadState === 'loading') {
-      return;
-    }
-    this.forwardLoadState = 'loading';
-    const seq: number = ++this.forwardPickerSeq;
-    getChatStore().loadMore('main').then((): void => {
-      if (seq !== this.forwardPickerSeq || !this.showForwardSheet) {
-        return;
-      }
-      this.updateForwardChats(getChatStore().getChats('main'));
-      this.forwardLoadState = this.forwardChats.length > 0 ? 'ready' : 'error';
-    });
   }
 
   private closeForwardSheet(): void {
-    this.forwardPickerSeq++;
     this.showForwardSheet = false;
-    this.forwardQuery = '';
-    this.forwardSendingChatId = 0;
     this.forwardMessageIds = [];
-  }
-
-  private filteredForwardChats(): ChatEntry[] {
-    const q: string = this.forwardQuery.trim().toLowerCase();
-    if (q === '') {
-      return this.forwardChats;
-    }
-    return this.forwardChats.filter((chat: ChatEntry): boolean =>
-      chat.title.toLowerCase().indexOf(q) >= 0
-    );
-  }
-
-  private forwardToChat(chat: ChatEntry): void {
-    if (this.forwardSendingChatId !== 0 || this.forwardMessageIds.length === 0) {
-      return;
-    }
-    const ids: number[] = [...this.forwardMessageIds];
-    const sourceChatId: number = this.chatId;
-    const seq: number = this.forwardPickerSeq;
-    this.forwardSendingChatId = chat.id;
-    const req: TdRequest = { '@type': 'forwardMessages' };
-    req['chat_id'] = chat.id;
-    req['message_thread_id'] = chat.id === sourceChatId ? this.threadRootId : 0;
-    req['from_chat_id'] = sourceChatId;
-    req['message_ids'] = ids;
-    req['send_copy'] = false;
-    req['remove_caption'] = false;
-    getTdClient().send(req).then((): void => {
-      if (seq !== this.forwardPickerSeq || !this.showForwardSheet) {
-        return;
-      }
-      const count: number = ids.length;
-      this.closeForwardSheet();
-      if (this.selecting) {
-        this.exitSelect();
-      }
-      promptAction.showToast({
-        message: count > 1 ? `已转发 ${count} 条消息` : `已转发到 ${chat.title}`,
-        duration: 1500
-      });
-    }).catch((e: TdError): void => {
-      if (seq !== this.forwardPickerSeq || !this.showForwardSheet) {
-        return;
-      }
-      this.forwardSendingChatId = 0;
-      console.error(`ChatPage.forwardMessages failed: ${e.message}`);
-      promptAction.showToast({ message: '转发失败，请选择其他会话或稍后重试', duration: 2000 });
-    });
   }
 
   @Styles
@@ -7026,7 +5591,7 @@ struct ChatPage {
         });
         Column() {
           Row() {
-            Text(this.headerTitleText())
+            Text(this.headerText().titleText)
               .fontSize(16)
               .fontWeight(FontWeight.Bold)
               .fontColor(COLOR_TEXT_PRIMARY)
@@ -7079,7 +5644,7 @@ struct ChatPage {
           }
           .width('100%')
           .alignItems(VerticalAlign.Center);
-          Text(this.headerSubtitleText())
+          Text(this.headerText().subtitleText)
             .fontSize(12)
             .fontColor(this.headerState === 'error' ? '#E64646' : COLOR_TEXT_SECONDARY)
             .maxLines(1)
@@ -7102,7 +5667,7 @@ struct ChatPage {
         duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 140),
         curve: Curve.EaseOut
       })
-      .accessibilityText(`${this.headerTitleText()}，${this.headerSubtitleText()}，查看资料`)
+      .accessibilityText(`${this.headerText().titleText}，${this.headerText().subtitleText}，查看资料`)
       .onClick((): void => {
         if (this.headerState === 'error') {
           this.resolveHeaderIdentity();
@@ -7426,229 +5991,6 @@ struct ChatPage {
     );
   }
 
-  // 自定义 emoji（Premium 表情）反应区。只在服务端允许时才出现，避免用户点
-  // 一个必然被拒的反应。
-  @Builder
-  customEmojiReactionSection() {
-    Column({ space: 6 }) {
-      Row() {
-        Text('自定义表情').fontSize(13).fontColor(COLOR_TEXT_SECONDARY).layoutWeight(1);
-      }
-      .width('100%').padding({ left: 6, right: 6 });
-      Scroll() {
-        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
-          ForEach(this.sheetCustomEmojis, (option: CustomEmojiOption) => {
-            Row() {
-              if (option.path !== '') {
-                Image(option.path.startsWith('/') ? `file://${option.path}` : option.path)
-                  .width(30).height(30).objectFit(ImageFit.Contain)
-                  .draggable(false);
-              } else {
-                // 位图未就绪：灰底占位保持格子尺寸，不闪空白。
-                Row().width(30).height(30).borderRadius(8)
-                  .backgroundColor($r('app.color.surface_alt'));
-              }
-            }
-            .width(44).height(44).borderRadius(22)
-            .justifyContent(FlexAlign.Center)
-            .backgroundColor(this.targetReactionChosen(customEmojiReactionKey(option.id))
-              ? $r('app.color.selected_pill') : Color.Transparent)
-            .stateStyles({
-              normal: this.suggestionRowNormalStyle,
-              pressed: this.suggestionRowPressedStyle
-            })
-            .animation({ duration: this.reactionEffectDuration(130), curve: Curve.EaseOut })
-            .accessibilityText('自定义表情回应')
-            .onClick(() => { this.pickReaction(customEmojiReactionKey(option.id)); });
-          }, (option: CustomEmojiOption) => `ce_${option.id}_${option.path}`);
-        }.width('100%');
-      }.constraintSize({ maxHeight: 108 }).scrollBar(BarState.Off);
-    }
-    .width('100%');
-  }
-
-  // Full emoji reaction picker (opened from the long-press menu chevron): a
-  // bottom sheet grid; tapping an emoji adds it as a reaction to the target.
-  @Builder
-  reactionSheet() {
-    Column() {
-      Column().layoutWeight(1)
-        .onClick(() => { this.closeReactionSheet(); });
-      Column({ space: 8 }) {
-        Row().width(40).height(4).borderRadius(2).backgroundColor('#D0D0D0');
-        Row() {
-          Text('选择表情回应').fontSize(16).fontColor(COLOR_TEXT_PRIMARY).fontWeight(FontWeight.Medium)
-            .layoutWeight(1);
-          Text('再次点击可取消')
-            .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
-        }
-        .width('100%').padding({ left: 6, right: 6 });
-        Scroll() {
-          Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
-            ForEach(this.sheetReactions, (e: string) => {
-              Row() {
-                Text(e).fontSize(27);
-              }
-                .width(44).height(44).borderRadius(22)
-                .justifyContent(FlexAlign.Center)
-                .backgroundColor(this.targetReactionChosen(e) ? $r('app.color.selected_pill') : Color.Transparent)
-                .stateStyles({
-                  normal: this.suggestionRowNormalStyle,
-                  pressed: this.suggestionRowPressedStyle
-                })
-                .animation({ duration: this.reactionEffectDuration(130), curve: Curve.EaseOut })
-                .onClick(() => { this.pickReaction(e); });
-            }, (e: string) => e);
-          }.width('100%');
-        }.constraintSize({ maxHeight: 240 }).scrollBar(BarState.Off);
-        if (this.sheetAllowCustomEmoji && this.sheetCustomEmojis.length > 0) {
-          this.customEmojiReactionSection();
-        }
-      }
-      .width('calc(100% - 16vp)')
-      .padding({ left: 10, right: 10, top: 10, bottom: 14 + this.bottomInset() })
-      .backgroundColor($r('app.color.surface'))
-      .borderRadius(20)
-      .shadow({ radius: 12, color: '#26000000', offsetX: 0, offsetY: -2 })
-      .margin({ left: 8, right: 8, bottom: 8 });
-    }
-    .width('100%').height('100%')
-    .backgroundColor('#00000066')
-    .transition(
-      TransitionEffect.translate({ y: 24 })
-        .combine(TransitionEffect.OPACITY)
-        .animation({ duration: this.reactionEffectDuration(220), curve: Curve.EaseOut })
-    );
-  }
-
-  @Builder
-  forwardSheet() {
-    Column() {
-      Column().layoutWeight(1)
-        .onClick(() => { this.closeForwardSheet(); });
-      Column({ space: 10 }) {
-        Row({ space: 10 }) {
-          Row().width(40).height(4).borderRadius(2).backgroundColor('#D0D0D0');
-        }
-        .width('100%').justifyContent(FlexAlign.Center);
-        Row() {
-          Column({ space: 2 }) {
-            Text(this.forwardMessageIds.length > 1
-              ? `转发 ${this.forwardMessageIds.length} 条消息`
-              : '转发消息')
-              .fontSize(17).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
-            Text('选择接收会话').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
-          }
-          .alignItems(HorizontalAlign.Start).layoutWeight(1);
-          Row() {
-            SymbolGlyph($r('sys.symbol.xmark')).fontSize(16).fontColor([COLOR_TEXT_SECONDARY]);
-          }
-          .width(34).height(34).borderRadius(17).justifyContent(FlexAlign.Center)
-          .stateStyles({
-            normal: this.suggestionRowNormalStyle,
-            pressed: this.suggestionRowPressedStyle
-          })
-          .animation({ duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 110), curve: Curve.EaseOut })
-          .onClick(() => { this.closeForwardSheet(); });
-        }
-        .width('100%');
-        TextInput({ text: this.forwardQuery, placeholder: '搜索聊天' })
-          .width('100%').height(40)
-          .padding({ left: 14, right: 14 })
-          .backgroundColor($r('app.color.surface_alt')).borderRadius(20)
-          .onChange((value: string): void => { this.forwardQuery = value; });
-        if (this.forwardLoadState === 'loading') {
-          Column({ space: 10 }) {
-            LoadingProgress().width(26).height(26).color(COLOR_PRIMARY);
-            Text('正在加载会话').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
-          }
-          .layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
-        } else if (this.forwardLoadState === 'error') {
-          Column({ space: 10 }) {
-            SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
-              .fontSize(28).fontColor([COLOR_TEXT_SECONDARY]);
-            Text('会话列表加载失败').fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
-            Button('重试')
-              .fontSize(14).fontColor(Color.White)
-              .height(36).padding({ left: 20, right: 20 })
-              .backgroundColor(COLOR_PRIMARY).borderRadius(18)
-              .onClick(() => { this.retryForwardChats(); });
-          }
-          .layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
-        } else if (this.filteredForwardChats().length === 0) {
-          Column({ space: 8 }) {
-            SymbolGlyph($r('sys.symbol.magnifyingglass'))
-              .fontSize(28).fontColor([COLOR_TEXT_SECONDARY]);
-            Text(this.forwardQuery.trim() === '' ? '暂无可转发的会话' : '没有匹配的聊天')
-              .fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
-          }
-          .layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
-        } else {
-          List() {
-            ForEach(this.filteredForwardChats(), (chat: ChatEntry) => {
-              ListItem() {
-                Row({ space: 12 }) {
-                  AvatarView({
-                    avatarPath: chat.avatarPath,
-                    initials: chat.initials,
-                    colorSeed: chat.id,
-                    avatarSize: 42
-                  });
-                  Column({ space: 3 }) {
-                    Text(chat.title).fontSize(15).fontWeight(FontWeight.Medium)
-                      .fontColor(COLOR_TEXT_PRIMARY).maxLines(1)
-                      .textOverflow({ overflow: TextOverflow.Ellipsis });
-                    Text(chat.id === this.chatId ? '当前聊天' :
-                      (chat.lastMessageText !== '' ? chat.lastMessageText : '点击转发'))
-                      .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).maxLines(1)
-                      .textOverflow({ overflow: TextOverflow.Ellipsis });
-                  }
-                  .alignItems(HorizontalAlign.Start).layoutWeight(1);
-                  if (this.forwardSendingChatId === chat.id) {
-                    LoadingProgress().width(20).height(20).color(COLOR_PRIMARY);
-                  } else {
-                    SymbolGlyph($r('sys.symbol.paperplane'))
-                      .fontSize(18).fontColor([COLOR_PRIMARY]);
-                  }
-                }
-                .width('100%').padding({ left: 6, right: 6, top: 8, bottom: 8 })
-                .alignItems(VerticalAlign.Center)
-                .opacity(this.forwardSendingChatId === 0 || this.forwardSendingChatId === chat.id ? 1 : 0.45)
-                .stateStyles({
-                  normal: this.suggestionRowNormalStyle,
-                  pressed: this.suggestionRowPressedStyle
-                })
-                .animation({
-                  duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 120),
-                  curve: Curve.EaseOut
-                })
-                .onClick(() => { this.forwardToChat(chat); });
-              }
-            }, (chat: ChatEntry): string => `forward_${chat.id}_${chat.revision}`);
-          }
-          .layoutWeight(1).width('100%')
-          .divider({ strokeWidth: 0.7, color: $r('app.color.divider'), startMargin: 60, endMargin: 6 })
-          .scrollBar(BarState.Auto)
-          .onReachEnd((): void => { getChatStore().loadMore('main'); });
-        }
-      }
-      .width('calc(100% - 16vp)').height('64%')
-      .padding({ left: 12, right: 12, top: 10, bottom: 12 + this.bottomInset() })
-      .backgroundColor($r('app.color.surface')).borderRadius(20)
-      .shadow({ radius: 12, color: '#26000000', offsetX: 0, offsetY: -2 })
-      .margin({ left: 8, right: 8, bottom: 8 });
-    }
-    .width('100%').height('100%')
-    .backgroundColor('#00000066')
-    .transition(
-      TransitionEffect.translate({ y: 24 })
-        .combine(TransitionEffect.OPACITY)
-        .animation({ duration: this.chatEffectDuration(KEY_POWER_EFFECT_REPLY, 220), curve: Curve.EaseOut })
-    );
-  }
-
-  // The reply keyboard sits below the input bar, so while it's up it carries
-  // the bottom safe-area inset instead of the input row.
   private replyKbVisible(): boolean {
     return this.membershipState === 'writable' &&
       this.replyKeyboard !== null && !this.replyKbCollapsed;
@@ -8348,12 +6690,12 @@ struct ChatPage {
   }
 
   private backgroundEffectsEnabled(): boolean {
-    return !this.chatBackgroundCustom &&
+    return !this.chatBg.custom &&
       !this.powerSaving && this.powerChatEffects && this.powerBackgroundEffect;
   }
 
   private particlesEnabled(): boolean {
-    return !this.chatBackgroundCustom && !this.powerSaving && this.powerParticles;
+    return !this.chatBg.custom && !this.powerSaving && this.powerParticles;
   }
 
   private emptyHistoryTitle(): string {
@@ -8591,35 +6933,43 @@ struct ChatPage {
   @Builder
   chatBackgroundLayer() {
     Stack() {
-      if (this.chatBackgroundColors.length > 0) {
+      if (this.chatBg.colors.length > 0) {
         Column()
           .width('100%').height('100%')
           .linearGradient({
-            angle: this.chatBackgroundAngle,
-            colors: this.backgroundGradientStops()
+            angle: this.chatBg.angle,
+            colors: gradientStops(this.chatBg.colors)
           });
       } else {
         Column().width('100%').height('100%')
           .backgroundColor($r('app.color.chat_bg'));
       }
-      if (this.chatBackgroundPath !== '') {
-        Image(this.chatBackgroundPath.startsWith('/')
-          ? `file://${this.chatBackgroundPath}` : this.chatBackgroundPath)
+      // KNOWN ISSUE — built-in patterns (backgroundTypePattern) render at the
+      // wrong scale. The cause is the source, not the fit: the store hands over
+      // the pattern's *thumbnail*, a picker-sized preview, and no objectFit or
+      // tiling makes a thumbnail correct at full screen. Fixing it means using
+      // the full document, which Telegram ships as .tgv (gzipped SVG) and so
+      // needs inflating first — util/gunzipTgs.ets already does that for .tgs
+      // stickers. Left as-is deliberately rather than half-fixed; chatBg
+      // carries isPattern so the renderer can branch once the source is right.
+      if (this.chatBg.path !== '') {
+        Image(this.chatBg.path.startsWith('/')
+          ? `file://${this.chatBg.path}` : this.chatBg.path)
           .width('100%').height('100%')
           .objectFit(ImageFit.Cover)
-          .opacity(this.chatBackgroundImageOpacity)
+          .opacity(this.chatBg.imageOpacity)
           // Blurring needs a little overscan or transparent edge pixels become
           // visible around the viewport.
           .scale({
-            x: this.chatBackgroundBlurred ? 1.08 : 1,
-            y: this.chatBackgroundBlurred ? 1.08 : 1
+            x: this.chatBg.blurred ? 1.08 : 1,
+            y: this.chatBg.blurred ? 1.08 : 1
           })
-          .blur(this.chatBackgroundBlurred ? 12 : 0);
+          .blur(this.chatBg.blurred ? 12 : 0);
       }
-      if (this.chatBackgroundDimming > 0) {
+      if (this.chatBg.dimming > 0) {
         Column().width('100%').height('100%')
           .backgroundColor(Color.Black)
-          .opacity(this.chatBackgroundDimming);
+          .opacity(this.chatBg.dimming);
       }
     }
     .width('100%').height('100%')
@@ -8698,7 +7048,7 @@ struct ChatPage {
               MessageBubble({ msg: g.head, nowSec: this.nowSec, isGroup: this.isGroup, isChannel: this.isChannel,
                 liveSharingId: this.liveLocationMessageId,
                 onStopLiveLocation: (): void => { this.confirmStopLiveLocation(); },
-                themeBubbleOut: this.themeBubbleOutColor,
+                themeBubbleOut: this.chatBg.bubbleOutColor,
                 showUnreadDivider: this.firstUnreadId !== 0 &&
                   g.memberIds.indexOf(this.firstUnreadId) >= 0,
                 dateLabel: g.dateLabel,
@@ -8775,15 +7125,15 @@ struct ChatPage {
                 onVoicePlaybackStarted: (id: number): void => {
                   this.onVoicePlaybackStarted(id);
                 },
-                audioQueuePosition: this.musicQueuePosition(g.head.id),
-                audioQueueLength: this.musicQueueLength(),
-                audioHasPrevious: this.musicHasPrevious(g.head.id),
-                audioHasNext: this.musicHasNext(g.head.id),
-                onAudioTap: (id: number): void => { this.onAudioTap(id); },
-                onAudioPrevious: (id: number): void => { this.onAudioPrevious(id); },
-                onAudioNext: (id: number): void => { this.onAudioNext(id); },
+                audioQueuePosition: this.musicQueue.queuePosition(this.messages, g.head.id),
+                audioQueueLength: this.musicQueue.queueLength(this.messages),
+                audioHasPrevious: this.musicQueue.hasPrevious(this.messages, g.head.id),
+                audioHasNext: this.musicQueue.hasNext(this.messages, g.head.id),
+                onAudioTap: (id: number): void => { this.musicQueue.play(this.messages, id, false); },
+                onAudioPrevious: (id: number): void => { this.musicQueue.previous(this.messages, id); },
+                onAudioNext: (id: number): void => { this.musicQueue.next(this.messages, id); },
                 onAudioSeek: (id: number, fraction: number): void => {
-                  this.onAudioSeek(id, fraction);
+                  this.musicQueue.seek(id, fraction);
                 },
                 onAutoplayVideoNeedDownload: (id: number): void => {
                   this.store?.requestVideoDownload(id);
@@ -9109,13 +7459,40 @@ struct ChatPage {
         .hitTestBehavior(HitTestMode.None);
       }
       if (this.showReactionSheet) {
-        this.reactionSheet();
+        ReactionSheet({
+          show: this.showReactionSheet,
+          messages: this.messages,
+          targetId: this.reactionTargetId,
+          chatId: this.chatId,
+          pendingKey: this.reactionPendingKey,
+          effectDuration: (key: string, ms: number): number => this.chatEffectDuration(key, ms),
+          onPick: (reactionKey: string, chosen: boolean): void => {
+            const targetId: number = this.reactionTargetId;
+            this.closeReactionSheet();
+            this.toggleReaction(targetId, reactionKey, chosen);
+          }
+        })
       }
       if (this.showForwardSheet) {
-        this.forwardSheet();
+        ForwardSheet({
+          show: this.showForwardSheet,
+          messageIds: this.forwardMessageIds,
+          sourceChatId: this.chatId,
+          threadRootId: this.threadRootId,
+          effectDuration: (key: string, ms: number): number => this.chatEffectDuration(key, ms),
+          onSent: (): void => {
+            this.forwardMessageIds = [];
+            if (this.selecting) {
+              this.exitSelect();
+            }
+          }
+        })
       }
       if (this.showScheduledSheet) {
-        this.scheduledSheet();
+        ScheduledSheet({
+          show: this.showScheduledSheet,
+          chatId: this.chatId
+        })
       }
       if (this.showPollSheet) {
         PollComposeSheet({
@@ -9172,101 +7549,27 @@ struct ChatPage {
         .hitTestBehavior(HitTestMode.Transparent);
       }
 
+      // Fullscreen media viewer. The page owns which message is open and the
+      // hero transition anchored to the tapped thumbnail; the overlay owns
+      // zoom/pan, paging, the filmstrip and the chrome layer.
       if (this.viewerMsgId !== 0) {
-        Stack() {
-          this.viewerContent();
-          if (this.chromeVisible) {
-            // Content-height wrapper pinned to the top — a full-screen wrapper here
-            // (default hit-test mode) would block ALL touches on the player below it.
-            Row() {
-              Row({ space: 10 }) {
-                Stack() {
-                  Circle({ width: 36, height: 36 }).fill('#12000000');
-                  SymbolGlyph($r('sys.symbol.xmark')).fontSize(18).fontColor([Color.White]);
-                }
-                .width(40).height(40).borderRadius(20)
-                .stateStyles({
-                  normal: this.suggestionRowNormalStyle,
-                  pressed: this.suggestionRowPressedStyle
-                })
-                .animation({
-                  duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 120),
-                  curve: Curve.EaseOut
-                })
-                .onClick(() => { this.closeViewer(); });
-                Column({ space: 1 }) {
-                  Text(this.viewerInfoTitle()).fontSize(13).fontColor(Color.White).fontWeight(FontWeight.Medium)
-                    .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-                    .constraintSize({ maxWidth: 220 });
-                  if (this.viewerInfoSubtitle() !== '') {
-                    Text(this.viewerInfoSubtitle()).fontSize(11).fontColor('#BFFFFFFF')
-                      .maxLines(1);
-                  }
-                }
-                .alignItems(HorizontalAlign.Start).flexShrink(1);
-              }
-              .padding({ left: 12, right: 14, top: 10, bottom: 10 })
-              .backgroundColor(VIEWER_CHROME_BG)
-              .borderRadius(18)
-              .alignItems(VerticalAlign.Center)
-              .flexShrink(1);
-              Blank().layoutWeight(1).hitTestBehavior(HitTestMode.None);
-              // No download indicator up here: the seek bar's lighter track shows
-              // the downloaded span, and a stalled player draws a centered ring.
-              // "⋮" menu — 保存到相册 etc.
-              Stack() {
-                Circle({ width: 36, height: 36 }).fill(VIEWER_CHROME_BG);
-                SymbolGlyph($r('sys.symbol.more')).fontSize(18).fontColor([Color.White]);
-              }
-              .width(40).height(40).borderRadius(20)
-              .stateStyles({
-                normal: this.suggestionRowNormalStyle,
-                pressed: this.suggestionRowPressedStyle
-              })
-              .animation({
-                duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 120),
-                curve: Curve.EaseOut
-              })
-              .bindMenu([{
-                value: '保存到相册',
-                action: (): void => { this.saveViewerMedia(); }
-              } as MenuElement]);
-            }
-            .width('100%')
-            .position({ x: 0, y: 0 })
-            .padding({ left: 12, right: 12, top: this.topSafe + 12 })
-            .transition(TransitionEffect.OPACITY
-              .combine(TransitionEffect.translate({ y: -8 }))
-              .animation({
-                duration: this.chatEffectDuration(KEY_POWER_EFFECT_BLUR, 180),
-                curve: Curve.EaseOut
-              }));
-          }
-          if (this.chromeVisible && this.viewerSiblingIds().length > 1) {
-            Column() {
-              this.viewerFilmstrip();
-            }
-            .width('100%').height('100%')
-            .justifyContent(FlexAlign.End)
-            .padding({ bottom: this.viewerIsVideo() ? 110 : 30 })
-            .hitTestBehavior(HitTestMode.Transparent)
-            .transition(TransitionEffect.OPACITY
-              .combine(TransitionEffect.translate({ y: 10 }))
-              .animation({
-                duration: this.chatEffectDuration(KEY_POWER_EFFECT_BLUR, 180),
-                curve: Curve.EaseOut
-              }));
-          }
-        }
-        .width('100%').height('100%').backgroundColor(Color.Black)
-        // The fullscreen surface owns its transition. The chat thumbnail stays
-        // mounted and decoded underneath, so closing can never leave that cell
-        // as a grey/background placeholder or an empty Image node.
-        .transition(
-          TransitionEffect.scale({ x: 0.25, y: 0.25, centerX: this.tapX, centerY: this.tapY })
-            .combine(TransitionEffect.OPACITY)
-            .animation({ duration: this.chatEffectDuration(KEY_POWER_EFFECT_BLUR, 300), curve: Curve.Friction })
-        )
+        MediaViewerOverlay({
+          viewerMsgId: this.viewerMsgId,
+          chromeVisible: this.chromeVisible,
+          videoLandscape: this.viewerVideoLandscape,
+          messages: this.messages,
+          groups: this.groups,
+          initIdx: this.viewerInitIdx,
+          tapX: this.tapX,
+          tapY: this.tapY,
+          store: this.store,
+          chatTitle: this.title,
+          nowSec: this.nowSec,
+          effectDuration: (key: string, ms: number): number => this.chatEffectDuration(key, ms),
+          isVideoEntry: (entry: MessageEntry): boolean => this.mediaEntryIsVideo(entry),
+          onRequestClose: (): void => { this.closeViewer(); },
+          onSaveMedia: (): void => { this.saveViewerMedia(); }
+        })
       }
     }.width('100%').height('100%');
   }

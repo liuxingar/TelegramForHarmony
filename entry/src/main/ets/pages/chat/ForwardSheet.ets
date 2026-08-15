@@ -1,0 +1,306 @@
+import { promptAction } from '@kit.ArkUI';
+import { ChatEntry } from '../../store/ChatEntry';
+import { AvatarView } from '../chatlist/AvatarView';
+import { getChatStore, getTdClient } from '../../tdkit/Globals';
+import { TdRequest, TdError } from '../../tdkit/TdTypes';
+import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import {
+  KEY_POWER_EFFECT_REPLY, KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration
+} from '../../store/AppSettings';
+
+// "Forward to…" chat picker, extracted from ChatPage.
+//
+// Ownership split with the page: the page decides *whether* the sheet is up and
+// which messages are being forwarded (it has to filter out non-forwardable ones
+// before there is anything to show). The chat list — loading, retry, filtering,
+// and the forwardMessages request itself — lives here. The page's
+// `if (showForwardSheet)` branch creates and destroys this component, so the
+// query box and in-flight send state reset per open without explicit teardown.
+@Component
+export struct ForwardSheet {
+  // Two-way: the close button and a successful send both dismiss from in here.
+  @Link show: boolean;
+
+  // Set by the page at construction. Plain fields are correct: the sheet is
+  // rebuilt on each open, and these never change while it is up.
+  messageIds: number[] = [];
+  sourceChatId: number = 0;
+  threadRootId: number = 0;
+
+  // Read directly rather than passed down — same source the page uses, so the
+  // padding still tracks the keyboard while the search box has focus.
+  @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
+  @StorageProp('keyboardHeightVp') keyboardH: number = 0;
+
+  effectDuration: (key: string, ms: number) => number =
+    (_key: string, ms: number): number => ms;
+  // The page leaves multi-select mode after a successful forward.
+  onSent: () => void = (): void => {};
+
+  @State chats: ChatEntry[] = [];
+  @State query: string = '';
+  @State loadState: string = 'ready'; // loading | ready | error
+  @State sendingChatId: number = 0;
+
+  // Guards async continuations against a sheet that has since been closed or
+  // reopened. Kept even though the component is destroyed on close: a request
+  // in flight at that moment would otherwise write state on a dead instance.
+  private seq: number = 0;
+  private unsubChats: (() => void) | null = null;
+
+  aboutToAppear(): void {
+    // Live subscription rather than a one-shot read: the main list reorders as
+    // messages arrive and rows gain avatars as those downloads finish, and an
+    // open picker has to track that. ChatPage used to push these updates in
+    // from its own subscription; owning it here keeps that behaviour without
+    // the page needing to know the sheet exists.
+    this.unsubChats = getChatStore().subscribe((list: ChatEntry[]): void => {
+      this.applyChats(list);
+    }, 'main'); // fires immediately with the currently cached list
+    this.loadChats();
+  }
+
+  aboutToDisappear(): void {
+    this.seq++;
+    if (this.unsubChats !== null) {
+      this.unsubChats();
+      this.unsubChats = null;
+    }
+  }
+
+  // Empirically tuned on device: with the keyboard up the sheet needs lifting
+  // clear of the IME edge; without it the layout already sits above the gesture
+  // bar, so only minimal padding applies.
+  private bottomInset(): number {
+    return this.keyboardH > 0 ? Math.max(this.bottomSafe, 12) : this.bottomSafe;
+  }
+
+  private applyChats(list: ChatEntry[]): void {
+    this.chats = list.filter((chat: ChatEntry): boolean => chat.id > 0);
+    if (this.chats.length > 0) {
+      this.loadState = 'ready';
+    }
+  }
+
+  // The subscription above has already seeded `chats`; this only drives the
+  // loading/error state and asks the store to fill an empty cache.
+  private loadChats(): void {
+    this.loadState = this.chats.length > 0 ? 'ready' : 'loading';
+    const seq: number = ++this.seq;
+    getChatStore().ensureLoaded('main').then((success: boolean): void => {
+      if (seq !== this.seq) {
+        return;
+      }
+      this.applyChats(getChatStore().getChats('main'));
+      if (!success && this.chats.length === 0) {
+        this.loadState = 'error';
+      } else {
+        this.loadState = 'ready';
+      }
+    });
+  }
+
+  private retryChats(): void {
+    if (this.loadState === 'loading') {
+      return;
+    }
+    this.loadState = 'loading';
+    const seq: number = ++this.seq;
+    getChatStore().loadMore('main').then((): void => {
+      if (seq !== this.seq) {
+        return;
+      }
+      this.applyChats(getChatStore().getChats('main'));
+      this.loadState = this.chats.length > 0 ? 'ready' : 'error';
+    });
+  }
+
+  private close(): void {
+    this.seq++;
+    this.show = false;
+  }
+
+  private filteredChats(): ChatEntry[] {
+    const q: string = this.query.trim().toLowerCase();
+    if (q === '') {
+      return this.chats;
+    }
+    return this.chats.filter((chat: ChatEntry): boolean =>
+      chat.title.toLowerCase().indexOf(q) >= 0
+    );
+  }
+
+  private forwardToChat(chat: ChatEntry): void {
+    if (this.sendingChatId !== 0 || this.messageIds.length === 0) {
+      return;
+    }
+    const ids: number[] = [...this.messageIds];
+    const seq: number = this.seq;
+    this.sendingChatId = chat.id;
+    const req: TdRequest = { '@type': 'forwardMessages' };
+    req['chat_id'] = chat.id;
+    req['message_thread_id'] = chat.id === this.sourceChatId ? this.threadRootId : 0;
+    req['from_chat_id'] = this.sourceChatId;
+    req['message_ids'] = ids;
+    req['send_copy'] = false;
+    req['remove_caption'] = false;
+    getTdClient().send(req).then((): void => {
+      if (seq !== this.seq) {
+        return;
+      }
+      const count: number = ids.length;
+      this.close();
+      this.onSent();
+      promptAction.showToast({
+        message: count > 1 ? `已转发 ${count} 条消息` : `已转发到 ${chat.title}`,
+        duration: 1500
+      });
+    }).catch((e: TdError): void => {
+      if (seq !== this.seq) {
+        return;
+      }
+      this.sendingChatId = 0;
+      console.error(`ForwardSheet.forwardMessages failed: ${e.message}`);
+      promptAction.showToast({ message: '转发失败，请选择其他会话或稍后重试', duration: 2000 });
+    });
+  }
+
+  @Styles
+  rowNormalStyle() {
+    .backgroundColor(Color.Transparent)
+    .opacity(1)
+    .scale({ x: 1, y: 1 })
+  }
+
+  @Styles
+  rowPressedStyle() {
+    .backgroundColor($r('app.color.surface_alt'))
+    .opacity(0.76)
+    .scale({ x: 0.985, y: 0.96 })
+  }
+
+  build() {
+    Column() {
+      Column().layoutWeight(1)
+        .onClick(() => { this.close(); });
+      Column({ space: 10 }) {
+        Row({ space: 10 }) {
+          Row().width(40).height(4).borderRadius(2).backgroundColor('#D0D0D0');
+        }
+        .width('100%').justifyContent(FlexAlign.Center);
+        Row() {
+          Column({ space: 2 }) {
+            Text(this.messageIds.length > 1
+              ? `转发 ${this.messageIds.length} 条消息`
+              : '转发消息')
+              .fontSize(17).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
+            Text('选择接收会话').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+          }
+          .alignItems(HorizontalAlign.Start).layoutWeight(1);
+          Row() {
+            SymbolGlyph($r('sys.symbol.xmark')).fontSize(16).fontColor([COLOR_TEXT_SECONDARY]);
+          }
+          .width(34).height(34).borderRadius(17).justifyContent(FlexAlign.Center)
+          .stateStyles({
+            normal: this.rowNormalStyle,
+            pressed: this.rowPressedStyle
+          })
+          .animation({ duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 110), curve: Curve.EaseOut })
+          .onClick(() => { this.close(); });
+        }
+        .width('100%');
+        TextInput({ text: this.query, placeholder: '搜索聊天' })
+          .width('100%').height(40)
+          .padding({ left: 14, right: 14 })
+          .backgroundColor($r('app.color.surface_alt')).borderRadius(20)
+          .onChange((value: string): void => { this.query = value; });
+        if (this.loadState === 'loading') {
+          Column({ space: 10 }) {
+            LoadingProgress().width(26).height(26).color(COLOR_PRIMARY);
+            Text('正在加载会话').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+          }
+          .layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
+        } else if (this.loadState === 'error') {
+          Column({ space: 10 }) {
+            SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+              .fontSize(28).fontColor([COLOR_TEXT_SECONDARY]);
+            Text('会话列表加载失败').fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
+            Button('重试')
+              .fontSize(14).fontColor(Color.White)
+              .height(36).padding({ left: 20, right: 20 })
+              .backgroundColor(COLOR_PRIMARY).borderRadius(18)
+              .onClick(() => { this.retryChats(); });
+          }
+          .layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
+        } else if (this.filteredChats().length === 0) {
+          Column({ space: 8 }) {
+            SymbolGlyph($r('sys.symbol.magnifyingglass'))
+              .fontSize(28).fontColor([COLOR_TEXT_SECONDARY]);
+            Text(this.query.trim() === '' ? '暂无可转发的会话' : '没有匹配的聊天')
+              .fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
+          }
+          .layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
+        } else {
+          List() {
+            ForEach(this.filteredChats(), (chat: ChatEntry) => {
+              ListItem() {
+                Row({ space: 12 }) {
+                  AvatarView({
+                    avatarPath: chat.avatarPath,
+                    initials: chat.initials,
+                    colorSeed: chat.id,
+                    avatarSize: 42
+                  });
+                  Column({ space: 3 }) {
+                    Text(chat.title).fontSize(15).fontWeight(FontWeight.Medium)
+                      .fontColor(COLOR_TEXT_PRIMARY).maxLines(1)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis });
+                    Text(chat.id === this.sourceChatId ? '当前聊天' :
+                      (chat.lastMessageText !== '' ? chat.lastMessageText : '点击转发'))
+                      .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).maxLines(1)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis });
+                  }
+                  .alignItems(HorizontalAlign.Start).layoutWeight(1);
+                  if (this.sendingChatId === chat.id) {
+                    LoadingProgress().width(20).height(20).color(COLOR_PRIMARY);
+                  } else {
+                    SymbolGlyph($r('sys.symbol.paperplane'))
+                      .fontSize(18).fontColor([COLOR_PRIMARY]);
+                  }
+                }
+                .width('100%').padding({ left: 6, right: 6, top: 8, bottom: 8 })
+                .alignItems(VerticalAlign.Center)
+                .opacity(this.sendingChatId === 0 || this.sendingChatId === chat.id ? 1 : 0.45)
+                .stateStyles({
+                  normal: this.rowNormalStyle,
+                  pressed: this.rowPressedStyle
+                })
+                .animation({
+                  duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 120),
+                  curve: Curve.EaseOut
+                })
+                .onClick(() => { this.forwardToChat(chat); });
+              }
+            }, (chat: ChatEntry): string => `forward_${chat.id}_${chat.revision}`);
+          }
+          .layoutWeight(1).width('100%')
+          .divider({ strokeWidth: 0.7, color: $r('app.color.divider'), startMargin: 60, endMargin: 6 })
+          .scrollBar(BarState.Auto)
+          .onReachEnd((): void => { getChatStore().loadMore('main'); });
+        }
+      }
+      .width('calc(100% - 16vp)').height('64%')
+      .padding({ left: 12, right: 12, top: 10, bottom: 12 + this.bottomInset() })
+      .backgroundColor($r('app.color.surface')).borderRadius(20)
+      .shadow({ radius: 12, color: '#26000000', offsetX: 0, offsetY: -2 })
+      .margin({ left: 8, right: 8, bottom: 8 });
+    }
+    .width('100%').height('100%')
+    .backgroundColor('#00000066')
+    .transition(
+      TransitionEffect.translate({ y: 24 })
+        .combine(TransitionEffect.OPACITY)
+        .animation({ duration: this.effectDuration(KEY_POWER_EFFECT_REPLY, 220), curve: Curve.EaseOut })
+    );
+  }
+}

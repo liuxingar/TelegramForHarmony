@@ -51,6 +51,10 @@ import chatThemePresentationTest from './ChatThemePresentation.test';
 import accentPresentationTest from './AccentPresentation.test';
 import customEmojiReactionsTest from './CustomEmojiReactions.test';
 import downloadApiTest from './DownloadApi.test';
+import musicQueueTest from './MusicQueue.test';
+import mediaPickTest from './MediaPick.test';
+import chatBackgroundStoreTest from './ChatBackgroundStore.test';
+import chatHeaderPresentationTest from './ChatHeaderPresentation.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -104,6 +108,10 @@ export default function testsuite() {
   chatThemePresentationTest();
   accentPresentationTest();
   downloadApiTest();
+  musicQueueTest();
+  mediaPickTest();
+  chatBackgroundStoreTest();
+  chatHeaderPresentationTest();
   customEmojiReactionsTest();
   markdownBlocksTest();
 }

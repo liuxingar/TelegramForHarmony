@@ -37,8 +37,31 @@ export function fillColorsOf(fill: TdObject | null): string[] {
   return [];
 }
 
-function objectOrNull(value: Object | undefined): TdObject | null {
-  return value !== undefined && typeof value === 'object' ? value as TdObject : null;
+// Linear-gradient stops for a fill's colors, evenly spaced over [0, 1].
+// A single color still needs two stops — ArkUI's linearGradient renders nothing
+// from one — so it is emitted at both ends.
+export function gradientStops(colors: string[]): Array<[string, number]> {
+  const result: Array<[string, number]> = [];
+  if (colors.length === 0) {
+    return result;
+  }
+  if (colors.length === 1) {
+    result.push([colors[0], 0]);
+    result.push([colors[0], 1]);
+    return result;
+  }
+  const last: number = colors.length - 1;
+  colors.forEach((color: string, index: number): void => {
+    result.push([color, index / last]);
+  });
+  return result;
+}
+
+// Widened to accept null as well as undefined: TDLib field reads yield either,
+// and a narrower parameter makes ArkTS treat the indexed access as `any`.
+export function objectOrNull(value: Object | null | undefined): TdObject | null {
+  return value !== undefined && value !== null && typeof value === 'object'
+    ? value as TdObject : null;
 }
 
 // The small preview image TDLib attaches to photo/pattern wallpapers.

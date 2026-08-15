@@ -5,6 +5,7 @@ import {
   updateChecker, UpdateInfo, STORAGE_UPDATE_AVAILABLE
 } from '../../services/UpdateChecker';
 import { MdBlock, MdSpan, parseMarkdownBlocks } from '../../util/markdownBlocks';
+import { str } from '../../util/strings';
 
 const CARD_BG: ResourceColor = $r('app.color.surface');
 const CARD_RADIUS: number = 14;
@@ -43,7 +44,7 @@ struct AboutPage {
       if (!info.hasUpdate) {
         promptAction.showToast({
           message: info.latestVersion === ''
-            ? '暂时无法连接更新服务器' : '已是最新版本',
+            ? $r('app.string.about_update_unreachable') : $r('app.string.about_up_to_date'),
           duration: 1600
         });
       }
@@ -60,13 +61,13 @@ struct AboutPage {
       uri: updateChecker.getReleaseUrl()
     }).catch((e: Object): void => {
       console.error(`AboutPage.openReleasePage failed: ${JSON.stringify(e)}`);
-      promptAction.showToast({ message: '无法打开浏览器', duration: 1600 });
+      promptAction.showToast({ message: $r('app.string.about_browser_failed'), duration: 1600 });
     });
   }
 
   // 圆角方块图标 + 标题/副标题的通用行，和设置页的观感保持一致。
   @Builder
-  iconRow(symbol: string, bg: string, title: string, subtitle: string,
+  iconRow(symbol: string, bg: string, title: ResourceStr, subtitle: ResourceStr,
     accent: boolean, busy: boolean, onTap: () => void) {
     Row({ space: 14 }) {
       Stack({ alignContent: Alignment.Center }) {
@@ -137,9 +138,9 @@ struct AboutPage {
         SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(22).fontColor([COLOR_TEXT_PRIMARY]);
       }
       .width(40).height(40).justifyContent(FlexAlign.Center)
-      .accessibilityText('返回')
+      .accessibilityText($r('app.string.back'))
       .onClick((): void => { router.back(); });
-      Text('关于').fontSize(18).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
+      Text($r('app.string.settings_about')).fontSize(18).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
       Blank().layoutWeight(1);
     }
     .width('100%').height(56)
@@ -162,7 +163,7 @@ struct AboutPage {
             .width(72).height(72).borderRadius(16).clip(true);
             Text('Telegram for HarmonyOS')
               .fontSize(17).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-            Text(this.currentVersion !== '' ? `版本 ${this.currentVersion}` : '版本读取中…')
+            Text(this.currentVersion !== '' ? str('about_version', this.currentVersion) : $r('app.string.about_version_loading'))
               .fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
           }
           .width('100%')
@@ -172,19 +173,19 @@ struct AboutPage {
             this.iconRow(
               this.hasUpdate ? 'sys.symbol.arrow_down_circle' : 'sys.symbol.arrow_clockwise',
               this.hasUpdate ? '#FF3B30' : '#34C759',
-              this.hasUpdate ? `发现新版本 ${this.latestVersion}` : '检查更新',
-              this.latestVersion !== '' ? `最新发布：${this.latestVersion}` : '尚未获取到发布信息',
+              this.hasUpdate ? str('about_update_available', this.latestVersion) : $r('app.string.about_check_update'),
+              this.latestVersion !== '' ? str('about_latest_release', this.latestVersion) : $r('app.string.about_no_release_info'),
               this.hasUpdate, this.checking,
               (): void => { this.checkNow(); });
             if (this.hasUpdate) {
               Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 62 });
               this.iconRow('sys.symbol.arrow_down_to_line', '#007AFF',
-                '前往下载', '在浏览器中打开发布页', true, false,
+                $r('app.string.about_download'), $r('app.string.about_open_release_page'), true, false,
                 (): void => { this.openReleasePage(); });
             }
             Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 62 });
             this.iconRow('sys.symbol.link', '#5856D6',
-              '项目地址', 'GitHub 上的源码与发布', false, false,
+              $r('app.string.about_repository'), $r('app.string.about_repository_sub'), false, false,
               (): void => { this.openReleasePage(); });
           }
           .width('100%')
@@ -194,7 +195,7 @@ struct AboutPage {
             Column({ space: 7 }) {
               Row({ space: 8 }) {
                 SymbolGlyph($r('sys.symbol.doc_text')).fontSize(15).fontColor([COLOR_PRIMARY]);
-                Text(`${this.latestVersion} 更新说明`)
+                Text(str('about_release_notes', this.latestVersion))
                   .fontSize(13).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY)
                   .layoutWeight(1);
               }
@@ -208,7 +209,7 @@ struct AboutPage {
             .backgroundColor(CARD_BG).borderRadius(CARD_RADIUS);
           }
 
-          Text('非官方客户端，与 Telegram Messenger LLP 无关。')
+          Text($r('app.string.about_disclaimer'))
             .fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
             .width('100%').textAlign(TextAlign.Center)
             .padding({ top: 8 });

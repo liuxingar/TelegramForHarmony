@@ -7,6 +7,7 @@ import {
   callPhaseLabel, callDurationLabel, callEndLabel
 } from '../../util/callPresentation';
 import { CALL_VIDEO_OFF, CALL_VIDEO_FRONT } from '../../services/CallMediaBridge';
+import { str } from '../../util/strings';
 
 const BG_COLOR: string = '#FF17212B';
 const CONTROL_BG: string = '#33FFFFFF';
@@ -144,7 +145,7 @@ struct CallPage {
         colorSeed: this.snap !== null ? this.snap.peerUserId : 0,
         avatarSize: 96
       });
-      Text(this.snap !== null && this.snap.peerName !== '' ? this.snap.peerName : '通话')
+      Text(this.snap !== null && this.snap.peerName !== '' ? this.snap.peerName : $r('app.string.pp_call'))
         .fontSize(24).fontWeight(FontWeight.Bold).fontColor(Color.White)
         .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
         .constraintSize({ maxWidth: '86%' });
@@ -171,7 +172,7 @@ struct CallPage {
       .backgroundColor(this.snap !== null && this.snap.muted ? '#E6FFFFFF' : CONTROL_BG)
       .justifyContent(FlexAlign.Center)
       .onClick((): void => { getCallSession().toggleMute(); });
-      Text(this.snap !== null && this.snap.muted ? '取消静音' : '静音')
+      Text(this.snap !== null && this.snap.muted ? $r('app.string.cp_unmute') : $r('app.string.cp_mute'))
         .fontSize(11).fontColor('#B8C4CF');
     }
     .alignItems(HorizontalAlign.Center);
@@ -188,7 +189,7 @@ struct CallPage {
       .backgroundColor(this.snap !== null && this.snap.speakerOn ? '#E6FFFFFF' : CONTROL_BG)
       .justifyContent(FlexAlign.Center)
       .onClick((): void => { getCallSession().toggleSpeaker(); });
-      Text('扬声器').fontSize(11).fontColor('#B8C4CF');
+      Text($r('app.string.call_speaker')).fontSize(11).fontColor('#B8C4CF');
     }
     .alignItems(HorizontalAlign.Center);
   }
@@ -212,7 +213,7 @@ struct CallPage {
             s.localVideoMode === CALL_VIDEO_OFF ? CALL_VIDEO_FRONT : CALL_VIDEO_OFF);
         }
       });
-      Text(this.snap !== null && this.snap.localVideoMode !== CALL_VIDEO_OFF ? '关视频' : '视频')
+      Text(this.snap !== null && this.snap.localVideoMode !== CALL_VIDEO_OFF ? $r('app.string.call_video_off') : $r('app.string.storage_video'))
         .fontSize(11).fontColor('#B8C4CF');
     }
     .alignItems(HorizontalAlign.Center);
@@ -225,11 +226,11 @@ struct CallPage {
       this.speakerControl();
       this.videoToggleControl();
       if (this.snap !== null && this.snap.localVideoMode !== CALL_VIDEO_OFF) {
-        this.roundControl('sys.symbol.arrow_clockwise', '切换', CONTROL_BG, 0,
+        this.roundControl('sys.symbol.arrow_clockwise', str('call_switch'), CONTROL_BG, 0,
           (): void => { getCallSession().switchCamera(); });
       }
       // phone_fill 旋转 135° 作挂断（repo 无验证过的 phone_down 符号）。
-      this.roundControl('sys.symbol.phone_fill', '挂断', DANGER, 135,
+      this.roundControl('sys.symbol.phone_fill', str('call_hang_up'), DANGER, 135,
         (): void => { getCallSession().hangup(); });
     }
     .justifyContent(FlexAlign.Center);
@@ -238,12 +239,12 @@ struct CallPage {
   @Builder
   ringingControls() {
     Row() {
-      this.roundControl('sys.symbol.phone_fill', '拒绝', DANGER, 135,
+      this.roundControl('sys.symbol.phone_fill', str('ga_decline'), DANGER, 135,
         (): void => { getCallSession().decline(); });
       Blank().layoutWeight(1);
       this.roundControl(
         this.snap !== null && this.snap.isVideo ? 'sys.symbol.video' : 'sys.symbol.phone_fill',
-        '接听', ACCEPT, 0,
+        str('call_answer'), ACCEPT, 0,
         (): void => { getCallSession().accept(); });
     }
     .width('62%');
@@ -251,7 +252,7 @@ struct CallPage {
 
   @Builder
   dialingControls() {
-    this.roundControl('sys.symbol.phone_fill', '挂断', DANGER, 135,
+    this.roundControl('sys.symbol.phone_fill', str('call_hang_up'), DANGER, 135,
       (): void => { getCallSession().hangup(); });
   }
 

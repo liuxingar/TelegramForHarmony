@@ -36,7 +36,7 @@ export struct QrDialog {
         if (this.pix !== null) {
           Image(this.pix).width(220).height(220);
         } else if (this.failed) {
-          Text('二维码生成失败').fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
+          Text($r('app.string.qr_failed')).fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
             .width(220).height(220).textAlign(TextAlign.Center);
         } else {
           Column() {

@@ -307,7 +307,7 @@ export default function messageStoreTest() {
       feedHistory(b, []); // TDLib omits the LOCAL service message from history.
       await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
       expect(ids(store.getMessages()).join(',')).assertEqual('100');
-      expect(store.getMessages()[0].placeholderLabel).assertEqual('您已加入此群组');
+      expect(store.getMessages()[0].placeholderLabel).assertEqual('cp_joined_group');
       const view = b.sent.map((json: string): TdObject => JSON.parse(json) as TdObject)
         .find((request: TdObject): boolean => request['@type'] === 'viewMessages');
       expect(view !== undefined).assertTrue();
@@ -335,7 +335,7 @@ export default function messageStoreTest() {
       feedRequestError(b, 'getChatHistory', -1, 'request timeout');
       await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
       expect(store.getInitialHistoryState()).assertEqual('error');
-      expect(store.getInitialHistoryError()).assertEqual('连接超时，请检查网络后重试');
+      expect(store.getInitialHistoryError()).assertEqual('ms_timeout');
       const before = requestCount(b, 'getChatHistory');
       store.retryInitialHistory();
       expect(store.getInitialHistoryState()).assertEqual('loading');
@@ -692,7 +692,7 @@ export default function messageStoreTest() {
       expect(updated.pollVotePending).assertFalse();
       expect(updated.pollOptions[0].isChosen).assertFalse();
       expect(updated.pollVoteError).assertEqual(
-        '该投票仅限符合条件的订阅成员参与（加入需满 24 小时）'
+        'ms_poll_subscribers_only'
       );
       expect(callbackError).assertEqual(updated.pollVoteError);
     });

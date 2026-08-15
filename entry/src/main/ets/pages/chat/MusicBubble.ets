@@ -2,6 +2,7 @@ import { getVoicePlayback, VoiceState } from '../../services/VoicePlayback';
 import { formatFileSize } from '../../util/formatFileSize';
 import { formatVoiceDuration } from '../../util/voiceWaveform';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import { str } from '../../util/strings';
 
 @Component
 export struct MusicBubble {
@@ -143,7 +144,7 @@ export struct MusicBubble {
     }
     const file: string = this.fileName.trim();
     if (file === '') {
-      return '音频';
+      return str('music_audio');
     }
     const dot: number = file.lastIndexOf('.');
     return dot > 0 ? file.substring(0, dot) : file;
@@ -151,7 +152,7 @@ export struct MusicBubble {
 
   private displayPerformer(): string {
     const artist: string = this.performer.trim();
-    return artist !== '' ? artist : '未知艺术家';
+    return artist !== '' ? artist : str('music_unknown_artist');
   }
 
   private totalLabel(): string {
@@ -166,28 +167,28 @@ export struct MusicBubble {
 
   private statusLabel(): string {
     if (this.sourceUnavailable()) {
-      return '音频不可用';
+      return str('music_unavailable');
     }
     if (this.downloadFailed) {
-      return '下载失败 · 点按重试';
+      return str('download_failed_tap');
     }
     if (this.downloadActive) {
       return this.downloadProgress > 0
-        ? `正在下载 ${this.downloadProgress}%` : '正在下载';
+        ? str('downloading_pct', this.downloadProgress) : str('downloading');
     }
     if (this.playbackFailed) {
-      return '播放失败 · 点按重试';
+      return str('play_failed_tap');
     }
     if (this.loadingPlayback()) {
-      return '正在打开';
+      return str('opening');
     }
     if (this.playing() || this.paused() || this.finished) {
       return `${formatVoiceDuration(this.elapsedSec)} / ${this.totalLabel()}`;
     }
     const size: string = this.fileSize > 0 ? formatFileSize(this.fileSize) : '';
     if (!this.localReady()) {
-      return size !== '' ? `${this.totalLabel()} · ${size} · 点按下载`
-        : `${this.totalLabel()} · 点按下载`;
+      return size !== '' ? str('music_tap_download_size', this.totalLabel(), size)
+        : str('music_tap_download', this.totalLabel());
     }
     return size !== '' ? `${this.totalLabel()} · ${size}` : this.totalLabel();
   }
@@ -286,7 +287,7 @@ export struct MusicBubble {
         pressed: this.skipPressedStyle
       })
       .animation({ duration: 100, curve: Curve.EaseOut })
-      .accessibilityText(previous ? '上一首' : '下一首')
+      .accessibilityText(previous ? $r('app.string.music_previous') : $r('app.string.music_next'))
       .onClick((): void => {
         if (enabled) {
           if (previous) {

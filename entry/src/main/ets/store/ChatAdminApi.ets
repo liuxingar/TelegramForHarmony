@@ -1,5 +1,6 @@
 import { getTdClient } from '../tdkit/Globals';
 import { TdObject, TdRequest } from '../tdkit/TdTypes';
+import { str } from '../util/strings';
 
 // Group / channel administration. Every call goes straight to TDLib; the
 // server rejects anything the current user lacks rights for, so the UI only
@@ -218,11 +219,11 @@ export async function checkUsernameAvailable(chatId: number, username: string): 
   const result = await getTdClient().send(request, 12000);
   const type = (result['@type'] as string | undefined) ?? '';
   if (type === 'checkChatUsernameResultOk') { return ''; }
-  if (type === 'checkChatUsernameResultUsernameInvalid') { return '用户名格式无效'; }
-  if (type === 'checkChatUsernameResultUsernameOccupied') { return '该用户名已被占用'; }
-  if (type === 'checkChatUsernameResultPublicChatsTooMany') { return '公开会话数量已达上限'; }
-  if (type === 'checkChatUsernameResultPublicGroupsUnavailable') { return '当前账号无法创建公开群组'; }
-  return '用户名不可用';
+  if (type === 'checkChatUsernameResultUsernameInvalid') { return str('ca_username_invalid'); }
+  if (type === 'checkChatUsernameResultUsernameOccupied') { return str('ae_username_taken'); }
+  if (type === 'checkChatUsernameResultPublicChatsTooMany') { return str('ca_public_limit'); }
+  if (type === 'checkChatUsernameResultPublicGroupsUnavailable') { return str('ca_cannot_public'); }
+  return str('ca_username_unavailable');
 }
 
 // Bulk-delete every message in a date range (admins only).

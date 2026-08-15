@@ -77,6 +77,7 @@ import { searchMentions, loadBotCommands, MentionItem, CommandItem } from '../..
 import { floatingLiveWindow } from './LiveFloatingWindow';
 import { MUTE_LONG, setMute } from '../../store/ChatActions';
 import { liveLocation, LiveLocationState } from '../../services/LiveLocationService';
+import { plural, str } from '../../util/strings';
 
 // One emoji-triggered sticker hint shown above the composer.
 interface StickerSuggestion {
@@ -553,8 +554,13 @@ struct ChatPage {
     if (message.contentType !== 'system' || !message.isOutgoing) {
       return false;
     }
-    return message.placeholderLabel === '您已加入此群组' ||
-      message.placeholderLabel === '您已加入此频道' ||
+    // NOTE: the first two clauses compare display text, which is fragile — the
+    // label is whatever the server sent, and it is compared against this app's
+    // own copy. Both sides now go through str() so they at least stay in the
+    // same language, but the structural systemType checks below are the ones
+    // that actually hold. Worth replacing with a marker on the synthetic row.
+    return message.placeholderLabel === str('cp_joined_group') ||
+      message.placeholderLabel === str('cp_joined_channel') ||
       message.systemType === 'messageChatJoinByLink' ||
       message.systemType === 'messageChatJoinByRequest';
   }
@@ -564,7 +570,7 @@ struct ChatPage {
       return this.clientJoinNoticeEntryCache;
     }
     const content: TdObject = this.clientJoinNoticeIsChannel
-      ? { '@type': 'messageCustomServiceAction', 'text': '您已加入此频道' }
+      ? { '@type': 'messageCustomServiceAction', 'text': str('cp_joined_channel') }
       : { '@type': 'messageChatJoinByLink' };
     const raw: TdObject = {
       '@type': 'message',
@@ -1018,13 +1024,13 @@ struct ChatPage {
             saveMediaToGallery(getContext(this) as common.UIAbilityContext, pe.videoPath, true);
           } else if (this.mediaEntryIsVideo(pe) && pe.videoFailed) {
             this.pendingGallerySaveId = 0;
-            promptAction.showToast({ message: '视频下载失败，请重试', duration: 1800 });
+            promptAction.showToast({ message: $r('app.string.cp_video_download_failed'), duration: 1800 });
           } else if (this.mediaEntryIsPhoto(pe) && pe.photoFullPath !== '') {
             this.pendingGallerySaveId = 0;
             saveMediaToGallery(getContext(this) as common.UIAbilityContext, pe.photoFullPath, false);
           } else if (this.mediaEntryIsPhoto(pe) && pe.photoFullFailed) {
             this.pendingGallerySaveId = 0;
-            promptAction.showToast({ message: '原图下载失败，请重试', duration: 1800 });
+            promptAction.showToast({ message: $r('app.string.cp_photo_download_failed'), duration: 1800 });
           }
         }
       }
@@ -1037,7 +1043,7 @@ struct ChatPage {
           this.pendingFileOpenId = 0;
         } else if (openEntry.videoFailed) {
           this.pendingFileOpenId = 0;
-          promptAction.showToast({ message: '文件下载失败，请重试', duration: 1800 });
+          promptAction.showToast({ message: $r('app.string.cp_file_download_failed'), duration: 1800 });
         } else if (openEntry.videoPath !== '') {
           this.pendingFileOpenId = 0;
           this.openDownloadedFile(openEntry);
@@ -1049,7 +1055,7 @@ struct ChatPage {
           this.pendingFileSaveId = 0;
         } else if (fe.videoFailed) {
           this.pendingFileSaveId = 0;
-          promptAction.showToast({ message: '文件下载失败，无法保存', duration: 1800 });
+          promptAction.showToast({ message: $r('app.string.cp_file_download_failed_save'), duration: 1800 });
         } else if (fe.videoPath !== '') {
           this.pendingFileSaveId = 0;
           saveFileToLocal(getContext(this) as common.UIAbilityContext, fe.videoPath, fe.videoFileName);
@@ -1184,18 +1190,18 @@ struct ChatPage {
   // 判定为不可编辑），只能重新发一条。所以先确认。
   private confirmStopLiveLocation(): void {
     promptAction.showDialog({
-      title: '停止共享实时位置',
-      message: '停止后这条消息将不再更新位置，且无法恢复共享。',
+      title: $r('app.string.cp_stop_live_location'),
+      message: $r('app.string.cp_stop_live_location_body'),
       buttons: [
-        { text: '取消', color: '#8E8E93' },
-        { text: '停止共享', color: '#D95B57' }
+        { text: $r('app.string.cancel'), color: '#8E8E93' },
+        { text: $r('app.string.cp_stop_sharing'), color: '#D95B57' }
       ]
     }).then((result: promptAction.ShowDialogSuccessResponse): void => {
       if (result.index !== 1) {
         return;
       }
       liveLocation.stopSharing();
-      promptAction.showToast({ message: '已停止共享实时位置', duration: 1500 });
+      promptAction.showToast({ message: $r('app.string.cp_live_location_stopped'), duration: 1500 });
     }).catch((e: Object): void => {
       console.error(`ChatPage.confirmStopLiveLocation failed: ${JSON.stringify(e)}`);
     });
@@ -1502,7 +1508,7 @@ struct ChatPage {
     }
     if (groupCallId <= 0 || groupCallId !== this.liveGroupCallId ||
       !this.liveCallIsActive || this.liveLoadState === 'error') {
-      promptAction.showToast({ message: '直播已经结束', duration: 1500 });
+      promptAction.showToast({ message: $r('app.string.cp_live_ended'), duration: 1500 });
       return;
     }
     const isRtmp: boolean = this.liveCallIsRtmp;
@@ -1525,7 +1531,7 @@ struct ChatPage {
     floatingLiveWindow.prepareForOpeningFullPage().finally((): void => {
       if (groupCallId !== this.liveGroupCallId || !this.liveCallIsActive) {
         this.liveNavigationBusy = false;
-        promptAction.showToast({ message: '直播已经结束', duration: 1500 });
+        promptAction.showToast({ message: $r('app.string.cp_live_ended'), duration: 1500 });
         return;
       }
       router.pushUrl({
@@ -1539,7 +1545,7 @@ struct ChatPage {
       }).catch((error: Error): void => {
         this.liveNavigationBusy = false;
         console.error(`ChatPage.enterLiveStream failed: ${error.message}`);
-        promptAction.showToast({ message: '无法进入直播，请重试', duration: 1600 });
+        promptAction.showToast({ message: $r('app.string.cp_live_join_failed'), duration: 1600 });
       });
     });
   }
@@ -1551,30 +1557,30 @@ struct ChatPage {
       return;
     }
     if (this.liveLoadState === 'loading') {
-      promptAction.showToast({ message: '正在同步直播状态', duration: 1200 });
+      promptAction.showToast({ message: $r('app.string.cp_live_syncing'), duration: 1200 });
       return;
     }
     if (this.liveLoadState === 'error') {
       this.refreshVideoChat(true);
-      promptAction.showToast({ message: '正在重新获取直播状态', duration: 1200 });
+      promptAction.showToast({ message: $r('app.string.cp_live_refetching'), duration: 1200 });
       return;
     }
     if (this.liveGroupCallId <= 0 || !this.liveCallIsActive) {
-      promptAction.showToast({ message: '直播已经结束', duration: 1500 });
+      promptAction.showToast({ message: $r('app.string.cp_live_ended'), duration: 1500 });
       return;
     }
     const groupCallId = this.liveGroupCallId;
-    const onlineText = this.liveParticipantCount > 0 ? `当前有 ${this.liveParticipantCount} 人在线。` : '';
+    const onlineText = this.liveParticipantCount > 0 ? plural('cp_live_online_now', this.liveParticipantCount, this.liveParticipantCount) : '';
     const privacyText = this.liveCallIsRtmp
-      ? '这是单向直播，进入后只能观看和参与直播互动，不会打开麦克风或摄像头。'
-      : '进入后默认静音播放，不会自动打开麦克风；如有发言权限，可在直播间内开麦。';
+      ? $r('app.string.cp_live_one_way_body')
+      : $r('app.string.cp_live_two_way_body');
     this.liveDialogOpening = true;
     promptAction.showDialog({
-      title: '进入直播？',
+      title: $r('app.string.cp_live_join_title'),
       message: `${onlineText}${privacyText}`,
       buttons: [
-        { text: '取消', color: '#8E8E93' },
-        { text: '进入直播', color: '#FF405C' }
+        { text: $r('app.string.cancel'), color: '#8E8E93' },
+        { text: $r('app.string.cp_live_join'), color: '#FF405C' }
       ]
     }).then((result): void => {
       this.liveDialogOpening = false;
@@ -1698,7 +1704,7 @@ struct ChatPage {
       return;
     }
     if (entry.videoFileId === 0 && entry.videoPath === '') {
-      promptAction.showToast({ message: '这个 GIF 暂时不可用', duration: 1500 });
+      promptAction.showToast({ message: $r('app.string.cp_gif_unavailable'), duration: 1500 });
       return;
     }
     if (isPlaying) {
@@ -1763,17 +1769,17 @@ struct ChatPage {
     }
     if (this.mediaEntryIsPhoto(entry) && entry.photoPath === '' && entry.photoFailed) {
       this.store?.retryPhoto(messageId);
-      promptAction.showToast({ message: '正在重新加载缩略图', duration: 1200 });
+      promptAction.showToast({ message: $r('app.string.cp_reloading_thumb'), duration: 1200 });
       return;
     }
     if (this.mediaEntryIsPhoto(entry) && entry.photoPath === '' &&
       entry.photoFullPath === '' && entry.photoFileId === 0 && entry.photoFullFileId === 0) {
-      promptAction.showToast({ message: '这张图片暂时不可用', duration: 1500 });
+      promptAction.showToast({ message: $r('app.string.cp_photo_unavailable'), duration: 1500 });
       return;
     }
     if (this.mediaEntryIsVideo(entry)) {
       if (entry.videoFileId === 0 && entry.videoPath === '') {
-        promptAction.showToast({ message: '视频文件暂时不可用', duration: 1500 });
+        promptAction.showToast({ message: $r('app.string.cp_video_unavailable'), duration: 1500 });
         return;
       }
       // A cover failure must not block a playable video. Retry it quietly so
@@ -1786,7 +1792,7 @@ struct ChatPage {
       // that can only report "无法获取视频大小".
       if (entry.videoPath === '' && entry.videoFileSize <= 0) {
         this.store?.requestVideoDownload(messageId, true, entry.videoFailed);
-        promptAction.showToast({ message: '正在获取视频文件，请稍后再试', duration: 1800 });
+        promptAction.showToast({ message: $r('app.string.cp_fetching_video'), duration: 1800 });
         return;
       }
       if (entry.videoFailed) {
@@ -1997,7 +2003,7 @@ struct ChatPage {
     }
     if (this.pinnedLoadState === 'error') {
       this.store?.refreshPinned();
-      promptAction.showToast({ message: '正在重新同步置顶消息', duration: 1200 });
+      promptAction.showToast({ message: $r('app.string.cp_resyncing_pinned'), duration: 1200 });
       return;
     }
     if (this.store === null) {
@@ -2032,7 +2038,7 @@ struct ChatPage {
           this.pendingJumpId = 0;
           this.finishPinnedJump();
           this.store?.refreshPinned();
-          promptAction.showToast({ message: '这条置顶消息已不可用', duration: 1500 });
+          promptAction.showToast({ message: $r('app.string.cp_pinned_unavailable'), duration: 1500 });
         }
       });
     }
@@ -2206,7 +2212,7 @@ struct ChatPage {
       }
     }
     this.headerState = resolvedTitle !== '' || this.title !== '' ? 'ready' : 'error';
-    this.headerLoadError = this.headerState === 'error' ? '会话信息暂不可用' : '';
+    this.headerLoadError = this.headerState === 'error' ? str('cp_chat_unavailable') : '';
     this.fetchHeaderEmojiStatus();
   }
 
@@ -2234,7 +2240,7 @@ struct ChatPage {
   private resolveHeaderIdentity(): void {
     if (this.chatId === 0) {
       this.headerState = 'error';
-      this.headerLoadError = '会话参数无效';
+      this.headerLoadError = str('cp_chat_params_invalid');
       return;
     }
     const seq = ++this.headerResolveSeq;
@@ -2252,7 +2258,7 @@ struct ChatPage {
       }
       if (this.title === '') {
         this.headerState = 'error';
-        this.headerLoadError = '会话信息加载失败，点击重试';
+        this.headerLoadError = str('cp_chat_load_failed');
       }
       console.error(`ChatPage.resolveHeaderIdentity failed: ${error.message}`);
     });
@@ -2450,7 +2456,7 @@ struct ChatPage {
     }).catch((e: TdError): void => {
       this.joiningChat = false;
       console.error(`ChatPage.joinChat failed: ${e.message}`);
-      promptAction.showToast({ message: '加入失败，请稍后重试', duration: 2000 });
+      promptAction.showToast({ message: $r('app.string.cp_join_failed'), duration: 2000 });
     });
   }
 
@@ -2505,12 +2511,12 @@ struct ChatPage {
       }).catch((e: TdError): void => {
         this.composerSending = false;
         console.error(`ChatPage.botCommand failed: ${e.message}`);
-        promptAction.showToast({ message: '命令发送失败，请重试', duration: 1600 });
+        promptAction.showToast({ message: $r('app.string.cp_command_failed'), duration: 1600 });
       });
       return;
     }
     if (url.startsWith('tg-copy:')) {
-      this.copyPlainText(url.substring('tg-copy:'.length), '已复制号码');
+      this.copyPlainText(url.substring('tg-copy:'.length), str('cp_number_copied'));
       return;
     }
     // Hashtag tap → global search across all chats.
@@ -2589,7 +2595,7 @@ struct ChatPage {
               this.store.loadAround(targetId, (found: boolean): void => {
                 if (!found && this.pendingJumpId === targetId) {
                   this.pendingJumpId = 0;
-                  promptAction.showToast({ message: '无法定位这条消息', duration: 1500 });
+                  promptAction.showToast({ message: $r('app.string.cp_cannot_locate'), duration: 1500 });
                 }
               });
             }
@@ -2699,7 +2705,7 @@ struct ChatPage {
       this.searchTotal = (res['total_count'] as number | undefined) ?? ids.length;
       this.searchResults = fromMsgId === 0 ? ids : [...this.searchResults, ...ids];
       if (this.searchResults.length === 0) {
-        promptAction.showToast({ message: '未找到相关消息', duration: 1500 });
+        promptAction.showToast({ message: $r('app.string.cp_no_messages_found'), duration: 1500 });
         return;
       }
       // Entered on a specific hit (a message tapped in global search): it is
@@ -2757,7 +2763,7 @@ struct ChatPage {
       this.store.loadAround(messageId, (found: boolean): void => {
         if (!found && this.pendingJumpId === messageId) {
           this.pendingJumpId = 0;
-          promptAction.showToast({ message: '原消息已不可用', duration: 1500 });
+          promptAction.showToast({ message: $r('app.string.cp_original_unavailable'), duration: 1500 });
         }
       });
     }
@@ -2850,7 +2856,7 @@ struct ChatPage {
       }
     }).catch((e: TdError) => {
       console.error(`ChatPage.onForwardTap createPrivateChat failed: ${e.message}`);
-      promptAction.showToast({ message: '无法打开来源', duration: 1500 });
+      promptAction.showToast({ message: $r('app.string.cp_cannot_open_source'), duration: 1500 });
     });
   }
 
@@ -2963,15 +2969,15 @@ struct ChatPage {
       const showAlert = (answer['show_alert'] as boolean | undefined) ?? false;
       if (url.trim() !== '') {
         openWebUrl(getContext(this) as common.UIAbilityContext, url, (): void => {
-          promptAction.showToast({ message: '无法打开互动内容', duration: 1800 });
+          promptAction.showToast({ message: $r('app.string.cp_cannot_open_interaction'), duration: 1800 });
         });
       }
       if (text.trim() !== '') {
         if (showAlert) {
           promptAction.showDialog({
-            title: '提示',
+            title: $r('app.string.cp_notice'),
             message: text,
-            buttons: [{ text: '知道了', color: '#3390EC' }]
+            buttons: [{ text: $r('app.string.cp_got_it'), color: '#3390EC' }]
           });
         } else {
           promptAction.showToast({ message: text, duration: 1800 });
@@ -2981,7 +2987,7 @@ struct ChatPage {
       this.botCallbackPending.delete(key);
       console.error(`ChatPage.getCallbackQueryAnswer failed: ${e.message}`);
       promptAction.showToast({
-        message: suffix === 'game' ? '游戏暂时无法打开' : '操作失败，请重试',
+        message: suffix === 'game' ? $r('app.string.cp_game_cannot_open') : $r('app.string.action_failed_retry'),
         duration: 1800
       });
     });
@@ -2989,7 +2995,7 @@ struct ChatPage {
 
   private onPollVote(messageId: number, optionIds: number[]): void {
     if (this.store === null) {
-      promptAction.showToast({ message: '投票暂时不可用', duration: 1500 });
+      promptAction.showToast({ message: $r('app.string.cp_poll_unavailable'), duration: 1500 });
       return;
     }
     this.store.votePoll(messageId, optionIds, (ok: boolean, error: string): void => {
@@ -3031,7 +3037,7 @@ struct ChatPage {
     propertiesReq['message_id'] = messageId;
     getTdClient().send(propertiesReq).then((properties: TdObject): Promise<TdObject> => {
       if (!((properties['can_be_paid'] as boolean | undefined) ?? false)) {
-        throw new TdError(400, '这条付费内容当前无法购买');
+        throw new TdError(400, str('cp_paid_cannot_buy'));
       }
       const formReq: TdRequest = { '@type': 'getPaymentForm' };
       formReq['input_invoice'] = this.paidMediaInvoice(messageId);
@@ -3042,7 +3048,7 @@ struct ChatPage {
         ? ((formType['@type'] as string | undefined) ?? '') : '';
       if (typeName !== 'paymentFormTypeStars') {
         this.setPaidMediaPending(messageId, false);
-        promptAction.showToast({ message: '当前支付方式暂不支持', duration: 1800 });
+        promptAction.showToast({ message: $r('app.string.cp_payment_unsupported'), duration: 1800 });
         return;
       }
       const formStars = Math.max(0,
@@ -3050,15 +3056,15 @@ struct ChatPage {
       const formId = (form['id'] as number | undefined) ?? 0;
       if (formStars <= 0 || formId === 0) {
         this.setPaidMediaPending(messageId, false);
-        promptAction.showToast({ message: '支付信息不完整，请稍后重试', duration: 1800 });
+        promptAction.showToast({ message: $r('app.string.cp_payment_incomplete'), duration: 1800 });
         return;
       }
       promptAction.showDialog({
-        title: '解锁付费媒体',
-        message: `将支付 ${formStars} 颗 Telegram 星星。付款完成后，这条消息会更新为已解锁状态。`,
+        title: $r('app.string.cp_unlock_paid'),
+        message: str('cp_pay_stars_body', formStars),
         buttons: [
-          { text: '取消', color: '#8E8E93' },
-          { text: `支付 ${formStars} ⭐`, color: '#3390EC' }
+          { text: $r('app.string.cancel'), color: '#8E8E93' },
+          { text: str('cp_pay_stars_button', formStars), color: '#3390EC' }
         ]
       }).then((result): void => {
         if (result.index !== 1) {
@@ -3077,20 +3083,20 @@ struct ChatPage {
           const verificationUrl =
             (paymentResult['verification_url'] as string | undefined) ?? '';
           if (success) {
-            promptAction.showToast({ message: '已解锁付费媒体', duration: 1600 });
+            promptAction.showToast({ message: $r('app.string.cp_paid_unlocked'), duration: 1600 });
             return;
           }
           if (verificationUrl !== '') {
             openWebUrl(getContext(this) as common.UIAbilityContext, verificationUrl, (): void => {
-              promptAction.showToast({ message: '无法打开支付验证页', duration: 1800 });
+              promptAction.showToast({ message: $r('app.string.cp_cannot_open_payment'), duration: 1800 });
             });
             return;
           }
-          promptAction.showToast({ message: '支付未完成', duration: 1600 });
+          promptAction.showToast({ message: $r('app.string.cp_payment_incomplete_short'), duration: 1600 });
         }).catch((e: TdError): void => {
           this.setPaidMediaPending(messageId, false);
           console.error(`ChatPage.sendPaymentForm failed: ${e.message}`);
-          promptAction.showToast({ message: '支付失败，请稍后重试', duration: 1800 });
+          promptAction.showToast({ message: $r('app.string.cp_payment_failed'), duration: 1800 });
         });
       }).catch((): void => {
         this.setPaidMediaPending(messageId, false);
@@ -3099,7 +3105,7 @@ struct ChatPage {
       this.setPaidMediaPending(messageId, false);
       console.error(`ChatPage.get paid media payment form failed: ${e.message}`);
       promptAction.showToast({
-        message: e.message !== '' ? e.message : '无法获取支付信息',
+        message: e.message !== '' ? e.message : $r('app.string.cp_no_payment_info'),
         duration: 1800
       });
     });
@@ -3115,10 +3121,10 @@ struct ChatPage {
 
   private onGiftCodeCopy(code: string): void {
     if (code.trim() === '') {
-      promptAction.showToast({ message: '兑换码暂不可用', duration: 1500 });
+      promptAction.showToast({ message: $r('app.string.cp_code_unavailable'), duration: 1500 });
       return;
     }
-    this.copyPlainText(code, '兑换码已复制');
+    this.copyPlainText(code, str('cp_code_copied'));
   }
 
   private onGiveawayOpen(chatId: number, messageId: number): void {
@@ -3158,7 +3164,7 @@ struct ChatPage {
       url = 'pages/profile/ChatProfilePage';
       params = { 'chatId': this.chatId };
     } else {
-      promptAction.showToast({ message: '会话资料正在加载', duration: 1200 });
+      promptAction.showToast({ message: $r('app.string.cp_profile_loading'), duration: 1200 });
       this.resolveHeaderIdentity();
       return;
     }
@@ -3177,7 +3183,7 @@ struct ChatPage {
       }
       this.headerProfileOpening = false;
       console.error(`ChatPage.openProfile failed: ${error.message}`);
-      promptAction.showToast({ message: '无法打开会话资料', duration: 1600 });
+      promptAction.showToast({ message: $r('app.string.cp_cannot_open_profile'), duration: 1600 });
     });
   }
 
@@ -3216,13 +3222,13 @@ struct ChatPage {
     if (url === '' || this.headerPeerUserId <= 0) { return; }
     openMiniApp(this.chatId, this.headerPeerUserId, url).then((resolved: string): void => {
       if (resolved === '') {
-        promptAction.showToast({ message: '无法打开 Mini App', duration: 1600 });
+        promptAction.showToast({ message: $r('app.string.cp_cannot_open_miniapp'), duration: 1600 });
         return;
       }
       openWebUrl(getContext(this) as common.UIAbilityContext, resolved);
     }).catch((e: TdError): void => {
       console.error(`ChatPage.openBotMiniApp failed: ${e.message}`);
-      promptAction.showToast({ message: '无法打开 Mini App', duration: 1600 });
+      promptAction.showToast({ message: $r('app.string.cp_cannot_open_miniapp'), duration: 1600 });
     });
   }
 
@@ -3294,7 +3300,7 @@ struct ChatPage {
       this.atBottom = true;
     }).catch((e: TdError): void => {
       console.error(`ChatPage.sendInlineResult failed: ${e.message}`);
-      promptAction.showToast({ message: '发送内联结果失败', duration: 1600 });
+      promptAction.showToast({ message: $r('app.string.cp_inline_send_failed'), duration: 1600 });
     });
   }
 
@@ -3440,7 +3446,7 @@ struct ChatPage {
       this.allCommands = [];
       this.commandItems = [];
       this.commandLoadState = 'error';
-      this.commandLoadError = '命令加载失败';
+      this.commandLoadError = str('cp_commands_failed');
       this.botMenuAvailable = false;
     });
   }
@@ -3521,7 +3527,7 @@ struct ChatPage {
         if (this.store !== null) {
           this.store.requestVideoDownload(e.id, true, e.videoFailed);
         }
-        promptAction.showToast({ message: '视频下载中，完成后自动保存到相册', duration: 2500 });
+        promptAction.showToast({ message: $r('app.string.cp_video_downloading_save'), duration: 2500 });
       }
       return;
     }
@@ -3534,13 +3540,13 @@ struct ChatPage {
       if (this.store !== null) {
         this.store.requestFullPhoto(e.id, e.photoFullFailed);
       }
-      promptAction.showToast({ message: '正在下载原图，完成后自动保存', duration: 2200 });
+      promptAction.showToast({ message: $r('app.string.cp_photo_downloading_save'), duration: 2200 });
       return;
     }
     if (e.photoPath !== '') {
       saveMediaToGallery(ctx, e.photoPath, false);
     } else {
-      promptAction.showToast({ message: '图片不可用', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.cp_photo_not_available'), duration: 1800 });
     }
   }
 
@@ -3602,7 +3608,7 @@ struct ChatPage {
       }
       if (!opened) {
         promptAction.showToast({
-          message: '没有可打开此文件的应用，可尝试另存为',
+          message: $r('app.string.cp_no_app_for_file'),
           duration: 2200
         });
       }
@@ -3611,7 +3617,7 @@ struct ChatPage {
         this.fileOpenInFlightId = 0;
       }
       console.error(`ChatPage.openDownloadedFile failed: ${JSON.stringify(caught)}`);
-      promptAction.showToast({ message: '文件打开失败', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.cp_file_open_failed'), duration: 1800 });
     });
   }
 
@@ -3632,14 +3638,14 @@ struct ChatPage {
     }
     if (m.videoFileId === 0) {
       this.pendingFileOpenId = 0;
-      promptAction.showToast({ message: '这个文件暂时不可用', duration: 1600 });
+      promptAction.showToast({ message: $r('app.string.cp_file_unavailable'), duration: 1600 });
       return;
     }
     this.pendingFileOpenId = messageId;
     this.store.requestVideoDownload(messageId, true, m.videoFailed);
     promptAction.showToast({
-      message: m.videoFailed ? '正在重新下载文件'
-        : (m.mediaDownloadActive ? '文件正在下载，完成后自动打开' : '开始下载文件'),
+      message: m.videoFailed ? $r('app.string.cp_redownloading_file')
+        : (m.mediaDownloadActive ? $r('app.string.cp_file_downloading_open') : $r('app.string.cp_file_download_started')),
       duration: 1700
     });
   }
@@ -3660,7 +3666,7 @@ struct ChatPage {
     if (userId > 0) {
       const params: Record<string, Object> = { 'userId': userId };
       router.pushUrl({ url: 'pages/profile/ProfilePage', params: params }).catch(() => {
-        promptAction.showToast({ message: '无法打开联系人资料', duration: 1500 });
+        promptAction.showToast({ message: $r('app.string.cp_cannot_open_contact'), duration: 1500 });
       });
       return;
     }
@@ -3673,15 +3679,15 @@ struct ChatPage {
         fs.closeSync(file);
         openLocalFile(context, path, 'text/vcard').then((opened: boolean): void => {
           if (!opened) {
-            this.copyPlainText(vcard, '名片内容已复制');
+            this.copyPlainText(vcard, str('cp_contact_copied'));
           }
         }).catch((caught: Object): void => {
           console.error(`ChatPage.openSharedContact failed: ${JSON.stringify(caught)}`);
-          this.copyPlainText(vcard, '名片内容已复制');
+          this.copyPlainText(vcard, str('cp_contact_copied'));
         });
       } catch (caught) {
         console.error(`ChatPage.write shared contact failed: ${caught}`);
-        this.copyPlainText(vcard, '名片内容已复制');
+        this.copyPlainText(vcard, str('cp_contact_copied'));
       }
       return;
     }
@@ -3694,11 +3700,11 @@ struct ChatPage {
     }
     const normalized = phone.trim().replace(/[^0-9+*#]/g, '');
     if (normalized === '') {
-      promptAction.showToast({ message: '联系人没有可用电话号码', duration: 1500 });
+      promptAction.showToast({ message: $r('app.string.cp_contact_no_phone'), duration: 1500 });
       return;
     }
     openUrl(getContext(this) as common.UIAbilityContext, `tel:${normalized}`, (): void => {
-      promptAction.showToast({ message: '未找到可拨号的应用', duration: 1600 });
+      promptAction.showToast({ message: $r('app.string.cp_no_dialer'), duration: 1600 });
     });
   }
 
@@ -3713,7 +3719,7 @@ struct ChatPage {
     }
     const cleanLabel = label.trim();
     if (!valid && cleanLabel === '') {
-      promptAction.showToast({ message: '这条消息没有可用位置', duration: 1500 });
+      promptAction.showToast({ message: $r('app.string.cp_no_location'), duration: 1500 });
       return;
     }
     const coordinate = `${latitude},${longitude}`;
@@ -3724,7 +3730,7 @@ struct ChatPage {
       : `https://www.openstreetmap.org/search?query=${query}`;
     openUrl(getContext(this) as common.UIAbilityContext, geoUri, (): void => {
       openUrl(getContext(this) as common.UIAbilityContext, webFallback, (): void => {
-        promptAction.showToast({ message: '未找到可打开位置的应用', duration: 1700 });
+        promptAction.showToast({ message: $r('app.string.cp_no_map_app'), duration: 1700 });
       });
     });
   }
@@ -3744,14 +3750,14 @@ struct ChatPage {
     }
     if (m.videoFileId === 0) {
       this.pendingFileSaveId = 0;
-      promptAction.showToast({ message: '这个文件暂时不可用', duration: 1600 });
+      promptAction.showToast({ message: $r('app.string.cp_file_unavailable'), duration: 1600 });
       return;
     }
     this.pendingFileSaveId = messageId;
     this.store.requestVideoDownload(messageId, true, m.videoFailed);
     promptAction.showToast({
-      message: m.videoFailed ? '正在重新下载，完成后选择保存位置'
-        : '文件下载中，完成后选择保存位置',
+      message: m.videoFailed ? $r('app.string.cp_redownload_then_save')
+        : $r('app.string.cp_downloading_then_save'),
       duration: 2200
     });
   }
@@ -3777,14 +3783,14 @@ struct ChatPage {
 
   private confirmClearHistory(): void {
     AlertDialog.show({
-      message: '确定清空此聊天的历史记录吗？',
+      message: $r('app.string.cp_clear_history_confirm'),
       autoCancel: true,
       primaryButton: {
-        value: '取消',
+        value: $r('app.string.cancel'),
         action: (): void => {}
       },
       secondaryButton: {
-        value: '清空',
+        value: $r('app.string.clear_all'),
         fontColor: '#FF3B30',
         action: (): void => {
           const req: TdRequest = { '@type': 'deleteChatHistory' };
@@ -3792,10 +3798,10 @@ struct ChatPage {
           req['remove_from_chat_list'] = false;
           req['revoke'] = false;
           getTdClient().send(req).then(() => {
-            promptAction.showToast({ message: '聊天记录已清空', duration: 2000 });
+            promptAction.showToast({ message: $r('app.string.cp_history_cleared'), duration: 2000 });
           }).catch((e: TdError) => {
             console.error(`ChatPage.deleteChatHistory failed: ${e.message}`);
-            promptAction.showToast({ message: '清空失败', duration: 2000 });
+            promptAction.showToast({ message: $r('app.string.cp_clear_failed'), duration: 2000 });
           });
         }
       }
@@ -3804,14 +3810,14 @@ struct ChatPage {
 
   private confirmLeaveChat(): void {
     AlertDialog.show({
-      message: `确定退出「${this.title}」吗？`,
+      message: str('cp_leave_confirm', this.title),
       autoCancel: true,
       primaryButton: {
-        value: '取消',
+        value: $r('app.string.cancel'),
         action: (): void => {}
       },
       secondaryButton: {
-        value: '退出',
+        value: $r('app.string.cp_leave'),
         fontColor: '#FF3B30',
         action: (): void => {
           const req: TdRequest = { '@type': 'leaveChat' };
@@ -3820,7 +3826,7 @@ struct ChatPage {
             router.back();
           }).catch((e: TdError) => {
             console.error(`ChatPage.leaveChat failed: ${e.message}`);
-            promptAction.showToast({ message: '退出失败', duration: 2000 });
+            promptAction.showToast({ message: $r('app.string.cp_leave_failed'), duration: 2000 });
           });
         }
       }
@@ -3853,32 +3859,32 @@ struct ChatPage {
   @Builder
   headerMenu() {
     Column() {
-      this.headerMenuRow('sys.symbol.magnifyingglass', '搜索', false, () => { this.enterSearch(); });
+      this.headerMenuRow('sys.symbol.magnifyingglass', str('cp_search'), false, () => { this.enterSearch(); });
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
-      this.headerMenuRow('sys.symbol.info_circle', '资料', false, () => { this.openProfile(); });
+      this.headerMenuRow('sys.symbol.info_circle', str('cp_profile'), false, () => { this.openProfile(); });
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
       this.headerMenuRow(this.isMuted ? 'sys.symbol.bell' : 'sys.symbol.bell_slash',
-        this.headerMuteUpdating ? '正在更新通知' : (this.isMuted ? '取消静音' : '静音'),
+        this.headerMuteUpdating ? str('cp_updating_notifications') : (this.isMuted ? str('cp_unmute') : str('cp_mute')),
         false, () => { this.toggleChatMute(); });
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
-      this.headerMenuRow('sys.symbol.clock', '自动删除消息', false, () => { this.chooseAutoDelete(); });
+      this.headerMenuRow('sys.symbol.clock', str('cp_auto_delete'), false, () => { this.chooseAutoDelete(); });
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
-      this.headerMenuRow('sys.symbol.calendar', '定时消息', false, () => { this.openScheduledSheet(); });
-      this.headerMenuRow('sys.symbol.calendar_badge_clock', '跳转到日期', false,
+      this.headerMenuRow('sys.symbol.calendar', str('sched_title'), false, () => { this.openScheduledSheet(); });
+      this.headerMenuRow('sys.symbol.calendar_badge_clock', str('cp_jump_to_date'), false,
         () => { this.pickJumpDate(); });
       if (this.liveLocationActive) {
-        this.headerMenuRow('sys.symbol.stop_circle', '停止共享位置', true,
+        this.headerMenuRow('sys.symbol.stop_circle', str('cp_stop_location'), true,
           () => { this.confirmStopLiveLocation(); });
       }
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
       this.headerMenuRow('sys.symbol.translate',
-        this.isTranslatable ? '关闭自动翻译' : '开启自动翻译', false,
+        this.isTranslatable ? str('cp_auto_translate_off') : str('cp_auto_translate_on'), false,
         () => { this.toggleTranslatable(); });
-      this.headerMenuRow('sys.symbol.xmark_circle', '清空聊天记录', false, () => { this.confirmClearHistory(); });
+      this.headerMenuRow('sys.symbol.xmark_circle', str('cp_clear_history'), false, () => { this.confirmClearHistory(); });
       if (this.isGroup && this.membershipState === 'writable') {
         Divider().color($r('app.color.divider')).strokeWidth(0.7);
-        this.headerMenuRow('sys.symbol.trash', this.isChannel ? '退出频道' : '退出群组', true,
+        this.headerMenuRow('sys.symbol.trash', this.isChannel ? str('cp_leave_channel') : str('cp_leave_group'), true,
           () => { this.confirmLeaveChat(); });
       }
     }
@@ -4107,14 +4113,14 @@ struct ChatPage {
       return;
     }
     if (entry.videoFileId === 0) {
-      promptAction.showToast({ message: '这个语音文件暂时不可用', duration: 1600 });
+      promptAction.showToast({ message: $r('app.string.cp_voice_unavailable'), duration: 1600 });
       return;
     }
     if (this.store !== null) {
       this.store.requestVideoDownload(messageId, false, entry.videoFailed);
     }
     promptAction.showToast({
-      message: entry.videoFailed ? '正在重新下载语音' : '语音加载中，请稍候',
+      message: entry.videoFailed ? $r('app.string.cp_redownloading_voice') : $r('app.string.cp_voice_loading'),
       duration: 1400
     });
   }
@@ -4137,14 +4143,14 @@ struct ChatPage {
       if (res.photoUris.length === 0) { return; }
       const path = this.copyUriToCache(res.photoUris[0]);
       if (path === '') {
-        promptAction.showToast({ message: '无法读取所选文件', duration: 1600 });
+        promptAction.showToast({ message: $r('app.string.cp_cannot_read_file'), duration: 1600 });
         return;
       }
       store.editMediaAsync(messageId, path, isVideoPath(path), msg.text).then((): void => {
-        promptAction.showToast({ message: '媒体已替换', duration: 1500 });
+        promptAction.showToast({ message: $r('app.string.cp_media_replaced'), duration: 1500 });
       }).catch((e: TdError): void => {
         console.error(`ChatPage.replaceMedia failed: ${e.message}`);
-        promptAction.showToast({ message: '替换失败，原消息未改动', duration: 1700 });
+        promptAction.showToast({ message: $r('app.string.cp_replace_failed'), duration: 1700 });
       });
     }).catch((): void => { this.mediaPickerOpen = false; });
   }
@@ -4177,11 +4183,11 @@ struct ChatPage {
         items.push({ path, isVideo: isVideoPath(path) });
       }
       if (items.length === 0) {
-        promptAction.showToast({ message: '所选媒体读取失败', duration: 1800 });
+        promptAction.showToast({ message: $r('app.string.cp_media_read_failed'), duration: 1800 });
         return;
       }
       if (skipped > 0) {
-        promptAction.showToast({ message: `${skipped} 项媒体读取失败，已发送其余内容`, duration: 1800 });
+        promptAction.showToast({ message: plural('cp_media_skipped', skipped, skipped), duration: 1800 });
       }
       const store: MessageStore = this.store;
       this.composerSending = true;
@@ -4198,12 +4204,12 @@ struct ChatPage {
       }).catch((e: TdError): void => {
         this.composerSending = false;
         console.error(`ChatPage.sendMedia failed: ${e.message}`);
-        promptAction.showToast({ message: '图片发送失败，文字与回复状态已保留', duration: 2000 });
+        promptAction.showToast({ message: $r('app.string.cp_photo_send_failed'), duration: 2000 });
       });
     }).catch((e: Object) => {
       this.mediaPickerOpen = false;
       console.error(`ChatPage.pickAndSendMedia failed: ${JSON.stringify(e)}`);
-      promptAction.showToast({ message: '无法打开媒体选择器', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.cp_cannot_open_picker'), duration: 1800 });
     });
   }
 
@@ -4231,7 +4237,7 @@ struct ChatPage {
       this.recordingStarting = false;
       if (!ok) {
         this.voiceRec = null;
-        promptAction.showToast({ message: '无法开始录音（请检查麦克风权限）', duration: 2500 });
+        promptAction.showToast({ message: $r('app.string.cp_record_failed_permission'), duration: 2500 });
         return;
       }
       this.isRecording = true;
@@ -4244,7 +4250,7 @@ struct ChatPage {
       this.recordingStarting = false;
       this.voiceRec = null;
       console.error(`ChatPage.startRecording failed: ${JSON.stringify(e)}`);
-      promptAction.showToast({ message: '无法开始录音', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.cp_record_failed'), duration: 1800 });
     });
   }
 
@@ -4302,39 +4308,39 @@ struct ChatPage {
 
   private attachMenuItems(): MenuElement[] {
     const items: MenuElement[] = [
-      { value: '照片或视频', action: (): void => {
+      { value: $r('app.string.cp_photo_or_video'), action: (): void => {
         this.setEmojiPanel(false);
         this.pickAndSendMedia();
       } } as MenuElement,
-      { value: '圆形视频', action: (): void => {
+      { value: $r('app.string.cp_video_message'), action: (): void => {
         this.setEmojiPanel(false);
         this.openVideoNoteRecorder();
       } } as MenuElement,
-      { value: '文件', action: (): void => {
+      { value: $r('app.string.storage_file'), action: (): void => {
         this.setEmojiPanel(false);
         this.pickAndSendFile();
       } } as MenuElement,
-      { value: '音乐', action: (): void => {
+      { value: $r('app.string.storage_audio'), action: (): void => {
         this.setEmojiPanel(false);
         this.pickAndSendAudio();
       } } as MenuElement,
-      { value: '位置', action: (): void => {
+      { value: $r('app.string.loc_location'), action: (): void => {
         this.setEmojiPanel(false);
         this.chooseLocationKind();
       } } as MenuElement,
-      { value: '联系人', action: (): void => {
+      { value: $r('app.string.tab_contacts'), action: (): void => {
         this.setEmojiPanel(false);
         this.openContactPicker();
       } } as MenuElement
     ];
     // 投票仅群/频道可发（Telegram 限制私聊不能发投票）。
     if (this.isGroup || this.isChannel) {
-      items.push({ value: '投票', action: (): void => {
+      items.push({ value: $r('app.string.poll_word'), action: (): void => {
         this.setEmojiPanel(false);
         this.openPollComposer();
       } } as MenuElement);
     }
-    items.push({ value: '骰子', action: (): void => {
+    items.push({ value: $r('app.string.cp_dice'), action: (): void => {
       this.setEmojiPanel(false);
       this.showDiceMenu();
     } } as MenuElement);
@@ -4374,7 +4380,7 @@ struct ChatPage {
       }
       const dest = this.copyUriToCache(uris[0]);
       if (dest === '') {
-        promptAction.showToast({ message: '音频读取失败', duration: 2000 });
+        promptAction.showToast({ message: $r('app.string.cp_audio_read_failed'), duration: 2000 });
         return;
       }
       if (this.store !== null) {
@@ -4390,12 +4396,12 @@ struct ChatPage {
   // 位置入口：先问是发静态点还是实时共享。
   private chooseLocationKind(): void {
     this.getUIContext().getPromptAction().showActionMenu({
-      title: '发送位置',
+      title: $r('app.string.cp_send_location'),
       buttons: [
-        { text: '当前位置', color: COLOR_TEXT_PRIMARY as string },
-        { text: '实时位置 · 15 分钟', color: COLOR_TEXT_PRIMARY as string },
-        { text: '实时位置 · 1 小时', color: COLOR_TEXT_PRIMARY as string },
-        { text: '实时位置 · 8 小时', color: COLOR_TEXT_PRIMARY as string }
+        { text: $r('app.string.cp_current_location'), color: COLOR_TEXT_PRIMARY as string },
+        { text: $r('app.string.cp_live_15m'), color: COLOR_TEXT_PRIMARY as string },
+        { text: $r('app.string.cp_live_1h'), color: COLOR_TEXT_PRIMARY as string },
+        { text: $r('app.string.cp_live_8h'), color: COLOR_TEXT_PRIMARY as string }
       ]
     }).then((res: promptAction.ActionMenuSuccessResponse): void => {
       const periods: number[] = [0, 15 * 60, 3600, 8 * 3600];
@@ -4420,15 +4426,15 @@ struct ChatPage {
         store.sendLiveLocation(loc.latitude, loc.longitude, periodSec)
           .then((messageId: number): void => {
             if (messageId === 0) {
-              promptAction.showToast({ message: '实时位置发送失败', duration: 1800 });
+              promptAction.showToast({ message: $r('app.string.cp_live_location_failed'), duration: 1800 });
               return;
             }
             // 交给独立服务：退出会话、切后台都要继续共享。
             liveLocation.start(this.chatId, messageId, periodSec);
-            promptAction.showToast({ message: '已开始共享实时位置', duration: 1600 });
+            promptAction.showToast({ message: $r('app.string.cp_live_location_started'), duration: 1600 });
           });
       }).catch((): void => {
-        promptAction.showToast({ message: '定位失败，请确认已开启定位服务', duration: 2000 });
+        promptAction.showToast({ message: $r('app.string.cp_location_failed'), duration: 2000 });
       });
     });
   }
@@ -4443,7 +4449,7 @@ struct ChatPage {
           run();
           return;
         }
-        promptAction.showToast({ message: '需要定位权限才能发送位置', duration: 1800 });
+        promptAction.showToast({ message: $r('app.string.cp_needs_location'), duration: 1800 });
       })
       .catch((e: BusinessError): void => {
         console.error(`ChatPage location permission failed: ${e.message}`);
@@ -4467,10 +4473,10 @@ struct ChatPage {
       .then((result): void => {
         const granted: boolean = result.authResults.length > 0 && result.authResults[0] === 0;
         if (!granted) {
-          promptAction.showToast({ message: '需要定位权限才能发送位置', duration: 1800 });
+          promptAction.showToast({ message: $r('app.string.cp_needs_location'), duration: 1800 });
           return;
         }
-        promptAction.showToast({ message: '正在获取位置…', duration: 1200 });
+        promptAction.showToast({ message: $r('app.string.cp_getting_location'), duration: 1200 });
         const request: geoLocationManager.SingleLocationRequest = {
           locatingPriority: geoLocationManager.LocatingPriority.PRIORITY_LOCATING_SPEED,
           locatingTimeoutMs: 10000
@@ -4484,7 +4490,7 @@ struct ChatPage {
           })
           .catch((e: BusinessError): void => {
             console.error(`ChatPage.sendCurrentLocation failed: ${e.message}`);
-            promptAction.showToast({ message: '定位失败，请确认已开启定位服务', duration: 2000 });
+            promptAction.showToast({ message: $r('app.string.cp_location_failed'), duration: 2000 });
           });
       })
       .catch((e: BusinessError): void => {
@@ -4497,11 +4503,11 @@ struct ChatPage {
   private showDiceMenu(): void {
     const emojis: string[] = ['🎲', '🎯', '🏀', '⚽', '🎳', '🎰'];
     promptAction.showActionMenu({
-      title: '掷一个',
+      title: $r('app.string.cp_roll_a'),
       buttons: [
-        { text: '🎲 骰子', color: '#007AFF' }, { text: '🎯 飞镖', color: '#007AFF' },
-        { text: '🏀 篮球', color: '#007AFF' }, { text: '⚽ 足球', color: '#007AFF' },
-        { text: '🎳 保龄球', color: '#007AFF' }, { text: '🎰 老虎机', color: '#007AFF' }
+        { text: $r('app.string.cp_dice_die'), color: '#007AFF' }, { text: $r('app.string.cp_dice_darts'), color: '#007AFF' },
+        { text: $r('app.string.cp_dice_basketball'), color: '#007AFF' }, { text: $r('app.string.cp_dice_football'), color: '#007AFF' },
+        { text: $r('app.string.cp_dice_bowling'), color: '#007AFF' }, { text: $r('app.string.cp_dice_slots'), color: '#007AFF' }
       ]
     }).then((result): void => {
       const index: number = result.index;
@@ -4524,7 +4530,7 @@ struct ChatPage {
       }
       const dest = this.copyUriToCache(uris[0]);
       if (dest === '') {
-        promptAction.showToast({ message: '文件读取失败', duration: 2000 });
+        promptAction.showToast({ message: $r('app.string.cp_file_read_failed'), duration: 2000 });
         return;
       }
       if (this.store !== null) {
@@ -4569,7 +4575,7 @@ struct ChatPage {
     }).catch((e: TdError): void => {
       this.composerSending = false;
       console.error(`ChatPage.doSend failed: ${e.message}`);
-      promptAction.showToast({ message: '发送失败，消息已保留', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.cp_send_failed_kept'), duration: 1800 });
     });
   }
 
@@ -4581,7 +4587,7 @@ struct ChatPage {
     // Older TDLib payloads can omit keyboardButtonTypeText entirely; an empty
     // type is still the ordinary text-button behavior.
     if (btn.type !== '' && btn.type !== KB_TEXT) {
-      promptAction.showToast({ message: '暂不支持这种按钮', duration: 1500 });
+      promptAction.showToast({ message: $r('app.string.cp_button_unsupported'), duration: 1500 });
       return;
     }
     if (this.store === null || this.replyKeyboardSendingKey !== '') {
@@ -4608,7 +4614,7 @@ struct ChatPage {
     }).catch((e: TdError): void => {
       this.replyKeyboardSendingKey = '';
       console.error(`ChatPage.replyKeyboard send failed: ${e.message}`);
-      promptAction.showToast({ message: '发送失败，请重试', duration: 1600 });
+      promptAction.showToast({ message: $r('app.string.send_failed_retry_short'), duration: 1600 });
     });
   }
 
@@ -4635,21 +4641,21 @@ struct ChatPage {
       return m.placeholderLabel;
     }
     if (m.contentType === 'sticker') {
-      return '贴纸';
+      return str('sticker_tab');
     }
     if (m.contentType === 'photo') {
-      return '图片';
+      return str('storage_photo');
     }
     if (m.contentType === 'video') {
-      return '视频';
+      return str('storage_video');
     }
     if (m.contentType === 'paidMedia') {
-      return m.paidMediaLocked ? '付费媒体' : '已解锁媒体';
+      return m.paidMediaLocked ? str('paid_media') : str('cp_unlocked_media');
     }
     if (m.contentType === 'voice') {
-      return '语音消息';
+      return str('ns_voice_message');
     }
-    return '媒体消息';
+    return str('cp_media_message');
   }
 
   // Long-press menu: reply. Populates the reply preview above the input bar;
@@ -4734,12 +4740,12 @@ struct ChatPage {
       }
     }
     if (parts.length === 0) {
-      promptAction.showToast({ message: '没有可复制的文本', duration: 1500 });
+      promptAction.showToast({ message: $r('app.string.cp_nothing_to_copy'), duration: 1500 });
       return;
     }
     const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, parts.join('\n\n'));
     pasteboard.getSystemPasteboard().setData(data).then(() => {
-      promptAction.showToast({ message: `已复制 ${parts.length} 条消息`, duration: 1200 });
+      promptAction.showToast({ message: plural('cp_copied_n', parts.length, parts.length), duration: 1200 });
       this.exitSelect();
     }).catch((e: Object) => { console.error(`ChatPage.copySelected failed: ${JSON.stringify(e)}`); });
   }
@@ -4772,17 +4778,17 @@ struct ChatPage {
       this.exitSelect();
     }).catch((e: TdError) => {
       console.error(`ChatPage.deleteMessages failed: ${e.message}`);
-      promptAction.showToast({ message: `删除失败：${e.message}`, duration: 2000 });
+      promptAction.showToast({ message: str('cp_delete_failed_msg', e.message), duration: 2000 });
     });
   }
 
   private copyMessageText(messageId: number): void {
     const m = this.findMsg(messageId);
     if (m === null || m.text === '') {
-      promptAction.showToast({ message: '没有可复制的文本', duration: 1500 });
+      promptAction.showToast({ message: $r('app.string.cp_nothing_to_copy'), duration: 1500 });
       return;
     }
-    this.copyPlainText(m.text, '已复制');
+    this.copyPlainText(m.text, str('copied'));
   }
 
   private copyPlainText(text: string, successMessage: string): void {
@@ -4801,12 +4807,12 @@ struct ChatPage {
     }
     this.store.messageLink(messageId, (url: string) => {
       if (url === '') {
-        promptAction.showToast({ message: '无法获取链接（可能是私密聊天）', duration: 1800 });
+        promptAction.showToast({ message: $r('app.string.cp_no_link'), duration: 1800 });
         return;
       }
       const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, url);
       pasteboard.getSystemPasteboard().setData(data).then(() => {
-        promptAction.showToast({ message: '链接已复制', duration: 1200 });
+        promptAction.showToast({ message: $r('app.string.link_copied'), duration: 1200 });
       }).catch((e: Object) => { console.error(`ChatPage.copyMessageLink failed: ${JSON.stringify(e)}`); });
     });
   }
@@ -4829,7 +4835,7 @@ struct ChatPage {
         this.reactionPendingKey = '';
       }
       console.error(`ChatPage.toggleReaction failed: ${e.message}`);
-      promptAction.showToast({ message: '回应失败，请重试', duration: 1600 });
+      promptAction.showToast({ message: $r('app.string.cp_reaction_failed'), duration: 1600 });
     });
   }
 
@@ -4864,7 +4870,7 @@ struct ChatPage {
     getTdClient().send(req, 15000).then((message: TdObject): void => {
       const id: number = (message['id'] as number | undefined) ?? 0;
       if (id === 0) {
-        promptAction.showToast({ message: '那天没有消息', duration: 1600 });
+        promptAction.showToast({ message: $r('app.string.cp_no_messages_that_day'), duration: 1600 });
         return;
       }
       this.jumpToMessageId(id);
@@ -4872,7 +4878,7 @@ struct ChatPage {
       // 404 是合法结果：该日期之前没有任何消息。
       const code: number = e.code !== undefined ? e.code : 0;
       promptAction.showToast({
-        message: code === 404 ? '这个日期之前没有消息' : `跳转失败：${e.message}`,
+        message: code === 404 ? $r('app.string.cp_no_messages_before') : str('cp_jump_failed_msg', e.message),
         duration: 1600
       });
     });
@@ -4890,7 +4896,7 @@ struct ChatPage {
     this.store?.loadAround(targetId, (found: boolean): void => {
       if (!found && this.pendingJumpId === targetId) {
         this.pendingJumpId = 0;
-        promptAction.showToast({ message: '无法定位到那条消息', duration: 1500 });
+        promptAction.showToast({ message: $r('app.string.cp_cannot_jump'), duration: 1500 });
       }
     });
   }
@@ -4904,12 +4910,12 @@ struct ChatPage {
     req['is_translatable'] = next;
     getTdClient().send(req).then((): void => {
       promptAction.showToast({
-        message: next ? '已开启自动翻译' : '已关闭自动翻译', duration: 1500
+        message: next ? $r('app.string.cp_auto_translate_enabled') : $r('app.string.cp_auto_translate_disabled'), duration: 1500
       });
     }).catch((e: TdError): void => {
       this.isTranslatable = previous;
       console.error(`ChatPage.toggleTranslatable failed: ${e.message}`);
-      promptAction.showToast({ message: `设置失败：${e.message}`, duration: 1800 });
+      promptAction.showToast({ message: str('cp_setting_failed_msg', e.message), duration: 1800 });
     });
   }
 
@@ -4918,7 +4924,7 @@ struct ChatPage {
       const message: string = e.message !== undefined ? e.message : '';
       promptAction.showToast({
         message: message.indexOf('PREMIUM') >= 0 || message.indexOf('premium') >= 0
-          ? '转文字是 Telegram Premium 功能' : `转文字失败：${message}`,
+          ? $r('app.string.cp_transcribe_premium') : str('cp_transcribe_failed_msg', message),
         duration: 2200
       });
     });
@@ -4949,19 +4955,19 @@ struct ChatPage {
 
   private stopPoll(messageId: number): void {
     this.showMenuConfirm({
-      title: '结束投票',
-      message: '结束后不能再投票，结果将保留。',
+      title: $r('app.string.mb_stop_poll'),
+      message: $r('app.string.cp_stop_poll_body'),
       buttons: [
-        { text: '取消', color: '#8E8E93' },
-        { text: '结束', color: '#E5484D' }
+        { text: $r('app.string.cancel'), color: '#8E8E93' },
+        { text: $r('app.string.cp_stop'), color: '#E5484D' }
       ]
     }, 'stopPoll', (index: number): void => {
       if (index !== 1) { return; }
       this.store?.stopPollAsync(messageId).then((): void => {
-        promptAction.showToast({ message: '投票已结束', duration: 1500 });
+        promptAction.showToast({ message: $r('app.string.cp_poll_stopped'), duration: 1500 });
       }).catch((e: TdError): void => {
         console.error(`ChatPage.stopPoll failed: ${e.message}`);
-        promptAction.showToast({ message: '结束投票失败', duration: 1600 });
+        promptAction.showToast({ message: $r('app.string.cp_stop_poll_failed'), duration: 1600 });
       });
     });
   }
@@ -4982,7 +4988,7 @@ struct ChatPage {
             const uid = (sender['user_id'] as number | undefined) ?? 0;
             const name = getUserStore().displayName(uid);
             if (name === '') { getUserStore().ensure(uid); }
-            names.push(name !== '' ? name : `用户 ${uid}`);
+            names.push(name !== '' ? name : str('cp_user_id', uid));
           }
         }
         if (names.length > 0) {
@@ -4992,9 +4998,9 @@ struct ChatPage {
     });
     Promise.all(tasks).then((): void => {
       promptAction.showDialog({
-        title: '投票人',
-        message: lines.length > 0 ? lines.join('\n\n') : '暂无公开的投票记录',
-        buttons: [{ text: '关闭', color: '#3390EC' }]
+        title: $r('app.string.cp_voters'),
+        message: lines.length > 0 ? lines.join('\n\n') : $r('app.string.cp_no_public_votes'),
+        buttons: [{ text: $r('app.string.close'), color: '#3390EC' }]
       }).catch((): void => {});
     }).catch((): void => {});
   }
@@ -5005,19 +5011,19 @@ struct ChatPage {
     const req: TdRequest = { '@type': 'setDefaultReactionType' };
     req['reaction_type'] = rt;
     getTdClient().send(req).then((): void => {
-      promptAction.showToast({ message: `已将 ${emoji} 设为默认回应`, duration: 1600 });
+      promptAction.showToast({ message: str('cp_default_reaction_set', emoji), duration: 1600 });
     }).catch((e: TdError): void => {
       console.error(`ChatPage.setDefaultReaction failed: ${e.message}`);
-      promptAction.showToast({ message: '设置默认回应失败', duration: 1600 });
+      promptAction.showToast({ message: $r('app.string.cp_default_reaction_failed'), duration: 1600 });
     });
   }
 
   // Chat-level auto-delete timer (阅后即焚).
   private chooseAutoDelete(): void {
-    const labels: string[] = ['关闭', '1 天', '1 周', '1 个月'];
+    const labels: string[] = [str('close'), str('ps_1_day'), str('ps_1_week'), str('ps_1_month')];
     const seconds: number[] = [0, 86400, 604800, 2678400];
     promptAction.showActionMenu({
-      title: '消息自动删除',
+      title: $r('app.string.cp_auto_delete_title'),
       buttons: labels.map((text: string): promptAction.Button =>
         ({ text, color: '#3390EC' } as promptAction.Button)) as
         [promptAction.Button, promptAction.Button?, promptAction.Button?,
@@ -5027,12 +5033,12 @@ struct ChatPage {
       if (value === undefined) { return; }
       this.store?.setAutoDeleteAsync(value).then((): void => {
         promptAction.showToast({
-          message: value === 0 ? '已关闭自动删除' : `新消息将在${labels[chosen.index]}后删除`,
+          message: value === 0 ? $r('app.string.cp_auto_delete_off') : str('cp_auto_delete_after', labels[chosen.index]),
           duration: 1800
         });
       }).catch((e: TdError): void => {
         console.error(`ChatPage.autoDelete failed: ${e.message}`);
-        promptAction.showToast({ message: '设置失败，可能没有权限', duration: 1700 });
+        promptAction.showToast({ message: $r('app.string.cp_setting_failed_permission'), duration: 1700 });
       });
     }).catch((): void => {});
   }
@@ -5040,9 +5046,9 @@ struct ChatPage {
   // Long-press the send button: schedule or send silently.
   private showSendOptions(): void {
     if (this.draft.trim() === '' || this.editingId !== 0) { return; }
-    const labels: string[] = ['静音发送', '1 小时后发送', '明天早上 9 点发送'];
+    const labels: string[] = [str('cp_send_silently'), str('cp_send_in_1h'), str('cp_send_tomorrow_9')];
     promptAction.showActionMenu({
-      title: '发送选项',
+      title: $r('app.string.cp_send_options'),
       buttons: labels.map((text: string): promptAction.Button =>
         ({ text, color: '#3390EC' } as promptAction.Button)) as
         [promptAction.Button, promptAction.Button?, promptAction.Button?,
@@ -5069,11 +5075,11 @@ struct ChatPage {
         this.draft = '';
         this.clearReply();
         promptAction.showToast({
-          message: sendDate > 0 ? '已安排定时发送' : '已静音发送', duration: 1600
+          message: sendDate > 0 ? $r('app.string.cp_scheduled') : $r('app.string.cp_sent_silently'), duration: 1600
         });
       }).catch((e: TdError): void => {
         console.error(`ChatPage.sendScheduled failed: ${e.message}`);
-        promptAction.showToast({ message: '发送失败', duration: 1600 });
+        promptAction.showToast({ message: $r('app.string.send_failed'), duration: 1600 });
       });
     }).catch((): void => {});
   }
@@ -5084,12 +5090,12 @@ struct ChatPage {
     const task: Promise<void> = unpin
       ? store.unpinAsync(messageId) : store.pinAsync(messageId);
     task.then((): void => {
-      promptAction.showToast({ message: unpin ? '已取消置顶' : '已置顶', duration: 1400 });
+      promptAction.showToast({ message: unpin ? $r('app.string.cp_unpinned') : $r('app.string.cp_pinned'), duration: 1400 });
     }).catch((e: TdError): void => {
       console.error(`ChatPage.togglePin failed: ${e.message}`);
       promptAction.showToast({
         message: e.message.indexOf('not enough rights') >= 0 || e.message.indexOf('ADMIN') >= 0
-          ? '没有置顶权限' : (unpin ? '取消置顶失败' : '置顶失败'),
+          ? $r('app.string.cp_no_pin_permission') : (unpin ? $r('app.string.cp_unpin_failed') : $r('app.string.cp_pin_failed')),
         duration: 1700
       });
     });
@@ -5138,15 +5144,15 @@ struct ChatPage {
       return;
     }
     if (this.headerKind === 'private' || this.headerKind === 'secret') {
-      this.typingLabel = '正在输入…';
+      this.typingLabel = str('cp_typing');
       return;
     }
     if (ids.length > 1) {
-      this.typingLabel = `${ids.length} 人正在输入…`;
+      this.typingLabel = plural('cp_n_typing', ids.length, ids.length);
       return;
     }
     const name = getUserStore().displayName(ids[0]);
-    this.typingLabel = `${name !== '' ? name.split(' ')[0] : '有人'}正在输入…`;
+    this.typingLabel = str('cp_someone_typing', name !== '' ? name.split(' ')[0] : str('cp_someone'));
   }
 
   // Pick up the draft synced from other devices (chat.draft_message). Only
@@ -5180,27 +5186,27 @@ struct ChatPage {
     getTdClient().send(req, 20000).then((result: TdObject): void => {
       const text = (result['text'] as string | undefined) ?? '';
       if (text === '') {
-        promptAction.showToast({ message: '没有可翻译的内容', duration: 1600 });
+        promptAction.showToast({ message: $r('app.string.cp_nothing_to_translate'), duration: 1600 });
         return;
       }
       promptAction.showDialog({
-        title: '翻译',
+        title: $r('app.string.mb_translate'),
         message: text,
         buttons: [
-          { text: '复制', color: '#3390EC' },
-          { text: '关闭', color: '#8E8E93' }
+          { text: $r('app.string.copy'), color: '#3390EC' },
+          { text: $r('app.string.close'), color: '#8E8E93' }
         ]
       }).then((chosen): void => {
         if (chosen.index === 0) {
           const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text);
           pasteboard.getSystemPasteboard().setData(data).then((): void => {
-            promptAction.showToast({ message: '已复制', duration: 1300 });
+            promptAction.showToast({ message: $r('app.string.copied'), duration: 1300 });
           }).catch((): void => {});
         }
       }).catch((): void => {});
     }).catch((e: TdError): void => {
       console.error(`ChatPage.translate failed: ${e.message}`);
-      promptAction.showToast({ message: '翻译失败，请稍后重试', duration: 1700 });
+      promptAction.showToast({ message: $r('app.string.cp_translate_failed'), duration: 1700 });
     });
   }
 
@@ -5223,21 +5229,21 @@ struct ChatPage {
           const uid = (sender['user_id'] as number | undefined) ?? 0;
           const name = getUserStore().displayName(uid);
           if (name === '') { getUserStore().ensure(uid); }
-          names.push(name !== '' ? name : `用户 ${uid}`);
+          names.push(name !== '' ? name : str('cp_user_id', uid));
         } else {
           const cid = (sender['chat_id'] as number | undefined) ?? 0;
           const entry = getChatStore().entryOf(cid);
-          names.push(entry !== undefined ? entry.title : '匿名身份');
+          names.push(entry !== undefined ? entry.title : str('cp_anonymous'));
         }
       }
       promptAction.showDialog({
-        title: `${reactionDisplayLabel(reactionKey)} 共 ${total} 人`,
-        message: names.length > 0 ? names.join('\n') : '暂无详情',
-        buttons: [{ text: '关闭', color: '#3390EC' }]
+        title: str('cp_reaction_total', reactionDisplayLabel(reactionKey), total),
+        message: names.length > 0 ? names.join('\n') : $r('app.string.cp_no_details'),
+        buttons: [{ text: $r('app.string.close'), color: '#3390EC' }]
       }).catch((): void => {});
     }).catch((e: TdError): void => {
       console.error(`ChatPage.showReactors failed: ${e.message}`);
-      promptAction.showToast({ message: '无法获取回应详情', duration: 1600 });
+      promptAction.showToast({ message: $r('app.string.cp_no_reaction_details'), duration: 1600 });
     });
   }
 
@@ -5264,7 +5270,7 @@ struct ChatPage {
     const validIds: number[] = this.forwardableMessageIds(ids);
     ContextMenu.close();
     if (validIds.length === 0) {
-      promptAction.showToast({ message: '这条消息无法转发', duration: 1500 });
+      promptAction.showToast({ message: $r('app.string.cp_cannot_forward'), duration: 1500 });
       return;
     }
     this.closeReactionSheet();
@@ -5468,7 +5474,7 @@ struct ChatPage {
   selectionHeader() {
     Row({ space: 8 }) {
       this.circleButton('sys.symbol.xmark', () => { this.exitSelect(); });
-      Text(`已选择 ${this.selectedIds.length}`)
+      Text(str('cp_selected_n', this.selectedIds.length))
         .fontSize(16).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
         .layoutWeight(1).margin({ left: 6 });
       this.circleButton('sys.symbol.arrowshape_turn_up_right', () => {
@@ -5526,8 +5532,8 @@ struct ChatPage {
           curve: Curve.EaseOut
         })
         .onClick((): void => { this.exitSearch(); })
-        .accessibilityText('返回聊天');
-      TextInput({ text: this.searchQuery, placeholder: '搜索消息' })
+        .accessibilityText($r('app.string.cp_back_to_chat'));
+      TextInput({ text: this.searchQuery, placeholder: $r('app.string.cp_search_messages') })
         .layoutWeight(1).height(40).fontSize(16)
         .backgroundColor(Color.Transparent).padding(0).borderRadius(0)
         .placeholderColor(COLOR_TEXT_SECONDARY)
@@ -5553,7 +5559,7 @@ struct ChatPage {
           curve: Curve.EaseOut
         })
         .onClick((): void => { this.updateSearchQuery(''); })
-        .accessibilityText('清空搜索');
+        .accessibilityText($r('app.string.clear_search'));
       }
     }
     .width('calc(100% - 24vp)').height(46)
@@ -5667,7 +5673,7 @@ struct ChatPage {
         duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 140),
         curve: Curve.EaseOut
       })
-      .accessibilityText(`${this.headerText().titleText}，${this.headerText().subtitleText}，查看资料`)
+      .accessibilityText(str('cp_header_a11y', this.headerText().titleText, this.headerText().subtitleText))
       .onClick((): void => {
         if (this.headerState === 'error') {
           this.resolveHeaderIdentity();
@@ -5723,7 +5729,7 @@ struct ChatPage {
         onDisappear: (): void => { this.headerMenuShow = false; }
       })
       .enabled(!this.pageClosing && this.chatId !== 0)
-      .accessibilityText('更多聊天操作')
+      .accessibilityText($r('app.string.cp_more_actions'))
       .onClick((): void => {
         if (!this.headerMenuShow) {
           this.headerMenuShow = true;
@@ -5755,7 +5761,7 @@ struct ChatPage {
       if (this.commandPanelActive()) {
         Row({ space: 7 }) {
           Text('/').fontSize(18).fontWeight(FontWeight.Bold).fontColor(COLOR_PRIMARY);
-          Text('Bot 命令').fontSize(13).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+          Text($r('app.string.cp_bot_commands')).fontSize(13).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
           Blank().layoutWeight(1);
           if (this.commandLoadState === 'ready' && this.allCommands.length > 0) {
             Text(`${this.allCommands.length}`)
@@ -5769,14 +5775,14 @@ struct ChatPage {
         if (this.commandLoadState === 'loading' || this.commandLoadState === 'idle') {
           Row({ space: 9 }) {
             LoadingProgress().width(18).height(18).color(COLOR_PRIMARY);
-            Text('正在加载命令').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+            Text($r('app.string.cp_loading_commands')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
           }
           .width('100%').height(72).justifyContent(FlexAlign.Center);
         } else if (this.commandLoadState === 'error') {
           Column({ space: 7 }) {
-            Text(this.commandLoadError !== '' ? this.commandLoadError : '命令加载失败')
+            Text(this.commandLoadError !== '' ? this.commandLoadError : $r('app.string.cp_commands_failed'))
               .fontSize(13).fontColor(COLOR_TEXT_PRIMARY);
-            Text('重新加载')
+            Text($r('app.string.settings_reload'))
               .fontSize(13).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
               .padding({ left: 14, right: 14, top: 6, bottom: 6 })
               .backgroundColor($r('app.color.selected_pill')).borderRadius(14)
@@ -5785,9 +5791,9 @@ struct ChatPage {
           .width('100%').height(86).justifyContent(FlexAlign.Center);
         } else if (this.commandItems.length === 0) {
           Column({ space: 5 }) {
-            Text(this.allCommands.length === 0 ? '没有可用的 Bot 命令' : '没有匹配的命令')
+            Text(this.allCommands.length === 0 ? $r('app.string.cp_no_bot_commands') : $r('app.string.cp_no_matching_commands'))
               .fontSize(13).fontColor(COLOR_TEXT_PRIMARY);
-            Text(this.allCommands.length === 0 ? '这个聊天暂未提供命令' : '继续输入或换个关键词')
+            Text(this.allCommands.length === 0 ? $r('app.string.cp_chat_no_commands') : $r('app.string.cp_keep_typing'))
               .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
           }
           .width('100%').height(82).justifyContent(FlexAlign.Center);
@@ -5888,7 +5894,7 @@ struct ChatPage {
     this.editingId = messageId;
     this.editingKind = msg.contentType === 'text' ? 'text' : 'caption';
     this.editingPreview = msg.text !== '' ? msg.text
-      : (this.editingKind === 'caption' ? '（无说明文字）' : '');
+      : (this.editingKind === 'caption' ? str('cp_no_caption') : '');
     this.draft = msg.text;
   }
 
@@ -5925,7 +5931,7 @@ struct ChatPage {
       console.error(`ChatPage.commitEdit failed: ${e.message}`);
       promptAction.showToast({
         message: e.message.indexOf('MESSAGE_NOT_MODIFIED') >= 0
-          ? '内容没有变化' : '编辑失败，原消息未改动',
+          ? $r('app.string.cp_no_change') : $r('app.string.cp_edit_failed'),
         duration: 1800
       });
     });
@@ -5937,7 +5943,7 @@ struct ChatPage {
     Row({ space: 10 }) {
       Row().width(3).height(34).borderRadius(2).backgroundColor(COLOR_PRIMARY);
       Column({ space: 1 }) {
-        Text(this.editingKind === 'caption' ? '编辑说明文字' : '编辑消息')
+        Text(this.editingKind === 'caption' ? $r('app.string.mb_edit_caption') : $r('app.string.cp_edit_message'))
           .fontSize(13).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium);
         Text(this.editingPreview).fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
@@ -6006,7 +6012,7 @@ struct ChatPage {
       this.replyKeyboard.placeholder.trim() !== '') {
       return this.replyKeyboard.placeholder;
     }
-    return '发消息';
+    return str('cp_message_placeholder');
   }
 
   // Bot custom reply keyboard: full-width button rows under the input bar.
@@ -6081,22 +6087,22 @@ struct ChatPage {
       if (this.membershipState === 'checking') {
         LoadingProgress()
           .width(20).height(20).color(COLOR_PRIMARY);
-        Text('正在获取成员状态')
+        Text($r('app.string.cp_fetching_membership'))
           .fontSize(15).fontColor(COLOR_TEXT_SECONDARY);
       } else if (this.membershipState === 'blocked') {
-        Text('你无法加入此聊天')
+        Text($r('app.string.cp_cannot_join'))
           .fontSize(16).fontColor(COLOR_TEXT_SECONDARY).fontWeight(FontWeight.Medium);
       } else if (this.membershipState === 'readonly') {
         SymbolGlyph($r(this.isMuted ? 'sys.symbol.bell' : 'sys.symbol.bell_slash'))
           .fontSize(17).fontColor([COLOR_PRIMARY]);
-        Text(this.isMuted ? '取消静音' : '静音')
+        Text(this.isMuted ? $r('app.string.cp_unmute') : $r('app.string.cp_mute'))
           .fontSize(16).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium);
       } else {
         if (this.joiningChat) {
           LoadingProgress()
             .width(20).height(20).color(COLOR_PRIMARY);
         }
-        Text(this.joiningChat ? '正在加入…' : '加入')
+        Text(this.joiningChat ? $r('app.string.cp_joining') : $r('app.string.cp_join'))
           .fontSize(16).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium);
       }
     }
@@ -6128,9 +6134,9 @@ struct ChatPage {
           Row({ space: 7 }) {
             Circle({ width: 8, height: 8 }).fill('#FF3B30');
             Text(this.formatRecSeconds()).fontSize(15).fontColor(COLOR_TEXT_PRIMARY);
-            Text('正在录音...').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+            Text($r('app.string.cp_recording')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
           }.layoutWeight(1).alignItems(VerticalAlign.Center);
-          Button('取消').fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
+          Button($r('app.string.cancel')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
             .stateStyles({
               normal: this.composerIconNormalStyle,
               pressed: this.composerIconPressedStyle
@@ -6153,7 +6159,7 @@ struct ChatPage {
             Row({ space: 4 }) {
               SymbolGlyph($r(this.commandMenuOpen ? 'sys.symbol.xmark' : 'sys.symbol.line_3_horizontal'))
                 .fontSize(15).fontColor([Color.White]);
-              Text(this.commandMenuOpen ? '关闭' : '菜单').fontSize(13).fontColor(Color.White);
+              Text(this.commandMenuOpen ? $r('app.string.close') : $r('app.string.cp_menu')).fontSize(13).fontColor(Color.White);
             }
             .padding({ left: 9, right: 10, top: 6, bottom: 6 })
             .borderRadius(15)
@@ -6237,13 +6243,13 @@ struct ChatPage {
               duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 110),
               curve: Curve.EaseOut
             })
-            .accessibilityText(this.replyKbCollapsed ? '打开 Bot 键盘' : '切换到文字输入')
+            .accessibilityText(this.replyKbCollapsed ? $r('app.string.cp_open_bot_keyboard') : $r('app.string.cp_switch_to_text'))
             .onClick(() => { this.toggleReplyKeyboard(); });
           }
           if (this.botMiniAppUrlValue !== '') {
             SymbolGlyph($r('sys.symbol.square_grid_2x2'))
               .fontSize(22).fontColor([COLOR_PRIMARY])
-              .accessibilityText('打开 Mini App')
+              .accessibilityText($r('app.string.cp_open_miniapp'))
               .onClick((): void => { this.openBotMiniApp(); });
           }
           SymbolGlyph($r('sys.symbol.paperclip'))
@@ -6320,7 +6326,7 @@ struct ChatPage {
     Row() {
       Text(this.searchResults.length > 0
         ? `${this.searchTotal - this.searchIdx} / ${this.searchTotal}`
-        : (this.searchTotal === 0 && this.searchQuery.trim() !== '' ? '' : '输入关键词搜索'))
+        : (this.searchTotal === 0 && this.searchQuery.trim() !== '' ? '' : $r('app.string.cp_search_placeholder')))
         .fontSize(15).fontColor(COLOR_TEXT_PRIMARY);
       Blank().layoutWeight(1);
       if (this.searchResults.length > 0) {
@@ -6429,7 +6435,7 @@ struct ChatPage {
       }.height(34).width(3);
       Column({ space: 2 }) {
         Row({ space: 6 }) {
-          Text('置顶消息').fontSize(12).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium);
+          Text($r('app.string.cp_pinned_message')).fontSize(12).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium);
           if (this.pinnedCount > 1) {
             Text(`${this.pinnedShownIdx() + 1}/${this.pinnedCount}`)
               .fontSize(10)
@@ -6464,7 +6470,7 @@ struct ChatPage {
       curve: Curve.EaseOut
     })
     .enabled(!this.pinnedJumpBusy)
-    .accessibilityText(`置顶消息，${this.pinnedPreview}，点击定位`)
+    .accessibilityText(str('cp_pinned_a11y', this.pinnedPreview))
     .onClick(() => { this.onPinnedTap(); });
   }
 
@@ -6481,16 +6487,16 @@ struct ChatPage {
         .animation({ duration: powerAnimationDuration(KEY_POWER_PARTICLES, 720), curve: Curve.EaseInOut });
       Column({ space: 2 }) {
         Row({ space: 6 }) {
-          Text('正在直播').fontSize(12).fontColor('#FF405C').fontWeight(FontWeight.Medium);
+          Text($r('app.string.cp_live_now')).fontSize(12).fontColor('#FF405C').fontWeight(FontWeight.Medium);
           if (this.liveCallIsRtmp) {
-            Text('单向').fontSize(9).fontColor(Color.White).fontWeight(FontWeight.Bold)
+            Text($r('app.string.cp_one_way')).fontSize(9).fontColor(Color.White).fontWeight(FontWeight.Bold)
               .padding({ left: 5, right: 5, top: 2, bottom: 2 })
               .backgroundColor('#FF405C').borderRadius(6);
           }
           Circle({ width: 6, height: 6 }).fill('#FF405C')
             .opacity(this.livePulseExpanded ? 1 : 0.45);
         }
-        Text(this.liveParticipantCount > 0 ? `${this.liveParticipantCount} 人在线` : '直播进行中')
+        Text(this.liveParticipantCount > 0 ? plural('cp_n_online', this.liveParticipantCount, this.liveParticipantCount) : $r('app.string.cp_live_in_progress'))
           .fontSize(13).fontColor(COLOR_TEXT_PRIMARY)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
       }
@@ -6500,7 +6506,7 @@ struct ChatPage {
           if (this.liveDialogOpening || this.liveNavigationBusy) {
             LoadingProgress().width(13).height(13).color(Color.White);
           }
-          Text(this.liveNavigationBusy ? '正在进入' : '进入')
+          Text(this.liveNavigationBusy ? $r('app.string.cp_entering') : $r('app.string.cp_enter'))
             .fontSize(12)
             .fontColor(Color.White)
             .fontWeight(FontWeight.Medium);
@@ -6528,7 +6534,7 @@ struct ChatPage {
       curve: Curve.EaseOut
     })
     .accessibilityText(`正在直播，${this.liveParticipantCount > 0 ?
-      `${this.liveParticipantCount} 人在线` : '直播进行中'}，点击进入`)
+      plural('cp_n_online', this.liveParticipantCount, this.liveParticipantCount) : $r('app.string.cp_live_in_progress')}，点击进入`)
     .onClick((): void => { this.onLiveStreamTap(); });
   }
 
@@ -6537,11 +6543,11 @@ struct ChatPage {
     Row({ space: 12 }) {
       LoadingProgress().width(22).height(22).color(COLOR_PRIMARY);
       Column({ space: 2 }) {
-        Text('正在同步会话动态')
+        Text($r('app.string.cp_syncing_chat'))
           .fontSize(13)
           .fontWeight(FontWeight.Medium)
           .fontColor(COLOR_TEXT_PRIMARY);
-        Text('检查置顶消息与直播状态…')
+        Text($r('app.string.cp_checking_pinned_live'))
           .fontSize(12)
           .fontColor(COLOR_TEXT_SECONDARY);
       }
@@ -6552,7 +6558,7 @@ struct ChatPage {
     .constraintSize({ minHeight: 54 })
     .padding({ left: 14, right: 14, top: 8, bottom: 8 })
     .alignItems(VerticalAlign.Center)
-    .accessibilityText('正在同步置顶消息与直播状态');
+    .accessibilityText($r('app.string.cp_syncing_pinned_live'));
   }
 
   @Builder
@@ -6611,7 +6617,7 @@ struct ChatPage {
       .animation({ duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 130), curve: Curve.EaseOut })
       .shadow({ radius: 7, color: '#26000000', offsetX: 0, offsetY: 2 })
       .enabled(!this.scrollToBottomBusy)
-      .accessibilityText(this.scrollToBottomBusy ? '正在返回最新消息' : '返回最新消息')
+      .accessibilityText(this.scrollToBottomBusy ? $r('app.string.cp_returning_latest') : $r('app.string.cp_return_latest'))
       .onClick(() => { this.scrollToLatest(); })
       .position({ x: 6, y: 10 });
       if (this.unreadBadge > 0) {
@@ -6638,7 +6644,7 @@ struct ChatPage {
           }))
         .enabled(!this.scrollToBottomBusy)
         .onClick((): void => { this.scrollToLatest(); })
-        .accessibilityText(`${this.unreadBadge} 条未读消息，返回最新消息`);
+        .accessibilityText(plural('cp_unread_a11y', this.unreadBadge, this.unreadBadge));
       }
     }
     .width(52).height(56)
@@ -6670,7 +6676,7 @@ struct ChatPage {
         if (!success) {
           this.pendingScrollBottom = false;
           this.atBottom = false;
-          promptAction.showToast({ message: '无法加载最新消息，请重试', duration: 1600 });
+          promptAction.showToast({ message: $r('app.string.cp_latest_failed'), duration: 1600 });
         } else if (this.groups.length === 0) {
           this.pendingScrollBottom = false;
           this.atBottom = true;
@@ -6700,18 +6706,18 @@ struct ChatPage {
 
   private emptyHistoryTitle(): string {
     if (this.threadRootId > 0) {
-      return '还没有回复';
+      return str('cp_no_replies');
     }
     if (this.membershipState === 'blocked') {
-      return '无法显示聊天内容';
+      return str('cp_cannot_show');
     }
     if (this.isChannel) {
-      return '频道暂无内容';
+      return str('cp_channel_empty');
     }
     if (this.isGroup) {
-      return '群组还没有消息';
+      return str('cp_group_empty');
     }
-    return '还没有消息';
+    return str('cp_no_messages');
   }
 
   private emptyHistoryIcon(): string {
@@ -6729,24 +6735,24 @@ struct ChatPage {
 
   private emptyHistoryHint(): string {
     if (this.threadRootId > 0) {
-      return this.membershipState === 'writable' ? '发送第一条回复' : '这里暂时没有可显示的回复';
+      return this.membershipState === 'writable' ? str('cp_send_first_reply') : str('cp_no_replies_sub');
     }
     if (this.membershipState === 'joinable') {
-      return '加入后即可参与聊天和发送消息';
+      return str('cp_join_to_chat');
     }
     if (this.membershipState === 'blocked') {
-      return '你可能已被移出，或此聊天已不可用';
+      return str('cp_maybe_removed');
     }
     if (this.membershipState === 'checking') {
-      return '正在确认成员状态';
+      return str('cp_confirming_membership');
     }
     if (this.isChannel) {
-      return '发布内容后会显示在这里';
+      return str('cp_posts_appear_here');
     }
     if (this.isGroup) {
-      return '发送第一条群组消息';
+      return str('cp_send_first_group');
     }
-    return '发一条消息，开始聊天吧';
+    return str('cp_send_to_start');
   }
 
   @Builder
@@ -6758,9 +6764,9 @@ struct ChatPage {
           LoadingProgress()
             .width(30).height(30).color(COLOR_PRIMARY);
         }.width(56).height(56);
-        Text('正在同步消息')
+        Text($r('app.string.cp_syncing_messages'))
           .fontSize(16).fontColor(COLOR_TEXT_PRIMARY).fontWeight(FontWeight.Medium);
-        Text('聊天记录马上就好')
+        Text($r('app.string.cp_history_soon'))
           .fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
       } else if (this.messageLoadState === 'error') {
         Stack({ alignContent: Alignment.Center }) {
@@ -6768,14 +6774,14 @@ struct ChatPage {
           SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
             .fontSize(30).fontColor(['#E64646']);
         }.width(56).height(56);
-        Text('消息加载失败')
+        Text($r('app.string.cp_messages_failed'))
           .fontSize(16).fontColor(COLOR_TEXT_PRIMARY).fontWeight(FontWeight.Medium);
-        Text(this.messageLoadError !== '' ? this.messageLoadError : '请检查网络后重试')
+        Text(this.messageLoadError !== '' ? this.messageLoadError : $r('app.string.cp_check_network'))
           .fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
           .textAlign(TextAlign.Center).maxLines(2);
         Row({ space: 6 }) {
           SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(14).fontColor([Color.White]);
-          Text('重试').fontSize(13).fontColor(Color.White).fontWeight(FontWeight.Medium);
+          Text($r('app.string.settings_retry')).fontSize(13).fontColor(Color.White).fontWeight(FontWeight.Medium);
         }
         .height(34).padding({ left: 14, right: 14 })
         .borderRadius(17)
@@ -6843,18 +6849,18 @@ struct ChatPage {
 
   private timelineStateText(mode: string): string {
     if (mode === 'syncError') {
-      return '消息同步失败';
+      return str('cp_sync_failed');
     }
     if (mode === 'syncLoading') {
-      return '正在同步最新消息';
+      return str('cp_syncing_latest');
     }
     if (mode === 'olderError') {
-      return '更早消息加载失败';
+      return str('cp_older_failed');
     }
     if (mode === 'newerError') {
-      return '较新消息加载失败';
+      return str('cp_newer_failed');
     }
-    return mode === 'olderLoading' ? '正在加载更早消息' : '正在加载较新消息';
+    return mode === 'olderLoading' ? str('cp_loading_older') : str('cp_loading_newer');
   }
 
   private timelineStateRetry(mode: string): void {
@@ -6885,7 +6891,7 @@ struct ChatPage {
           .fontSize(12.5).fontColor(COLOR_TEXT_PRIMARY).fontWeight(FontWeight.Medium);
         if (this.timelineStateMode().indexOf('Error') >= 0) {
           Divider().vertical(true).height(14).color($r('app.color.divider'));
-          Text('重试').fontSize(12.5).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium);
+          Text($r('app.string.settings_retry')).fontSize(12.5).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium);
         }
       }
       .height(32)
@@ -6904,7 +6910,7 @@ struct ChatPage {
       })
       .onClick((): void => { this.timelineStateRetry(this.timelineStateMode()); })
       .accessibilityText(this.timelineStateMode().indexOf('Error') >= 0
-        ? `${this.timelineStateText(this.timelineStateMode())}，点击重试`
+        ? str('cp_timeline_retry_a11y', this.timelineStateText(this.timelineStateMode()))
         : this.timelineStateText(this.timelineStateMode()));
     }
     .width('100%')
@@ -7150,10 +7156,10 @@ struct ChatPage {
                 onSetReaction: (id: number, emoji: string, chosen: boolean): void => { this.toggleReaction(id, emoji, chosen); },
                 onReplyTo: (id: number): void => { this.startReply(id); },
                 onCopyText: (id: number): void => { this.copyMessageText(id); },
-                onCopyCode: (text: string): void => { this.copyPlainText(text, '代码已复制'); },
+                onCopyCode: (text: string): void => { this.copyPlainText(text, str('cp_code_copied')); },
                 onCopyLink: (id: number): void => { this.copyMessageLink(id); },
                 onForwardMsg: (_id: number): void => { this.openForwardPicker(g.memberIds); },
-                onReportMsg: (id: number): void => { promptAction.showToast({ message: '举报功能开发中', duration: 1500 }); },
+                onReportMsg: (id: number): void => { promptAction.showToast({ message: $r('app.string.cp_report_wip'), duration: 1500 }); },
                 onSelectMsg: (id: number): void => { this.enterSelect(id); },
                 onOpenReactions: (id: number): void => { this.openReactionSheet(id); },
                 onRecognizeSpeech: (id: number): void => { this.recognizeSpeech(id); },
@@ -7430,7 +7436,7 @@ struct ChatPage {
             } else if (!this.emojiPanelClosing) {
               Column({ space: 8 }) {
                 LoadingProgress().width(26).height(26).color(COLOR_PRIMARY);
-                Text('正在打开面板').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+                Text($r('app.string.cp_opening_panel')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
               }
               .width('100%').height('100%')
               .justifyContent(FlexAlign.Center);

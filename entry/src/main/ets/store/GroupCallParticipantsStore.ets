@@ -1,6 +1,7 @@
 import { TdClient } from '../tdkit/TdClient';
 import { GroupCallParticipantInfo, GroupCallVideoSource } from '../tdkit/GroupCallTypes';
 import { TdObject, TdRequest } from '../tdkit/TdTypes';
+import { str } from '../util/strings';
 
 export type GroupCallParticipantsListener = (participants: GroupCallParticipantInfo[]) => void;
 
@@ -110,7 +111,7 @@ export class GroupCallParticipantsStore {
       const type = (sender['@type'] as string | undefined) ?? '';
       const id = senderId(sender);
       const name = this.names.get(key) ??
-        (type === 'messageSenderUser' ? `用户 ${id}` : `频道 ${id}`);
+        (type === 'messageSenderUser' ? str('cp_user_id', id) : str('gcp_channel_id', id));
       participant = {
         key,
         revision: ++this.revisionSequence,
@@ -208,7 +209,7 @@ export class GroupCallParticipantsStore {
     const type = (sender['@type'] as string | undefined) ?? '';
     const id = senderId(sender);
     const previous = this.participants.get(key);
-    const fallback = type === 'messageSenderUser' ? `用户 ${id}` : `频道 ${id}`;
+    const fallback = type === 'messageSenderUser' ? str('cp_user_id', id) : str('gcp_channel_id', id);
     const name = this.names.get(key) ?? (previous !== undefined ? previous.name : fallback);
     const isSpeaking = (raw['is_speaking'] as boolean | undefined) ?? false;
     const isMuted = ((raw['is_muted_for_all_users'] as boolean | undefined) ?? false) ||
@@ -261,7 +262,7 @@ export class GroupCallParticipantsStore {
     target.push({
       endpointId,
       participantKey,
-      name: screen ? `${name} · 屏幕` : name,
+      name: screen ? str('gcp_screen_of', name) : name,
       audioSourceId,
       sourceGroups: encodedSourceGroups(info),
       isPaused: (info['is_paused'] as boolean | undefined) ?? false,
@@ -298,7 +299,7 @@ export class GroupCallParticipantsStore {
       const sources = old.videoSources.map((source: GroupCallVideoSource): GroupCallVideoSource => ({
         endpointId: source.endpointId,
         participantKey: source.participantKey,
-        name: source.isScreenSharing ? `${name} · 屏幕` : name,
+        name: source.isScreenSharing ? str('gcp_screen_of', name) : name,
         audioSourceId: source.audioSourceId,
         sourceGroups: source.sourceGroups,
         isPaused: source.isPaused,

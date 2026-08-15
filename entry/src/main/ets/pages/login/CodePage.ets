@@ -5,6 +5,7 @@ import { AuthStage } from '../../tdkit/AuthService';
 import { TdError } from '../../tdkit/TdTypes';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
 import { LoginHero } from './LoginHero';
+import { plural, str } from '../../util/strings';
 
 @Preview
 @Component
@@ -89,58 +90,58 @@ export struct CodePage {
   }
 
   private phoneTarget(): string {
-    return this.phoneNumber !== '' ? this.phoneNumber : '你的手机号';
+    return this.phoneNumber !== '' ? this.phoneNumber : str('lg_your_phone');
   }
 
   private deliveryDescription(): string {
     switch (this.codeType) {
       case 'authenticationCodeTypeTelegramMessage':
-        return '验证码已发送到你另一台设备上的 Telegram';
+        return str('lg_code_other_device');
       case 'authenticationCodeTypeSms':
       case 'authenticationCodeTypeSmsWord':
       case 'authenticationCodeTypeSmsPhrase':
       case 'authenticationCodeTypeFirebaseAndroid':
-        return `验证码已通过短信发送至 ${this.phoneTarget()}`;
+        return str('lg_code_sms', this.phoneTarget());
       case 'authenticationCodeTypeCall':
-        return `Telegram 将致电 ${this.phoneTarget()} 并告知验证码`;
+        return str('lg_code_call', this.phoneTarget());
       case 'authenticationCodeTypeFlashCall':
-        return `请留意发送到 ${this.phoneTarget()} 的验证来电`;
+        return str('lg_code_flash_call', this.phoneTarget());
       case 'authenticationCodeTypeMissedCall':
-        return `请留意发送到 ${this.phoneTarget()} 的未接来电`;
+        return str('lg_code_missed_call', this.phoneTarget());
       case 'authenticationCodeTypeEmailAddress':
         return this.codeDestination !== ''
-          ? `验证码已发送至邮箱 ${this.codeDestination}`
-          : '验证码已发送至你的登录邮箱';
+          ? str('lg_code_email_to', this.codeDestination)
+          : str('lg_code_email');
       case 'authenticationCodeTypeFragment':
-        return '验证码已发送到 Fragment';
+        return str('lg_code_fragment');
       default:
         return this.phoneNumber !== ''
-          ? `验证码已发送至 ${this.phoneNumber}`
-          : '验证码已通过 Telegram 或短信发送给你';
+          ? str('lg_code_sent_to', this.phoneNumber)
+          : str('lg_code_telegram_or_sms');
     }
   }
 
   private resendButtonText(): string {
     // 倒计时优先：它反映的是服务端给的等待时间，跟"有没有下一种通道"是两回事。
     if (this.resendCountdown > 0) {
-      return `${this.resendCountdown} 秒后可重新发送`;
+      return plural('lg_resend_in', this.resendCountdown, this.resendCountdown);
     }
     if (!this.resendAvailable) {
-      return '该验证方式不支持重发';
+      return str('lg_no_resend');
     }
     switch (this.nextCodeType) {
       case 'authenticationCodeTypeTelegramMessage':
-        return '改用 Telegram 接收验证码';
+        return str('lg_use_telegram');
       case 'authenticationCodeTypeSms':
       case 'authenticationCodeTypeSmsWord':
       case 'authenticationCodeTypeSmsPhrase':
-        return '改用短信接收验证码';
+        return str('lg_use_sms');
       case 'authenticationCodeTypeCall':
       case 'authenticationCodeTypeFlashCall':
       case 'authenticationCodeTypeMissedCall':
-        return '改用电话接收验证码';
+        return str('lg_use_call');
       default:
-        return '没有收到验证码？重新发送';
+        return str('lg_resend');
     }
   }
 
@@ -178,7 +179,7 @@ export struct CodePage {
     this.errorText = '';
     this.resendText = '';
     getAuthService().resendCode().then((): void => {
-      this.resendText = '新的验证码已发送';
+      this.resendText = str('lg_code_resent');
       this.code = '';
       this.lastSubmittedCode = '';
       setTimeout((): void => {
@@ -196,7 +197,7 @@ export struct CodePage {
       Column({ space: 14 }) {
         LoginHero({ mode: 'code' });
 
-        Text('输入验证码')
+        Text($r('app.string.lg_enter_code'))
           .fontSize(27).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
         Text(this.deliveryDescription())
           .fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
@@ -249,7 +250,7 @@ export struct CodePage {
         if (this.busy) {
           Row({ space: 8 }) {
             LoadingProgress().width(18).height(18).color(COLOR_PRIMARY);
-            Text('正在验证…').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+            Text($r('app.string.lg_verifying')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
           }
         }
         if (this.errorText !== '') {
@@ -263,7 +264,7 @@ export struct CodePage {
             .textAlign(TextAlign.Center);
         }
 
-        Button('验证并登录')
+        Button($r('app.string.lg_verify_and_sign_in'))
           .width('100%').height(50)
           .fontSize(16).fontWeight(FontWeight.Medium)
           .backgroundColor(COLOR_PRIMARY).borderRadius(14)
@@ -278,13 +279,13 @@ export struct CodePage {
           .enabled(this.resendEnabled())
           .onClick((): void => this.resendCode());
         if (!this.resendAvailable) {
-          Text('这台设备收不到的话，请在能收到验证码的设备上完成登录')
+          Text($r('app.string.lg_use_other_device'))
             .width('100%').fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
             .textAlign(TextAlign.Center);
         }
 
         if (canReturnToPreviousTdAccount()) {
-          Button('返回原账号')
+          Button($r('app.string.lg_back_to_account'))
             .width('100%').height(45)
             .fontColor(COLOR_TEXT_SECONDARY)
             .backgroundColor(Color.Transparent)

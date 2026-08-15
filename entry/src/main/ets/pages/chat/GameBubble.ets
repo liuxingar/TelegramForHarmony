@@ -1,4 +1,5 @@
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import { str } from '../../util/strings';
 
 @Component
 export struct GameBubble {
@@ -40,7 +41,7 @@ export struct GameBubble {
     if (this.shortName.trim() !== '') {
       return this.shortName.trim();
     }
-    return '游戏内容不可用';
+    return str('game_unavailable');
   }
 
   private detailText(): string {
@@ -50,7 +51,7 @@ export struct GameBubble {
     if (this.gameText.trim() !== '') {
       return this.gameText.trim();
     }
-    return this.gameAvailable() ? 'Telegram 互动游戏' : '无法读取游戏信息';
+    return this.gameAvailable() ? str('game_interactive') : str('game_unreadable');
   }
 
   private openGame(): void {
@@ -84,7 +85,7 @@ export struct GameBubble {
         Column({ space: 7 }) {
           Text('🎮').fontSize(34);
           if (this.photoFileId === 0) {
-            Text(this.gameAvailable() ? '暂无游戏封面' : '游戏内容不可用')
+            Text(this.gameAvailable() ? $r('app.string.game_no_cover') : $r('app.string.game_unavailable'))
               .fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
           }
         }
@@ -98,7 +99,7 @@ export struct GameBubble {
           Column({ space: 4 }) {
             SymbolGlyph($r('sys.symbol.arrow_clockwise'))
               .fontSize(20).fontColor([Color.White]);
-            Text('重试封面').fontSize(10.5).fontColor(Color.White);
+            Text($r('app.string.game_retry_cover')).fontSize(10.5).fontColor(Color.White);
           }
           .padding({ left: 12, right: 12, top: 8, bottom: 8 })
           .backgroundColor('#80000000')
@@ -148,7 +149,7 @@ export struct GameBubble {
           LoadingProgress().width(16).height(16).color(Color.White);
         } else {
           SymbolGlyph($r('sys.symbol.play_fill')).fontSize(14).fontColor([Color.White]);
-          Text(this.gameAvailable() ? '开始游戏' : '游戏不可用')
+          Text(this.gameAvailable() ? $r('app.string.game_play') : $r('app.string.game_not_available'))
             .fontSize(13).fontWeight(FontWeight.Medium).fontColor(Color.White);
         }
       }
@@ -157,7 +158,7 @@ export struct GameBubble {
       .backgroundColor(this.gameAvailable() ? COLOR_PRIMARY : '#A7AFB8')
       .borderRadius(9);
       Row() {
-        Text(this.shortName.trim() !== '' ? `@${this.shortName.trim()}` : 'Telegram 游戏')
+        Text(this.shortName.trim() !== '' ? `@${this.shortName.trim()}` : $r('app.string.game_title'))
           .fontSize(10.5).fontColor(COLOR_TEXT_SECONDARY)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
       }.width('100%').padding({ right: 64, bottom: 9 });

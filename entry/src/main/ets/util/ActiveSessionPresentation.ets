@@ -1,3 +1,4 @@
+import { plural, str } from './strings';
 import { TdObject } from '../tdkit/TdTypes';
 
 export const FRESH_SESSION_PROTECTION_SECONDS: number = 24 * 60 * 60;
@@ -28,23 +29,29 @@ export function freshSessionSeconds(
   return Math.max(0, loginDate + FRESH_SESSION_PROTECTION_SECONDS - nowSeconds);
 }
 
+// "in 2 hours 5 minutes" cannot be one plural resource: a plural picks its form
+// from a single number, and this has two. Each unit is pluralized on its own and
+// the wrapper places them — which also lets a language reorder or re-join them.
 export function sessionWaitText(seconds: number): string {
-  if (seconds <= 0) { return '稍后'; }
+  if (seconds <= 0) { return str('session_wait_later'); }
   const totalMinutes = Math.max(1, Math.ceil(seconds / 60));
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
-  if (hours <= 0) { return `${minutes} 分钟后`; }
-  if (minutes === 0) { return `${hours} 小时后`; }
-  return `${hours} 小时 ${minutes} 分钟后`;
+  const minuteText = plural('session_unit_minutes', minutes, minutes);
+  if (hours <= 0) { return str('session_wait_in', minuteText); }
+  const hourText = plural('session_unit_hours', hours, hours);
+  if (minutes === 0) { return str('session_wait_in', hourText); }
+  return str('session_wait_in_two', hourText, minuteText);
 }
 
 export function inactiveSessionTtlLabel(days: number): string {
-  if (days === 7) { return '1 周'; }
-  if (days === 30) { return '1 个月'; }
-  if (days === 90) { return '3 个月'; }
-  if (days === 180) { return '6 个月'; }
-  if (days === 365 || days === 366) { return '1 年'; }
-  return `${Math.max(1, Math.min(366, Math.round(days)))} 天`;
+  if (days === 7) { return str('session_ttl_1_week'); }
+  if (days === 30) { return str('session_ttl_1_month'); }
+  if (days === 90) { return str('session_ttl_3_months'); }
+  if (days === 180) { return str('session_ttl_6_months'); }
+  if (days === 365 || days === 366) { return str('session_ttl_1_year'); }
+  const n = Math.max(1, Math.min(366, Math.round(days)));
+  return plural('session_unit_days', n, n);
 }
 
 function floodWaitSeconds(message: string): number {
@@ -63,14 +70,14 @@ function floodWaitSeconds(message: string): number {
 }
 
 function rateLimitText(seconds: number): string {
-  if (seconds <= 0) { return '操作过于频繁，请稍后再试'; }
-  if (seconds < 60) { return `操作过于频繁，请在 ${seconds} 秒后重试`; }
+  if (seconds <= 0) { return str('session_error_flood'); }
+  if (seconds < 60) { return str('session_error_flood_seconds', seconds); }
   const minutes = Math.max(1, Math.ceil(seconds / 60));
-  return `操作过于频繁，请在 ${minutes} 分钟后重试`;
+  return str('session_error_flood_minutes', minutes);
 }
 
 export function activeSessionError(
-  rawMessage: string, fallback: string = '操作失败，请重试'
+  rawMessage: string, fallback: string = str('session_error_generic')
 ): SessionErrorPresentation {
   const upper = rawMessage.toUpperCase();
   if (upper.indexOf('FRESH_RESET_AUTHORISATION_FORBIDDEN') >= 0 ||
@@ -78,12 +85,12 @@ export function activeSessionError(
     upper.indexOf('SESSION_TOO_FRESH') >= 0) {
     return {
       kind: 'fresh',
-      text: '出于安全保护，新登录设备暂时不能终止其他会话，请使用较早登录的设备或稍后重试',
+      text: str('session_error_fresh_login'),
       shouldRefresh: false
     };
   }
   if (upper.indexOf('SESSION_NOT_FOUND') >= 0 || upper.indexOf('HASH_INVALID') >= 0) {
-    return { kind: 'missing', text: '该设备会话已失效，正在刷新列表', shouldRefresh: true };
+    return { kind: 'missing', text: str('session_error_stale'), shouldRefresh: true };
   }
   if (upper.indexOf('FLOOD_WAIT') >= 0 || upper.indexOf('TOO_MANY_REQUESTS') >= 0) {
     return {
@@ -92,14 +99,14 @@ export function activeSessionError(
   }
   if (upper.indexOf('AUTH_TOKEN_INVALID') >= 0 || upper.indexOf('AUTH_TOKEN_EXPIRED') >= 0 ||
     upper.indexOf('AUTH_TOKEN_ALREADY_ACCEPTED') >= 0 || upper.indexOf('QR') >= 0) {
-    return { kind: 'qr', text: '此二维码无效或已过期，请刷新二维码后重试', shouldRefresh: false };
+    return { kind: 'qr', text: str('session_error_qr_invalid'), shouldRefresh: false };
   }
   if (upper.indexOf('PASSWORD_HASH_INVALID') >= 0 || upper.indexOf('PASSWORD') >= 0) {
-    return { kind: 'password', text: '此设备仍需完成两步验证', shouldRefresh: true };
+    return { kind: 'password', text: str('session_error_needs_2fa'), shouldRefresh: true };
   }
   if (upper.indexOf('TIMEOUT') >= 0 || upper.indexOf('NETWORK') >= 0 ||
     upper.indexOf('CONNECTION') >= 0 || upper.indexOf('OFFLINE') >= 0) {
-    return { kind: 'network', text: '网络连接不稳定，请检查网络后重试', shouldRefresh: false };
+    return { kind: 'network', text: str('session_error_network'), shouldRefresh: false };
   }
   return { kind: 'generic', text: fallback, shouldRefresh: false };
 }

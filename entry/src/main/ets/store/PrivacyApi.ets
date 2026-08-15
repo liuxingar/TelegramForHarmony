@@ -1,6 +1,7 @@
 import { getTdClient } from '../tdkit/Globals';
 import { TdClient } from '../tdkit/TdClient';
 import { TdObject, TdRequest } from '../tdkit/TdTypes';
+import { str } from '../util/strings';
 
 export const RULE_EVERYBODY: string = 'everybody';
 export const RULE_CONTACTS: string = 'contacts';
@@ -103,7 +104,7 @@ export function composePrivacyRules(base: string, preserved: TdObject[]): TdObje
 
 export function ruleLabel(value: PrivacyValue): string {
   const base = value.base === RULE_EVERYBODY
-    ? '所有人' : (value.base === RULE_CONTACTS ? '我的联系人' : '没有人');
+    ? str('privacy_everybody') : (value.base === RULE_CONTACTS ? str('privacy_contacts') : str('privacy_nobody'));
   const parts: string[] = [];
   if (value.allowExceptions > 0) { parts.push(`+${value.allowExceptions}`); }
   if (value.restrictExceptions > 0) { parts.push(`−${value.restrictExceptions}`); }

@@ -12,6 +12,7 @@ import {
   ParsedSubscription, SUBSCRIPTION_JSON_HINT, WebPushConfig, WebPushValidation,
   deregisterWebPush, parseSubscriptionJson, registerWebPush, validateWebPushConfig
 } from '../../services/WebPushRegistration';
+import { str } from '../../util/strings';
 
 const CARD_RADIUS: number = 14;
 
@@ -46,7 +47,7 @@ struct WebPushPage {
     this.auth = this.storedAuth;
     if (this.pushEnabled && this.storedEndpoint !== '') {
       this.statusOk = true;
-      this.statusText = '已启用。注册状态见下方「保存并注册」结果。';
+      this.statusText = str('wp_enabled');
     }
   }
 
@@ -76,7 +77,7 @@ struct WebPushPage {
   private disable(): void {
     setBoolean(KEY_WEBPUSH_ENABLED, false);
     this.statusOk = false;
-    this.statusText = '已停用，并已向 Telegram 注销该 endpoint。';
+    this.statusText = str('wp_disabled');
     deregisterWebPush(getTdClient());
   }
 
@@ -93,7 +94,7 @@ struct WebPushPage {
       return;
     }
     this.busy = true;
-    this.statusText = '正在注册…';
+    this.statusText = str('wp_registering');
     registerWebPush(getTdClient(), config).then((receiverId: string): void => {
       setString(KEY_WEBPUSH_ENDPOINT, config.endpoint.trim());
       setString(KEY_WEBPUSH_P256DH, config.p256dh.trim());
@@ -101,14 +102,14 @@ struct WebPushPage {
       setBoolean(KEY_WEBPUSH_ENABLED, true);
       this.statusOk = true;
       this.statusText = receiverId !== ''
-        ? `已注册 · receiver id ${receiverId}`
-        : '已注册（服务端未返回 receiver id）';
+        ? str('wp_registered_with_id', receiverId)
+        : str('wp_registered_no_id');
       this.busy = false;
     }).catch((e: TdError): void => {
       // 注册失败不打开开关 —— 否则用户会以为通知已经生效。
       setBoolean(KEY_WEBPUSH_ENABLED, false);
       this.statusOk = false;
-      this.statusText = `注册失败：${e.message}`;
+      this.statusText = str('wp_register_failed', e.message);
       this.busy = false;
     });
   }
@@ -121,18 +122,18 @@ struct WebPushPage {
   // 时 busy 变化）都会把 TextArea 的 text 重置回捕获时的旧值，表现就是
   // "输入完保存后地址弹回上一个"。
   @Builder
-  fieldLabel(label: string) {
+  fieldLabel(label: ResourceStr) {
     Text(label).fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
       .width('100%').padding({ left: 16, right: 16, top: 10, bottom: 5 });
   }
 
   @Builder
   endpointField() {
-    this.fieldLabel('Endpoint（必须 https + 域名）');
+    this.fieldLabel($r('app.string.wp_endpoint_label'));
     // 宽度交给外层 padding：width('100%') 再叠 margin 会超出父容器，
     // 表现为输入框两侧顶到卡片边缘。
     Row() {
-      TextArea({ text: $$this.endpoint, placeholder: 'https://push.example.com/webpush/<随机订阅ID>' })
+      TextArea({ text: $$this.endpoint, placeholder: $r('app.string.wp_endpoint_hint') })
         .fontSize(13).layoutWeight(1).maxLines(3).enabled(!this.busy)
         .backgroundColor(COLOR_PAGE_BG).borderRadius(10).padding(10);
     }.width('100%').padding({ left: 16, right: 16 });
@@ -140,11 +141,11 @@ struct WebPushPage {
 
   @Builder
   p256dhField() {
-    this.fieldLabel('p256dh（公钥，base64url）');
+    this.fieldLabel($r('app.string.wp_p256dh_label'));
     // 宽度交给外层 padding：width('100%') 再叠 margin 会超出父容器，
     // 表现为输入框两侧顶到卡片边缘。
     Row() {
-      TextArea({ text: $$this.p256dh, placeholder: '服务器生成的 P-256 公钥' })
+      TextArea({ text: $$this.p256dh, placeholder: $r('app.string.wp_p256dh_hint') })
         .fontSize(13).layoutWeight(1).maxLines(3).enabled(!this.busy)
         .backgroundColor(COLOR_PAGE_BG).borderRadius(10).padding(10);
     }.width('100%').padding({ left: 16, right: 16 });
@@ -156,7 +157,7 @@ struct WebPushPage {
     // 宽度交给外层 padding：width('100%') 再叠 margin 会超出父容器，
     // 表现为输入框两侧顶到卡片边缘。
     Row() {
-      TextArea({ text: $$this.auth, placeholder: '服务器生成的 auth secret' })
+      TextArea({ text: $$this.auth, placeholder: $r('app.string.wp_auth_hint') })
         .fontSize(13).layoutWeight(1).maxLines(3).enabled(!this.busy)
         .backgroundColor(COLOR_PAGE_BG).borderRadius(10).padding(10);
     }.width('100%').padding({ left: 16, right: 16 });
@@ -176,7 +177,7 @@ struct WebPushPage {
     }
     this.jsonExpanded = false;
     this.statusOk = true;
-    this.statusText = '已填入，检查无误后点「保存并注册」。';
+    this.statusText = str('wp_filled');
   }
 
   private deregister(): void {
@@ -189,7 +190,7 @@ struct WebPushPage {
       this.statusOk = false;
       // 只注销订阅，保留已填的三项 —— 用户多半是想换个地址再注册，
       // 清空会逼他重新粘一遍。
-      this.statusText = '已取消注册。Telegram 不会再向该地址投递，配置已保留。';
+      this.statusText = str('wp_deregistered');
       this.busy = false;
     });
   }
@@ -197,25 +198,25 @@ struct WebPushPage {
   @Builder
   consentSheet() {
     Column({ space: 12 }) {
-      Text('启用前请先了解')
+      Text($r('app.string.wp_before_you_enable'))
         .fontSize(18).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
-      Text('这个功能把通知投递交给你自己搭建的服务器。启用即表示你接受下列取舍：')
+      Text($r('app.string.wp_intro'))
         .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).lineHeight(19);
-      Text('1. 你的服务器能看到消息预览明文。解密必须在服务器上完成，这是这条链路的前提，无法规避。')
+      Text($r('app.string.wp_warn_1'))
         .fontSize(13).fontColor(COLOR_TEXT_PRIMARY).lineHeight(19);
-      Text('2. 预览可能不完整甚至没有。关闭了预览的会话、部分消息类型只会推送「你有一条新消息」。')
+      Text($r('app.string.wp_warn_2'))
         .fontSize(13).fontColor(COLOR_TEXT_PRIMARY).lineHeight(19);
-      Text('3. 送达完全依赖你的服务器。它停机、证书过期或地址变更时不会有任何通知，应用也无法感知。')
+      Text($r('app.string.wp_warn_3'))
         .fontSize(13).fontColor(COLOR_TEXT_PRIMARY).lineHeight(19);
-      Text('4. 只填你自己掌控的地址。填入他人提供的 endpoint 等于把消息预览交给对方。')
+      Text($r('app.string.wp_warn_4'))
         .fontSize(13).fontColor(COLOR_TEXT_PRIMARY).lineHeight(19);
-      Text('5. 这是附加通道，不替代现有通知。应用原有的后台同步和本地通知照常工作。')
+      Text($r('app.string.wp_warn_5'))
         .fontSize(13).fontColor(COLOR_TEXT_PRIMARY).lineHeight(19);
       Row({ space: 10 }) {
-        Button('取消').fontSize(15).layoutWeight(1)
+        Button($r('app.string.cancel')).fontSize(15).layoutWeight(1)
           .backgroundColor(COLOR_PAGE_BG).fontColor(COLOR_TEXT_PRIMARY)
           .onClick((): void => { this.consentShown = false; });
-        Button('我已了解并接受').fontSize(15).layoutWeight(1)
+        Button($r('app.string.wp_accept')).fontSize(15).layoutWeight(1)
           .backgroundColor(COLOR_PRIMARY).fontColor(Color.White)
           .onClick((): void => this.acceptConsent());
       }.width('100%').margin({ top: 4 });
@@ -228,7 +229,7 @@ struct WebPushPage {
       Row({ space: 6 }) {
         SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(22).fontColor([COLOR_TEXT_PRIMARY])
           .onClick((): void => { router.back(); });
-        Text('自定义推送通道').fontSize(18).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
+        Text($r('app.string.ns_custom_push')).fontSize(18).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
       }
       .width('100%').height(52).padding({ left: 12, right: 12 })
       .alignItems(VerticalAlign.Center);
@@ -237,13 +238,13 @@ struct WebPushPage {
         Column({ space: 12 }) {
           Column() {
             Row() {
-              Text('启用 Web Push 中转').fontSize(15).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
+              Text($r('app.string.wp_enable')).fontSize(15).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
               Toggle({ type: ToggleType.Switch, isOn: this.pushEnabled })
                 .selectedColor(COLOR_PRIMARY)
                 .enabled(!this.busy)
                 .onChange((next: boolean): void => this.onToggle(next));
             }.width('100%').height(48).padding({ left: 14, right: 12 });
-            Text('由你自建的服务器接收 Telegram 的 Web Push、解密后转发到你选择的通道。')
+            Text($r('app.string.wp_enable_sub'))
               .fontSize(11).fontColor(COLOR_TEXT_SECONDARY).lineHeight(16)
               .width('100%').padding({ left: 14, right: 14, bottom: 10 });
           }
@@ -251,12 +252,12 @@ struct WebPushPage {
 
           Column() {
             Row() {
-              Text('订阅信息').fontSize(12).fontColor(COLOR_TEXT_SECONDARY).layoutWeight(1);
-              Text(this.jsonExpanded ? '收起' : '粘贴 JSON')
+              Text($r('app.string.wp_subscription')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY).layoutWeight(1);
+              Text(this.jsonExpanded ? $r('app.string.collapse') : $r('app.string.wp_paste_json'))
                 .fontSize(13).fontColor(COLOR_PRIMARY)
                 .onClick((): void => { this.jsonExpanded = !this.jsonExpanded; });
             }.width('100%').padding({ left: 16, right: 16, top: 14 });
-            Text('在你的服务器上生成一对 P-256 密钥和 auth secret，私钥留在服务器，把下面三项填进来。应用不持有私钥，也不参与解密。\n实测 Telegram 只向 https + 域名的地址投递，http 或 IP 形式收不到。')
+            Text(('app.string.wp_keygen_note'))
               .fontSize(11).fontColor(COLOR_TEXT_SECONDARY).lineHeight(16)
               .width('100%').padding({ left: 16, right: 16, top: 6 });
 
@@ -269,7 +270,7 @@ struct WebPushPage {
                     .enabled(!this.busy)
                     .backgroundColor(COLOR_PAGE_BG).borderRadius(10).padding(10);
                 }.width('100%');
-                Button('填入下面三项')
+                Button($r('app.string.wp_fill_three'))
                   .fontSize(14).width('100%').height(40)
                   .backgroundColor(COLOR_PAGE_BG).fontColor(COLOR_PRIMARY)
                   .enabled(!this.busy)
@@ -283,14 +284,14 @@ struct WebPushPage {
             this.authField();
 
             Column({ space: 8 }) {
-              Button(this.busy ? '处理中…' : '保存并注册')
+              Button(this.busy ? $r('app.string.processing') : $r('app.string.wp_save_register'))
                 .fontSize(15).width('100%').height(44)
                 .backgroundColor(COLOR_PRIMARY).fontColor(Color.White)
                 .enabled(!this.busy)
                 .onClick((): void => this.saveAndRegister());
               // 注销入口独立出来：关开关也会注销，但换地址时用户想的是
               // "先退掉旧的"，没有这个按钮就只能去拨开关，很不直观。
-              Button('取消注册')
+              Button($r('app.string.wp_deregister'))
                 .fontSize(15).width('100%').height(44)
                 .backgroundColor(COLOR_PAGE_BG).fontColor('#FF3B30')
                 .enabled(!this.busy)
@@ -308,12 +309,11 @@ struct WebPushPage {
           .backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
 
           Column({ space: 6 }) {
-            Text('服务器需要做什么').fontSize(12).fontColor(COLOR_TEXT_SECONDARY).width('100%');
-            Text('1. 在 Endpoint 上接收 Telegram 的 POST 请求。\n' +
-              '2. 用私钥按 RFC 8291 解密，得到含 loc_key / loc_args / custom 的 JSON。\n' +
-              '3. 按 loc_key 组装标题和正文，转发到你的推送通道。\n' +
-              '4. 推送里带上 tg://openmessage?channel_id=<custom.channel_id>&msg_id=<custom.msg_id>，' +
-              '点击通知即可直接打开对应会话（私聊用 from_id，基础群用 chat_id）。')
+            Text($r('app.string.wp_server_todo')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY).width('100%');
+            // One key for the whole list rather than five joined fragments: the
+            // numbering and line breaks belong to the copy, and a translator
+            // needs to see the sentences whole.
+            Text($r('app.string.wp_server_steps'))
               .fontSize(11).fontColor(COLOR_TEXT_SECONDARY).lineHeight(17).width('100%');
           }
           .width('100%').padding(14)

@@ -1,6 +1,7 @@
 import { TdClient } from '../tdkit/TdClient';
 import { TdObject, TdRequest, TdError } from '../tdkit/TdTypes';
 import { formatPreview } from '../util/formatPreview';
+import { str } from '../util/strings';
 
 // TDLib 的下载管理器（searchFileDownloads 系列）与磁盘扫描是两套数据源：
 // 只有下载管理器登记过的文件才能被暂停/继续/移除，所以这里的模型以
@@ -189,15 +190,15 @@ export function downloadErrorMessage(action: string, error: Object): string {
   const tdError = error as TdError | undefined;
   const raw = tdError !== undefined && tdError.message !== undefined ? tdError.message : '';
   if (raw.includes('FILE_DOWNLOAD_ID_INVALID') || raw.includes('File is not being downloaded')) {
-    return `${action}失败：该文件已不在下载列表中`;
+    return str('dl_not_in_list', action);
   }
   if (raw.includes('FILE_ID_INVALID') || raw.includes('Invalid file identifier')) {
-    return `${action}失败：文件标识无效`;
+    return str('dl_bad_id', action);
   }
   if (raw === '') {
-    return `${action}失败，请稍后重试`;
+    return str('dl_failed_retry', action);
   }
-  return `${action}失败：${raw}`;
+  return str('dl_failed_msg', action, raw);
 }
 
 // —— 网络调用（薄封装，错误原样抛出交由调用方转成 toast）——

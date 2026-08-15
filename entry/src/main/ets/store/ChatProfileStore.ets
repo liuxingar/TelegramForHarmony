@@ -5,6 +5,7 @@ import { formatMemberCount } from '../util/formatMemberCount';
 import { formatPreview } from '../util/formatPreview';
 import { formatFileSize } from '../util/formatFileSize';
 import { formatTime } from '../util/formatTime';
+import { plural, str } from '../util/strings';
 
 type Listener = () => void;
 
@@ -480,7 +481,7 @@ export class ChatProfileStore {
       this.contentPaging = false;
       if (replace || this.contentItems.length === 0) {
         this.contentState = 'error';
-        this.contentErrorText = '无法加载此分类，请检查网络后重试';
+        this.contentErrorText = str('cps_category_failed');
         this.contentHasMore = false;
       } else {
         this.contentState = 'ready';
@@ -499,7 +500,7 @@ export class ChatProfileStore {
     const type = (content['@type'] as string | undefined) ?? '';
     const date = (message['date'] as number | undefined) ?? 0;
     const preview = formatPreview(message);
-    let title = preview !== '' ? preview : '消息';
+    let title = preview !== '' ? preview : str('cps_messages');
     let detail = '';
     let size = 0;
     let duration = 0;
@@ -507,7 +508,7 @@ export class ChatProfileStore {
     let isVideo = false;
 
     if (type === 'messagePhoto') {
-      title = '图片';
+      title = str('storage_photo');
       detail = formattedText(content['caption'] as TdObject | undefined);
       const photo = content['photo'] as TdObject | undefined;
       const sizes = (photo?.['sizes'] as TdObject[] | undefined) ?? [];
@@ -523,7 +524,7 @@ export class ChatProfileStore {
       const file = picked?.['photo'] as TdObject | undefined;
       thumbnailId = (file?.['id'] as number | undefined) ?? 0;
     } else if (type === 'messageVideo') {
-      title = '视频';
+      title = str('storage_video');
       detail = formattedText(content['caption'] as TdObject | undefined);
       const video = content['video'] as TdObject | undefined;
       const thumb = video?.['thumbnail'] as TdObject | undefined;
@@ -536,7 +537,7 @@ export class ChatProfileStore {
     } else if (type === 'messageDocument') {
       const document = content['document'] as TdObject | undefined;
       const file = document?.['document'] as TdObject | undefined;
-      title = (document?.['file_name'] as string | undefined) ?? '文件';
+      title = (document?.['file_name'] as string | undefined) ?? str('storage_file');
       detail = formattedText(content['caption'] as TdObject | undefined);
       size = fileSize(file);
     } else if (type === 'messageAudio') {
@@ -544,7 +545,7 @@ export class ChatProfileStore {
       const file = audio?.['audio'] as TdObject | undefined;
       const audioTitle = (audio?.['title'] as string | undefined) ?? '';
       const fileName = (audio?.['file_name'] as string | undefined) ?? '';
-      title = audioTitle !== '' ? audioTitle : (fileName !== '' ? fileName : '音乐');
+      title = audioTitle !== '' ? audioTitle : (fileName !== '' ? fileName : str('storage_audio'));
       detail = (audio?.['performer'] as string | undefined) ?? '';
       duration = (audio?.['duration'] as number | undefined) ?? 0;
       size = fileSize(file);
@@ -553,13 +554,13 @@ export class ChatProfileStore {
       thumbnailId = (coverFile?.['id'] as number | undefined) ?? 0;
     } else if (type === 'messageVoiceNote') {
       const voice = content['voice_note'] as TdObject | undefined;
-      title = '语音消息';
+      title = str('ns_voice_message');
       detail = formattedText(content['caption'] as TdObject | undefined);
       duration = (voice?.['duration'] as number | undefined) ?? 0;
       size = fileSize(voice?.['voice'] as TdObject | undefined);
     } else if (type === 'messageVideoNote') {
       const note = content['video_note'] as TdObject | undefined;
-      title = '圆形视频';
+      title = str('cp_video_message');
       duration = (note?.['duration'] as number | undefined) ?? 0;
       size = fileSize(note?.['video'] as TdObject | undefined);
       const thumb = note?.['thumbnail'] as TdObject | undefined;
@@ -568,9 +569,9 @@ export class ChatProfileStore {
       isVideo = true;
     } else if (type === 'messageAnimation') {
       const animation = content['animation'] as TdObject | undefined;
-      title = (animation?.['file_name'] as string | undefined) ?? 'GIF 动画';
+      title = (animation?.['file_name'] as string | undefined) ?? str('cps_gifs');
       if (title === '') {
-        title = 'GIF 动画';
+        title = str('cps_gifs');
       }
       detail = formattedText(content['caption'] as TdObject | undefined);
       duration = (animation?.['duration'] as number | undefined) ?? 0;
@@ -584,15 +585,15 @@ export class ChatProfileStore {
       const question = poll?.['question'] as TdObject | undefined;
       title = formattedText(question);
       if (title === '') {
-        title = '投票';
+        title = str('poll_word');
       }
       const voters = (poll?.['total_voter_count'] as number | undefined) ?? 0;
-      detail = voters > 0 ? `${voters} 人参与` : '';
+      detail = voters > 0 ? plural('poll_voters', voters, voters) : '';
     } else if (this.contentTab === PROFILE_TAB_LINKS) {
-      title = '链接消息';
+      title = str('cps_links');
       detail = preview;
     } else if (isGiftMessage(type)) {
-      title = preview !== '' ? preview : 'Telegram 礼物';
+      title = preview !== '' ? preview : str('gift_regular_title');
       const directSticker = content['sticker'] as TdObject | undefined;
       const gift = content['gift'] as TdObject | undefined;
       const model = gift?.['model'] as TdObject | undefined;
@@ -672,7 +673,7 @@ export class ChatProfileStore {
     }).catch((e: TdError): void => {
       console.error(`ChatProfileStore.getChat failed: ${e.message}`);
       this.loadState = 'error';
-      this.errorText = '无法加载此频道或群组的详情';
+      this.errorText = str('cps_details_failed');
       this.notify();
     });
   }
@@ -738,7 +739,7 @@ export class ChatProfileStore {
       ? editable : (active !== undefined && active.length > 0 ? active[0] : '');
     const count = (supergroup['member_count'] as number | undefined) ?? 0;
     if (count > 0) {
-      this.subtitle = `${formatMemberCount(count)} 位${this.isChannel ? '订阅者' : '成员'}`;
+      this.subtitle = str('subtitle_member_count', formatMemberCount(count), this.isChannel ? str('subscribers_word') : str('members_word'));
     }
   }
 
@@ -757,7 +758,7 @@ export class ChatProfileStore {
         this.parsePhotoAnimation(fi['photo'] as TdObject | undefined);
         const memberCount = (fi['member_count'] as number | undefined) ?? 0;
         if (memberCount > 0) {
-          this.subtitle = `${formatMemberCount(memberCount)} 位${this.isChannel ? '订阅者' : '成员'}`;
+          this.subtitle = str('subtitle_member_count', formatMemberCount(memberCount), this.isChannel ? str('subscribers_word') : str('members_word'));
         }
         this.notify();
         const canGetMembers = (fi['can_get_members'] as boolean | undefined) ?? false;
@@ -845,7 +846,7 @@ export class ChatProfileStore {
       this.membersAvailable = members.length > 0;
       this.rebuildAvailableTabs();
       if (members.length > 0) {
-        this.subtitle = `${formatMemberCount(members.length)} 位成员`;
+        this.subtitle = str('subtitle_members_only', formatMemberCount(members.length));
       }
       this.membersState = 'ready';
       this.notify();

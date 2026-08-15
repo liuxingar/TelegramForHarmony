@@ -185,6 +185,55 @@ hvigorw assembleHap --no-daemon
 ./scripts/run-local-tests.sh    # 必须输出 "LOCAL TESTS: PASS"
 ```
 
+该脚本会先跑 i18n 检查，再跑单测 —— 静态检查一秒出结果，不该排在两分钟的
+测试构建后面。
+
+### 6. 本地化
+
+界面文案全部在资源文件里。源语言（简体中文）放在
+`entry/src/main/resources/base/element/string.json`，译文放在语言限定词目录
+（如 `en_US/element/string.json`）；复数在 `element/plural.json`。系统按设备
+语言自动匹配，匹配不到时回落 `base`。设置 → 语言可以在「跟随系统 / 简体中文 /
+English」之间切换。
+
+**`$r()` 还是 `str()`。** 组件渲染的文案一律用 `$r('app.string.x')`：它是一个
+`Resource`，ArkUI 在配置变更时会重新解析，所以切语言能当场生效。`str('x')`
+返回的是普通字符串，构建时就定死了 —— 只在确实需要 `string` 的地方用：
+`string` 类型的 `@State`、模型字段、比较、`.join()`、以及非 UI 代码。
+`@Builder` 参数遇到类型冲突时把它放宽成 `ResourceStr`，不要把调用点改回
+`str()`。
+
+**模块级 `const` 不能装文案。** 常量在首次 import 时就构建了，那时字符串源
+还没装好，语言会被冻在那一刻。改成函数（`fallbackCountries()` 而不是
+`FALLBACK_COUNTRIES`）。
+
+**不要拿显示文案当状态匹配。** `label.substring(0, 2)`、`text.includes('重试')`
+这类写法在换语言的瞬间就失效，判断要落在结构化字段上。
+
+只进 `console.*` 的诊断字符串不翻译，用 `// i18n-exempt: <理由>` 标注。
+
+工具：
+
+```bash
+node scripts/i18n-extract.mjs               # 按域统计仍硬编码的中文文案
+node scripts/i18n-extract.mjs --domain util # 某个域的明细与 key 建议
+node scripts/i18n-lit.mjs <file>            # 列出单个文件的中文字面量与行号
+node scripts/i18n-check.mjs                 # 门禁（已并入 run-local-tests.sh）
+```
+
+`i18n-check.mjs` 检查五件事：代码引用的 key 在 `base` 中存在；`base` 里的每个
+key 都能在代码中找到引用；**资源值里不得残留 `${` 模板源，且各语言的占位符编号
+集合必须一致**；语言目录没有 `base` 之外的孤儿 key、各语言缺哪些词条；
+**已纳入门禁的目录中不得再出现中文字面量**。
+
+第三条是补上的 —— 门禁、单测、编译器各自能看见一类错误，但谁都看不见
+「`file_downloading` 的值是 `${sizeLabel} · 正在下载` 这段模板源本身」，这种
+错误只会在设备上显形。
+
+`scripts/i18n-config.mjs` 的 `MIGRATED` 现在覆盖全部源码目录 —— 新建目录要一并
+加进去，否则门禁会悄悄跳过它。key 命名 `<域>_<组件>_<语义>`，如
+`chat_forward_title`。
+
 ## 状态与声明
 
 - 开发中；界面以尽量贴近官方 Android 客户端为目标。

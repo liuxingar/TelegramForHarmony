@@ -110,8 +110,8 @@ struct ChatBackgroundPage {
       this.applyingId = '';
       promptAction.showToast({
         message: this.chatId !== 0
-          ? '该会话的背景已设置'
-          : (this.forDark ? '深色主题背景已设置' : '浅色主题背景已设置'),
+          ? $r('app.string.cb_chat_set')
+          : (this.forDark ? $r('app.string.cb_dark_set') : $r('app.string.cb_light_set')),
         duration: 1600
       });
     }).catch((error: TdError): void => {
@@ -119,10 +119,10 @@ struct ChatBackgroundPage {
       this.applyingId = '';
       console.error(`ChatBackgroundPage.apply failed: ${error.message}`);
       const text = error.message.indexOf('BOOST') >= 0 || error.message.indexOf('boost') >= 0
-        ? '该群组/频道的助力等级不足，无法设置专属背景'
+        ? $r('app.string.cb_boost_required')
         : (error.message.indexOf('ADMIN') >= 0 || error.message.indexOf('rights') >= 0
-          ? '需要管理员权限才能设置该会话的背景'
-          : '设置背景失败，请稍后重试');
+          ? $r('app.string.cb_admin_required')
+          : $r('app.string.cb_set_failed'));
       promptAction.showToast({ message: text, duration: 2000 });
     });
   }
@@ -137,13 +137,13 @@ struct ChatBackgroundPage {
       if (!this.active) { return; }
       this.applyingId = '';
       promptAction.showToast({
-        message: this.chatId !== 0 ? '已恢复为全局默认背景' : '已恢复默认背景', duration: 1500
+        message: this.chatId !== 0 ? $r('app.string.cb_reset_to_global') : $r('app.string.cb_reset_done'), duration: 1500
       });
     }).catch((error: TdError): void => {
       if (!this.active) { return; }
       this.applyingId = '';
       console.error(`ChatBackgroundPage.reset failed: ${error.message}`);
-      promptAction.showToast({ message: '恢复默认失败，请稍后重试', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.cb_reset_failed'), duration: 1800 });
     });
   }
 
@@ -154,7 +154,7 @@ struct ChatBackgroundPage {
         SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(24).fontColor([COLOR_TEXT_PRIMARY]);
       }.width(40).height(40).borderRadius(20).backgroundColor(Color.Transparent)
       .onClick((): void => { router.back(); });
-      Text(this.chatId !== 0 ? '会话背景' : '聊天背景')
+      Text(this.chatId !== 0 ? $r('app.string.cb_chat_title') : $r('app.string.chat_settings_background'))
         .fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
         .layoutWeight(1);
       if (this.applyingId !== '') { LoadingProgress().width(20).height(20).color(COLOR_PRIMARY); }
@@ -164,12 +164,12 @@ struct ChatBackgroundPage {
   @Builder
   modeSwitch() {
     Row() {
-      Text('浅色主题').fontSize(14)
+      Text($r('app.string.cb_light_theme')).fontSize(14)
         .fontColor(!this.forDark ? Color.White : COLOR_TEXT_SECONDARY)
         .height(34).padding({ left: 18, right: 18 }).borderRadius(17)
         .backgroundColor(!this.forDark ? COLOR_PRIMARY : Color.Transparent)
         .onClick((): void => this.setForDark(false));
-      Text('深色主题').fontSize(14)
+      Text($r('app.string.cb_dark_theme')).fontSize(14)
         .fontColor(this.forDark ? Color.White : COLOR_TEXT_SECONDARY)
         .height(34).padding({ left: 18, right: 18 }).borderRadius(17)
         .backgroundColor(this.forDark ? COLOR_PRIMARY : Color.Transparent)
@@ -202,7 +202,7 @@ struct ChatBackgroundPage {
           });
       }
       if (row.preview.kind === 'pattern') {
-        Text('图案').fontSize(10).fontColor('#D9FFFFFF')
+        Text($r('app.string.cb_pattern')).fontSize(10).fontColor('#D9FFFFFF')
           .padding({ left: 7, right: 7, top: 2, bottom: 2 })
           .borderRadius(9).backgroundColor('#59000000').margin(7);
       }
@@ -227,19 +227,19 @@ struct ChatBackgroundPage {
       if (this.loadState === 'loading') {
         Column({ space: 9 }) {
           LoadingProgress().width(34).height(34).color(COLOR_PRIMARY);
-          Text('正在加载官方壁纸…').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.cb_loading')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else if (this.loadState === 'error') {
         Column({ space: 10 }) {
-          Text('壁纸加载失败').fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
-          Button('重新加载').onClick((): void => this.load());
+          Text($r('app.string.cb_load_failed')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
+          Button($r('app.string.settings_reload')).onClick((): void => this.load());
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else {
         Scroll() {
           Column({ space: 12 }) {
             Row({ space: 10 }) {
               SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(17).fontColor([COLOR_PRIMARY]);
-              Text(this.chatId !== 0 ? '恢复为全局默认背景' : '恢复默认背景')
+              Text(this.chatId !== 0 ? $r('app.string.cb_reset_to_global_action') : $r('app.string.cb_reset_action'))
                 .fontSize(15).fontColor(COLOR_PRIMARY).layoutWeight(1);
             }
             .width('100%').height(48).padding({ left: 14, right: 14 })
@@ -251,8 +251,8 @@ struct ChatBackgroundPage {
               }, (row: GalleryRow): string => `bg_${row.preview.backgroundId}`);
             }
             Text(this.chatId !== 0
-              ? '仅为当前会话设置背景，只对自己可见，优先于全局默认背景。'
-              : '选择后将同步为账号在该主题下的默认聊天背景；单个会话的专属背景仍会优先生效。')
+              ? $r('app.string.cb_chat_note')
+              : $r('app.string.cb_global_note'))
               .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).lineHeight(18).width('100%');
           }.width('100%').padding({ left: 12, right: 12, bottom: this.bottomSafe + 24 });
         }.layoutWeight(1).width('100%').scrollBar(BarState.Off);

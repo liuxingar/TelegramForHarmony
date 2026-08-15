@@ -1,6 +1,7 @@
 import { voipCall } from '@kit.CallServiceKit';
 import { image } from '@kit.ImageKit';
 import { avatarPixelMapOrPlaceholder } from '../util/avatarPixelMap';
+import { str } from '../util/strings';
 
 // 系统级来电界面（Call Service Kit）。官方完整方案依赖 Push Kit 下发 VoIP
 // 消息后上报，但文档同时说明"应用通过自己的网络连接收到来电"也可直接上报
@@ -22,7 +23,7 @@ class SystemCallUi {
         callId: id,
         voipCallType: isVideo
           ? voipCall.VoipCallType.VOIP_CALL_VIDEO : voipCall.VoipCallType.VOIP_CALL_VOICE,
-        userName: peerName !== '' ? peerName : '来电',
+        userName: peerName !== '' ? peerName : str('ns_incoming_call'),
         userProfile: placeholder,
         abilityName: 'EntryAbility',
         voipCallState: voipCall.VoipCallState.VOIP_CALL_STATE_RINGING,
@@ -31,7 +32,7 @@ class SystemCallUi {
       this.reportedCallId = id;
       voipCall.reportIncomingCall(attribute).then((reason: voipCall.ErrorReason): void => {
         console.info(`[SystemCallUi] reportIncomingCall reason=${reason} ` +
-          `(0=ERROR_NONE 表示系统已接管来电界面)`);
+          `(0=ERROR_NONE 表示系统已接管来电界面)`); // i18n-exempt: console diagnostic, explains the numeric reason code
         if (reason !== voipCall.ErrorReason.ERROR_NONE) {
           this.reportedCallId = '';
         }

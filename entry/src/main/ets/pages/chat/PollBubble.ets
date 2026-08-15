@@ -1,5 +1,6 @@
 import { PollOptionInfo } from '../../util/formatMsgContent';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import { plural, str } from '../../util/strings';
 
 @Component
 export struct PollBubble {
@@ -175,24 +176,24 @@ export struct PollBubble {
 
   private statusText(): string {
     if (this.unavailable()) {
-      return '投票内容不可用';
+      return str('poll_unavailable');
     }
-    const type = this.isQuiz ? '答题' :
-      (this.isAnonymous ? '匿名投票' : '公开投票');
+    const type = this.isQuiz ? str('poll_quiz_word') :
+      (this.isAnonymous ? str('poll_anonymous') : str('poll_public'));
     if (this.isClosed || this.expired()) {
-      return `${type} · 已结束`;
+      return str('poll_type_closed', type);
     }
     if (this.closeDate > 0) {
       const remaining = Math.max(0, this.closeDate - this.nowSec);
       if (remaining < 3600) {
-        return `${type} · ${Math.max(1, Math.ceil(remaining / 60))} 分钟后结束`;
+        return str('poll_type_closes_in', type, Math.max(1, Math.ceil(remaining / 60)));
       }
     }
     return type;
   }
 
   private voterText(): string {
-    return `${Math.max(0, this.totalVoterCount)} 人参与`;
+    return plural('poll_voters', Math.max(0, this.totalVoterCount), Math.max(0, this.totalVoterCount));
   }
 
   @Builder
@@ -219,7 +220,7 @@ export struct PollBubble {
               .fontSize(11).fontColor([Color.White]);
           }
         }.width(20).height(20);
-        Text(option.text.trim() !== '' ? option.text : '未命名选项')
+        Text(option.text.trim() !== '' ? option.text : $r('app.string.poll_unnamed_option'))
           .layoutWeight(1)
           .fontSize(13.5)
           .fontWeight(this.selected(index) ? FontWeight.Medium : FontWeight.Regular)
@@ -259,7 +260,7 @@ export struct PollBubble {
     Column({ space: 8 }) {
       Row({ space: 7 }) {
         Text(this.isQuiz ? '💡' : '📊').fontSize(16);
-        Text(this.isQuiz ? '答题' : '投票')
+        Text(this.isQuiz ? $r('app.string.poll_quiz_word') : $r('app.string.poll_word'))
           .fontSize(11.5).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY);
         Blank();
         Text(this.statusText())
@@ -268,7 +269,7 @@ export struct PollBubble {
             ? '#9A6562' : COLOR_TEXT_SECONDARY);
       }.width('100%');
 
-      Text(this.question.trim() !== '' ? this.question : '投票内容不可用')
+      Text(this.question.trim() !== '' ? this.question : $r('app.string.poll_unavailable'))
         .fontSize(15)
         .lineHeight(20)
         .fontWeight(FontWeight.Medium)
@@ -289,7 +290,7 @@ export struct PollBubble {
         Row({ space: 7 }) {
           SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
             .fontSize(17).fontColor(['#B05D58']);
-          Text('没有可用的投票选项')
+          Text($r('app.string.poll_no_options'))
             .fontSize(12).fontColor('#B05D58');
         }
         .width('100%')
@@ -303,7 +304,7 @@ export struct PollBubble {
           if (this.pending) {
             LoadingProgress().width(16).height(16).color(Color.White);
           } else {
-            Text(this.hasVoted() ? '更新投票' : '提交投票')
+            Text(this.hasVoted() ? $r('app.string.poll_update_vote') : $r('app.string.poll_submit_vote'))
               .fontSize(13).fontWeight(FontWeight.Medium).fontColor(Color.White);
           }
         }
@@ -353,7 +354,7 @@ export struct PollBubble {
           if (this.submitting()) {
             Row({ space: 5 }) {
               LoadingProgress().width(13).height(13).color(COLOR_PRIMARY);
-              Text('正在提交').fontSize(10.5).fontColor(COLOR_PRIMARY);
+              Text($r('app.string.submitting')).fontSize(10.5).fontColor(COLOR_PRIMARY);
             }
           }
         }

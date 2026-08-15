@@ -6,6 +6,7 @@ import {
   COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE,
   COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
+import { plural, str } from '../../util/strings';
 
 const PAGE_LIMIT: number = 40;
 const CARD_RADIUS: number = 16;
@@ -171,17 +172,17 @@ struct BlockedUsersPage {
           ? ((usernames['active_usernames'] as string[] | undefined) ?? []) : [];
         const photo = object['profile_photo'] as TdObject | undefined;
         const small = photo !== undefined ? photo['small'] as TdObject | undefined : undefined;
-        this.patch(row.key, name !== '' ? name : '已删除账户',
-          active.length > 0 ? `@${active[0]}` : '用户', this.watchFile(small, row.key));
+        this.patch(row.key, name !== '' ? name : str('deleted_account'),
+          active.length > 0 ? `@${active[0]}` : str('bu_kind_user'), this.watchFile(small, row.key));
       } else {
         const photo = object['photo'] as TdObject | undefined;
         const small = photo !== undefined ? photo['small'] as TdObject | undefined : undefined;
-        this.patch(row.key, (object['title'] as string | undefined) ?? '未知频道',
-          '频道或群组', this.watchFile(small, row.key));
+        this.patch(row.key, (object['title'] as string | undefined) ?? str('bu_unknown_channel'),
+          str('bu_kind_chat'), this.watchFile(small, row.key));
       }
     }).catch((error: TdError): void => {
       console.warn(`BlockedUsersPage.resolve(${row.key}) failed: ${error.message}`);
-      if (this.active) { this.patch(row.key, row.userId > 0 ? '未知用户' : '未知频道', '', ''); }
+      if (this.active) { this.patch(row.key, row.userId > 0 ? str('bu_unknown_user') : str('bu_unknown_channel'), '', ''); }
     });
   }
 
@@ -194,10 +195,10 @@ struct BlockedUsersPage {
   private unblock(row: BlockedRow): void {
     if (this.actionKey !== '') { return; }
     promptAction.showDialog({
-      title: '解除屏蔽', message: `确定解除对 ${row.title !== '' ? row.title : '该用户'} 的屏蔽吗？`,
+      title: $r('app.string.bu_unblock_title'), message: str('bu_unblock_confirm', row.title !== '' ? row.title : str('bu_this_user')),
       buttons: [
-        { text: '取消', color: COLOR_TEXT_SECONDARY as string },
-        { text: '解除', color: COLOR_PRIMARY as string }
+        { text: $r('app.string.cancel'), color: COLOR_TEXT_SECONDARY as string },
+        { text: $r('app.string.bu_unblock'), color: COLOR_PRIMARY as string }
       ]
     }).then((result: promptAction.ShowDialogSuccessResponse): void => {
       if (!this.active || result.index !== 1 || this.actionKey !== '') { return; }
@@ -218,7 +219,7 @@ struct BlockedUsersPage {
         this.rows = before;
         this.totalCount = beforeTotal;
         this.actionKey = '';
-        promptAction.showToast({ message: '解除失败，名单已恢复', duration: 1800 });
+        promptAction.showToast({ message: $r('app.string.bu_unblock_failed'), duration: 1800 });
       });
     }).catch((): void => {});
   }
@@ -244,8 +245,8 @@ struct BlockedUsersPage {
           const photo = user['profile_photo'] as TdObject | undefined;
           const small = photo !== undefined ? photo['small'] as TdObject | undefined : undefined;
           return {
-            id, name: name !== '' ? name : '未命名用户',
-            subtitle: active.length > 0 ? `@${active[0]}` : '联系人',
+            id, name: name !== '' ? name : str('bu_untitled_user'),
+            subtitle: active.length > 0 ? `@${active[0]}` : str('tab_contacts'),
             initials: name !== '' ? name.substring(0, 1).toUpperCase() : '?',
             avatarPath: this.filePath(small)
           };
@@ -288,12 +289,12 @@ struct BlockedUsersPage {
       this.actionKey = '';
       this.pickerOpen = false;
       this.load(true);
-      promptAction.showToast({ message: `已屏蔽 ${user.name}`, duration: 1500 });
+      promptAction.showToast({ message: str('bu_blocked_toast', user.name), duration: 1500 });
     }).catch((error: TdError): void => {
       console.error(`BlockedUsersPage.block failed: ${error.message}`);
       if (!this.active) { return; }
       this.actionKey = '';
-      promptAction.showToast({ message: '屏蔽失败，请重试', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.bu_block_failed'), duration: 1800 });
     });
   }
 
@@ -305,9 +306,9 @@ struct BlockedUsersPage {
       }.width(40).height(40).borderRadius(20).backgroundColor(Color.Transparent)
       .onClick((): void => { router.back(); });
       Column({ space: 1 }) {
-        Text('已屏蔽的用户').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
+        Text($r('app.string.bu_title')).fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
         if (this.loadState === 'ready') {
-          Text(`${this.totalCount} 个账号`).fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
+          Text(plural('bu_account_count', this.totalCount, this.totalCount)).fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
         }
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
       Button() {
@@ -326,14 +327,14 @@ struct BlockedUsersPage {
         colorSeed: row.userId !== 0 ? row.userId : row.chatId, avatarSize: 46
       });
       Column({ space: 2 }) {
-        Text(row.title !== '' ? row.title : '正在读取…').fontSize(16).fontColor(COLOR_TEXT_PRIMARY)
+        Text(row.title !== '' ? row.title : $r('app.string.loading_short')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
         Text(row.subtitle).fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
       if (this.actionKey === row.key) { LoadingProgress().width(19).height(19).color(COLOR_PRIMARY); }
       else {
-        Button('解除').height(36).fontSize(13).fontColor(COLOR_PRIMARY).backgroundColor(Color.Transparent)
+        Button($r('app.string.bu_unblock')).height(36).fontSize(13).fontColor(COLOR_PRIMARY).backgroundColor(Color.Transparent)
           .enabled(this.actionKey === '').onClick((): void => { this.unblock(row); });
       }
     }
@@ -345,14 +346,14 @@ struct BlockedUsersPage {
     Column({ space: 10 }) {
       Row() {
         Column({ space: 2 }) {
-          Text('添加屏蔽用户').fontSize(21).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
-          Text('选择联系人后立即加入主屏蔽名单').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.bu_add')).fontSize(21).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
+          Text($r('app.string.bu_add_sub')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
         }.layoutWeight(1).alignItems(HorizontalAlign.Start);
         Button() { SymbolGlyph($r('sys.symbol.xmark')).fontSize(18).fontColor([COLOR_TEXT_SECONDARY]); }
           .width(38).height(38).borderRadius(19).backgroundColor(Color.Transparent)
           .onClick((): void => { this.pickerOpen = false; });
       }.width('100%').height(52);
-      TextInput({ text: this.pickerQuery, placeholder: '搜索联系人' })
+      TextInput({ text: this.pickerQuery, placeholder: $r('app.string.search_contacts') })
         .height(44).fontSize(15).backgroundColor($r('app.color.surface_alt')).borderRadius(12)
         .padding({ left: 13, right: 13 }).onChange((value: string): void => { this.pickerQuery = value; });
       if (this.pickerState === 'loading') {
@@ -360,13 +361,13 @@ struct BlockedUsersPage {
           .layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else if (this.pickerState === 'error') {
         Column({ space: 8 }) {
-          Text('联系人加载失败').fontSize(15).fontColor(COLOR_TEXT_PRIMARY);
-          Button('重试').onClick((): void => { this.openPicker(); });
+          Text($r('app.string.contacts_load_failed')).fontSize(15).fontColor(COLOR_TEXT_PRIMARY);
+          Button($r('app.string.settings_retry')).onClick((): void => { this.openPicker(); });
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else if (this.filteredPicker().length === 0) {
         Column({ space: 7 }) {
-          Text('没有可屏蔽的联系人').fontSize(15).fontColor(COLOR_TEXT_PRIMARY);
-          Text('已屏蔽联系人不会重复显示。').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.bu_no_contacts')).fontSize(15).fontColor(COLOR_TEXT_PRIMARY);
+          Text($r('app.string.bu_no_contacts_sub')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else {
         List() {
@@ -400,19 +401,19 @@ struct BlockedUsersPage {
       if (this.loadState === 'loading') {
         Column({ space: 9 }) {
           LoadingProgress().width(34).height(34).color(COLOR_PRIMARY);
-          Text('正在读取屏蔽名单…').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.bu_loading')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else if (this.loadState === 'error') {
         Column({ space: 10 }) {
-          Text('屏蔽名单加载失败').fontSize(17).fontColor(COLOR_TEXT_PRIMARY);
-          Text('没有用空列表替代服务器状态。').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
-          Button('重新加载').onClick((): void => { this.load(true); });
+          Text($r('app.string.bu_load_failed')).fontSize(17).fontColor(COLOR_TEXT_PRIMARY);
+          Text($r('app.string.bu_no_empty_substitute')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+          Button($r('app.string.settings_reload')).onClick((): void => { this.load(true); });
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else if (this.rows.length === 0) {
         Column({ space: 9 }) {
           SymbolGlyph($r('sys.symbol.nosign')).fontSize(52).fontColor([COLOR_TEXT_SECONDARY]);
-          Text('没有被屏蔽的用户').fontSize(18).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-          Text('点击右上角可从联系人中添加。').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.bu_empty')).fontSize(18).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+          Text($r('app.string.bu_empty_sub')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else {
         List() {
@@ -430,10 +431,10 @@ struct BlockedUsersPage {
             if (this.pageState === 'loading') {
               Row({ space: 8 }) {
                 LoadingProgress().width(18).height(18).color(COLOR_PRIMARY);
-                Text('加载更多…').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+                Text($r('app.string.load_more')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
               }.width('100%').height(50).justifyContent(FlexAlign.Center);
             } else if (this.pageState === 'error') {
-              Button('加载更多失败，点击重试').width('100%').height(48).fontSize(13)
+              Button($r('app.string.load_more_failed')).width('100%').height(48).fontSize(13)
                 .fontColor(COLOR_PRIMARY).backgroundColor(Color.Transparent)
                 .onClick((): void => { this.load(false); });
             }

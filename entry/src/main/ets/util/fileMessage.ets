@@ -1,3 +1,4 @@
+import { str } from './strings';
 import { formatFileSize } from './formatFileSize';
 
 export interface FileTypeVisual {
@@ -153,7 +154,7 @@ export function fileOpenMimeType(fileName: string, mimeType: string): string {
 
 export function displayFileName(fileName: string): string {
   const name: string = fileName.trim();
-  return name !== '' ? name : '未命名文件';
+  return name !== '' ? name : str('file_unnamed');
 }
 
 export function fileStatusText(
@@ -165,20 +166,20 @@ export function fileStatusText(
   downloadFailed: boolean
 ): string {
   const size: string = formatFileSize(fileSize);
-  const sizeLabel: string = size !== '' ? size : '未知大小';
+  const sizeLabel: string = size !== '' ? size : str('file_unknown_size');
   if (filePath !== '') {
-    return `${sizeLabel} · 点击打开`;
+    return str('file_tap_open', sizeLabel);
   }
   if (fileId === 0) {
-    return '文件不可用';
+    return str('file_unavailable');
   }
   if (downloadFailed) {
-    return '下载失败 · 点按重试';
+    return str('file_download_failed');
   }
   if (downloadActive) {
     return downloadProgress > 0
-      ? `${sizeLabel} · 正在下载 ${downloadProgress}%`
-      : `${sizeLabel} · 正在下载`;
+      ? str('file_downloading_pct', sizeLabel, downloadProgress)
+      : str('file_downloading', sizeLabel);
   }
-  return `${sizeLabel} · 点击下载`;
+  return str('file_tap_download', sizeLabel);
 }

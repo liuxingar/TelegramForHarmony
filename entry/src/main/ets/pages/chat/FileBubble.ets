@@ -2,6 +2,7 @@ import { COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
 import {
   displayFileName, fileStatusText, fileTypeVisual, FileTypeVisual
 } from '../../util/fileMessage';
+import { str } from '../../util/strings';
 
 @Component
 export struct FileBubble {
@@ -62,12 +63,12 @@ export struct FileBubble {
 
   private actionAccessibilityText(): string {
     if (this.sourceUnavailable()) {
-      return '文件不可用';
+      return str('file_unavailable');
     }
     if (this.filePath === '') {
-      return this.downloadFailed ? '重新下载文件后保存' : '下载文件后另存为';
+      return this.downloadFailed ? str('file_redownload_to_save') : str('file_download_to_save');
     }
-    return '另存文件';
+    return str('file_save_as');
   }
 
   @Builder

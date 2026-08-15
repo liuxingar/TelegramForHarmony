@@ -162,7 +162,7 @@ export default function musicQueueTest() {
       q.play(list, 1, false);
       expect(rec.kinds()).assertEqual('download:1');
       expect(q.getPendingPlayId()).assertEqual(1);
-      expect(rec.toasts[0]).assertEqual('开始下载音乐');
+      expect(rec.toasts[0]).assertEqual('mq_download_started');
     });
 
     it('play refuses a track with no file at all', 0, () => {
@@ -173,7 +173,7 @@ export default function musicQueueTest() {
       q.play([entry], 1, false);
       expect(rec.calls.length).assertEqual(0);
       expect(q.getPendingPlayId()).assertEqual(0);
-      expect(rec.toasts[0]).assertEqual('这个音频文件暂时不可用');
+      expect(rec.toasts[0]).assertEqual('mq_audio_unavailable');
     });
 
     it('play ignores a non-audio target', 0, () => {
@@ -202,7 +202,7 @@ export default function musicQueueTest() {
       failed.videoFailed = true;
       q.settlePending([failed]);
       expect(q.getPendingPlayId()).assertEqual(0);
-      expect(rec.toasts[rec.toasts.length - 1]).assertEqual('音乐下载失败，请重试');
+      expect(rec.toasts[rec.toasts.length - 1]).assertEqual('mq_download_failed');
     });
 
     it('settlePending gives up when the message vanished', 0, () => {

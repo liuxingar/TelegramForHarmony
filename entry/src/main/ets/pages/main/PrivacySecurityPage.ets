@@ -14,6 +14,7 @@ import {
   COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE,
   COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
+import { plural, str } from '../../util/strings';
 
 const CARD_RADIUS: number = 16;
 const COLOR_WARNING: string = '#D98914';
@@ -33,49 +34,59 @@ interface RuleRow {
   allowNobody: boolean;
 }
 
-const AUTO_DELETE: Choice[] = [
-  { label: '关闭', value: 0 },
-  { label: '1 天', value: 86400 },
-  { label: '1 周', value: 604800 },
-  { label: '1 个月', value: 2678400 }
-];
+// Functions, not const arrays: the labels come from str(), which resolves
+// when called. A module-level array would be built the first time this module
+// is imported — before the string source is installed — and would keep that
+// language for the rest of the process.
+function autoDeleteChoices(): Choice[] {
+  return [
+  { label: str('ps_off'), value: 0 },
+  { label: str('ps_1_day'), value: 86400 },
+  { label: str('ps_1_week'), value: 604800 },
+  { label: str('ps_1_month'), value: 2678400 }
+  ];
+}
 
-const ACCOUNT_TTL: Choice[] = [
-  { label: '1 个月', value: 30 },
-  { label: '3 个月', value: 90 },
-  { label: '6 个月', value: 180 },
-  { label: '12 个月', value: 365 },
-  { label: '18 个月', value: 548 },
-  { label: '24 个月', value: 730 }
-];
+function accountTtlChoices(): Choice[] {
+  return [
+  { label: str('ps_1_month'), value: 30 },
+  { label: str('ps_3_months'), value: 90 },
+  { label: str('ps_6_months'), value: 180 },
+  { label: str('ps_12_months'), value: 365 },
+  { label: str('ps_18_months'), value: 548 },
+  { label: str('ps_24_months'), value: 730 }
+  ];
+}
 
-const RULE_ROWS: RuleRow[] = [
-  { setting: 'userPrivacySettingShowPhoneNumber', title: '手机号码', group: 'personal',
-    hint: '选择谁可以看到你的手机号码。', premiumOnly: false, allowNobody: true },
-  { setting: 'userPrivacySettingShowStatus', title: '最后上线时间', group: 'personal',
-    hint: '看不到你上线时间的人，你也看不到他们的。', premiumOnly: false, allowNobody: true },
-  { setting: 'userPrivacySettingShowProfilePhoto', title: '头像', group: 'personal',
-    hint: '选择谁可以看到你的头像。', premiumOnly: false, allowNobody: true },
-  { setting: 'userPrivacySettingShowBio', title: '简介', group: 'personal',
-    hint: '选择谁可以看到你的简介。', premiumOnly: false, allowNobody: true },
-  { setting: 'userPrivacySettingShowBirthdate', title: '出生日期', group: 'personal',
-    hint: '选择谁可以看到你的出生日期。', premiumOnly: false, allowNobody: true },
-  { setting: 'userPrivacySettingShowProfileAudio', title: '个人资料音乐', group: 'personal',
-    hint: '选择谁可以看到你个人资料中的音乐。', premiumOnly: false, allowNobody: true },
-  { setting: 'userPrivacySettingShowLinkInForwardedMessages', title: '转发消息中的账号链接', group: 'personal',
-    hint: '你的消息被转发时，选择谁可以从转发标题打开你的账号。', premiumOnly: false, allowNobody: true },
-  { setting: 'userPrivacySettingAllowChatInvites', title: '群组与频道邀请', group: 'interaction',
-    hint: '选择谁可以把你加入群组和频道。', premiumOnly: false, allowNobody: true },
-  { setting: 'userPrivacySettingAllowCalls', title: '语音和视频通话', group: 'interaction',
-    hint: '选择谁可以给你打电话。', premiumOnly: false, allowNobody: true },
-  { setting: 'userPrivacySettingAllowPeerToPeerCalls', title: '通话点对点连接', group: 'interaction',
-    hint: '点对点连接可改善通话质量，但会向对方暴露你的 IP 地址。', premiumOnly: false, allowNobody: true },
-  { setting: 'userPrivacySettingAllowPrivateVoiceAndVideoNoteMessages', title: '语音与视频消息', group: 'interaction',
-    hint: '选择谁可以给你发送语音和圆形视频消息。', premiumOnly: true, allowNobody: true },
-  { setting: 'userPrivacySettingAllowFindingByPhoneNumber', title: '通过手机号找到我', group: 'interaction',
-    hint: '选择谁可以通过你的手机号找到你。此项只支持“所有人”和“我的联系人”。',
+function ruleRows(): RuleRow[] {
+  return [
+  { setting: 'userPrivacySettingShowPhoneNumber', title: str('ct_phone'), group: 'personal',
+    hint: str('ps_phone_hint'), premiumOnly: false, allowNobody: true },
+  { setting: 'userPrivacySettingShowStatus', title: str('ps_last_seen'), group: 'personal',
+    hint: str('ps_last_seen_hint'), premiumOnly: false, allowNobody: true },
+  { setting: 'userPrivacySettingShowProfilePhoto', title: str('ps_photo'), group: 'personal',
+    hint: str('ps_photo_hint'), premiumOnly: false, allowNobody: true },
+  { setting: 'userPrivacySettingShowBio', title: str('ps_bio'), group: 'personal',
+    hint: str('ps_bio_hint'), premiumOnly: false, allowNobody: true },
+  { setting: 'userPrivacySettingShowBirthdate', title: str('ps_birthdate'), group: 'personal',
+    hint: str('ps_birthdate_hint'), premiumOnly: false, allowNobody: true },
+  { setting: 'userPrivacySettingShowProfileAudio', title: str('ps_profile_audio'), group: 'personal',
+    hint: str('ps_profile_audio_hint'), premiumOnly: false, allowNobody: true },
+  { setting: 'userPrivacySettingShowLinkInForwardedMessages', title: str('ps_forward_link'), group: 'personal',
+    hint: str('ps_forward_link_hint'), premiumOnly: false, allowNobody: true },
+  { setting: 'userPrivacySettingAllowChatInvites', title: str('ps_chat_invites'), group: 'interaction',
+    hint: str('ps_chat_invites_hint'), premiumOnly: false, allowNobody: true },
+  { setting: 'userPrivacySettingAllowCalls', title: str('ps_calls'), group: 'interaction',
+    hint: str('ps_calls_hint'), premiumOnly: false, allowNobody: true },
+  { setting: 'userPrivacySettingAllowPeerToPeerCalls', title: str('ps_p2p'), group: 'interaction',
+    hint: str('ps_p2p_hint'), premiumOnly: false, allowNobody: true },
+  { setting: 'userPrivacySettingAllowPrivateVoiceAndVideoNoteMessages', title: str('ps_voice_video'), group: 'interaction',
+    hint: str('ps_voice_video_hint'), premiumOnly: true, allowNobody: true },
+  { setting: 'userPrivacySettingAllowFindingByPhoneNumber', title: str('ps_find_by_phone'), group: 'interaction',
+    hint: str('ps_find_by_phone_hint'),
     premiumOnly: false, allowNobody: false }
-];
+  ];
+}
 
 @Entry
 @Component
@@ -125,7 +136,7 @@ struct PrivacySecurityPage {
   aboutToAppear(): void {
     this.active = true;
     this.navigationLocked = false;
-    const settings = RULE_ROWS.map((row: RuleRow): string => row.setting);
+    const settings = ruleRows().map((row: RuleRow): string => row.setting);
     const store = new PrivacyStore(getTdClient(), settings);
     this.store = store;
     this.unsubscribe = store.subscribe((): void => { this.sync(store); });
@@ -171,7 +182,7 @@ struct PrivacySecurityPage {
     work.catch((error: Error): void => {
       this.navigationLocked = false;
       console.error(`PrivacySecurityPage.route failed: ${error.message}`);
-      promptAction.showToast({ message: '页面打开失败，请重试', duration: 1700 });
+      promptAction.showToast({ message: $r('app.string.page_open_failed'), duration: 1700 });
     });
     setTimeout((): void => { this.navigationLocked = false; }, 700);
   }
@@ -187,7 +198,7 @@ struct PrivacySecurityPage {
       if (!this.active) { return; }
       rollback();
       this.actionKey = '';
-      promptAction.showToast({ message: '保存失败，设置已恢复', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.ps_save_failed'), duration: 1800 });
     });
   }
 
@@ -201,11 +212,11 @@ struct PrivacySecurityPage {
   private confirmAccountTtl(days: number): void {
     if (this.actionKey !== '' || days === this.accountTtl) { return; }
     promptAction.showDialog({
-      title: '更改账号自动删除时间',
-      message: `如果连续 ${this.choiceLabel(ACCOUNT_TTL, days)} 未登录，账号、联系人和云端消息将被永久删除。`,
+      title: $r('app.string.ps_change_ttl'),
+      message: str('ps_ttl_confirm', this.choiceLabel(accountTtlChoices(), days)),
       buttons: [
-        { text: '取消', color: COLOR_TEXT_SECONDARY as string },
-        { text: '确认更改', color: COLOR_DANGER }
+        { text: $r('app.string.cancel'), color: COLOR_TEXT_SECONDARY as string },
+        { text: $r('app.string.confirm_change'), color: COLOR_DANGER }
       ]
     }).then((result: promptAction.ShowDialogSuccessResponse): void => {
       if (!this.active || result.index !== 1 || this.actionKey !== '') { return; }
@@ -262,7 +273,7 @@ struct PrivacySecurityPage {
 
   private choiceLabel(choices: Choice[], value: number): string {
     for (const choice of choices) { if (choice.value === value) { return choice.label; } }
-    return value > 0 ? `${Math.round(value / 86400)} 天` : '未加载';
+    return value > 0 ? plural('ps_days', Math.round(value / 86400), Math.round(value / 86400)) : str('not_loaded');
   }
 
   private valueText(value: number): string {
@@ -277,11 +288,11 @@ struct PrivacySecurityPage {
 
   private openRule(row: RuleRow): void {
     if (row.premiumOnly && !this.isPremium) {
-      promptAction.showToast({ message: '此隐私规则需要 Telegram Premium', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.ps_needs_premium'), duration: 1800 });
       return;
     }
     if (!this.rules.has(row.setting)) {
-      promptAction.showToast({ message: '该项尚未加载，请刷新后重试', duration: 1600 });
+      promptAction.showToast({ message: $r('app.string.ps_not_loaded_refresh'), duration: 1600 });
       return;
     }
     const params: PrivacyRuleParams = {
@@ -298,7 +309,7 @@ struct PrivacySecurityPage {
       }
       .width(40).height(40).borderRadius(20).backgroundColor(Color.Transparent)
       .onClick((): void => { router.back(); });
-      Text('隐私与安全').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
+      Text($r('app.string.settings_privacy')).fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
         .layoutWeight(1);
       if (this.loadState === 'ready') {
         Button() {
@@ -317,7 +328,7 @@ struct PrivacySecurityPage {
   }
 
   @Builder
-  sectionTitle(text: string) {
+  sectionTitle(text: ResourceStr) {
     Text(text).fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
       .width('100%').padding({ left: 16, right: 16, top: 13, bottom: 5 });
   }
@@ -335,7 +346,7 @@ struct PrivacySecurityPage {
   @Builder
   autoDeleteMenu() {
     Menu() {
-      ForEach(AUTO_DELETE, (choice: Choice) => {
+      ForEach(autoDeleteChoices(), (choice: Choice) => {
         MenuItem({ content: choice.label }).selected(this.autoDelete === choice.value)
           .onClick((): void => { this.applyAutoDelete(choice.value); });
       }, (choice: Choice): string => `auto_${choice.value}`);
@@ -345,7 +356,7 @@ struct PrivacySecurityPage {
   @Builder
   accountTtlMenu() {
     Menu() {
-      ForEach(ACCOUNT_TTL, (choice: Choice) => {
+      ForEach(accountTtlChoices(), (choice: Choice) => {
         MenuItem({ content: choice.label }).selected(this.accountTtl === choice.value)
           .onClick((): void => { this.confirmAccountTtl(choice.value); });
       }, (choice: Choice): string => `ttl_${choice.value}`);
@@ -370,10 +381,10 @@ struct PrivacySecurityPage {
   errorState() {
     Column({ space: 12 }) {
       SymbolGlyph($r('sys.symbol.exclamationmark_circle')).fontSize(48).fontColor([COLOR_TEXT_SECONDARY]);
-      Text('隐私设置加载失败').fontSize(18).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-      Text('没有使用默认值替代账号状态，避免误操作。').fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
+      Text($r('app.string.ps_load_failed')).fontSize(18).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+      Text($r('app.string.ps_no_default_substitute')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
         .textAlign(TextAlign.Center);
-      Button('重新加载').fontSize(15).fontColor(Color.White).backgroundColor(COLOR_PRIMARY)
+      Button($r('app.string.settings_reload')).fontSize(15).fontColor(Color.White).backgroundColor(COLOR_PRIMARY)
         .height(42).padding({ left: 22, right: 22 }).borderRadius(21)
         .onClick((): void => { this.store?.refresh(); });
     }
@@ -388,18 +399,18 @@ struct PrivacySecurityPage {
           Row({ space: 9 }) {
             SymbolGlyph($r('sys.symbol.exclamationmark_triangle_fill')).fontSize(17).fontColor([COLOR_WARNING]);
             Text(this.syncError).fontSize(13).fontColor(COLOR_TEXT_SECONDARY).layoutWeight(1);
-            Text('重试').fontSize(13).fontColor(COLOR_PRIMARY)
+            Text($r('app.string.settings_retry')).fontSize(13).fontColor(COLOR_PRIMARY)
               .onClick((): void => { this.store?.refresh(); });
           }
           .width('100%').padding(12).backgroundColor(COLOR_SURFACE).borderRadius(12);
         }
 
         Column() {
-          this.sectionTitle('账号安全');
+          this.sectionTitle($r('app.string.ps_account_security'));
           Row({ space: 10 }) {
-            Text('两步验证').fontSize(16).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
+            Text($r('app.string.ps_two_step')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
             Text(this.passwordState === null ? '—' :
-              (((this.passwordState['has_password'] as boolean | undefined) ?? false) ? '已开启' : '未开启'))
+              (((this.passwordState['has_password'] as boolean | undefined) ?? false) ? $r('app.string.enabled_short') : $r('app.string.disabled_short')))
               .fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
             this.disclosure();
           }
@@ -408,7 +419,7 @@ struct PrivacySecurityPage {
           .onClick((): void => { this.route('pages/main/TwoStepVerificationPage'); });
           this.divider();
           Row({ space: 10 }) {
-            Text('活跃设备').fontSize(16).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
+            Text($r('app.string.ps_active_sessions')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
             Text(this.valueText(this.sessions)).fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
             this.disclosure();
           }
@@ -417,7 +428,7 @@ struct PrivacySecurityPage {
           .onClick((): void => { this.route('pages/main/ActiveSessionsPage'); });
           this.divider();
           Row({ space: 10 }) {
-            Text('已连接的网站').fontSize(16).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
+            Text($r('app.string.cw_title')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
             Text(this.valueText(this.websites)).fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
             this.disclosure();
           }
@@ -428,8 +439,8 @@ struct PrivacySecurityPage {
         .width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS).padding({ bottom: 5 });
 
         Column() {
-          this.sectionTitle('个人信息');
-          ForEach(RULE_ROWS.filter((row: RuleRow): boolean => row.group === 'personal'),
+          this.sectionTitle($r('app.string.ae_personal_info'));
+          ForEach(ruleRows().filter((row: RuleRow): boolean => row.group === 'personal'),
             (row: RuleRow, index: number) => {
               if (index > 0) { this.divider(); }
               Row({ space: 9 }) {
@@ -447,8 +458,8 @@ struct PrivacySecurityPage {
         .width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS).padding({ bottom: 5 });
 
         Column() {
-          this.sectionTitle('互动权限');
-          ForEach(RULE_ROWS.filter((row: RuleRow): boolean => row.group === 'interaction'),
+          this.sectionTitle($r('app.string.ps_interaction'));
+          ForEach(ruleRows().filter((row: RuleRow): boolean => row.group === 'interaction'),
             (row: RuleRow, index: number) => {
               if (index > 0) { this.divider(); }
               Row({ space: 9 }) {
@@ -467,12 +478,12 @@ struct PrivacySecurityPage {
         .width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS).padding({ bottom: 5 });
 
         Column() {
-          this.sectionTitle('消息隐私');
+          this.sectionTitle($r('app.string.ps_message_privacy'));
           if (this.readDate !== null) {
             Row({ space: 12 }) {
               Column({ space: 2 }) {
-                Text('显示消息已读时间').fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
-                Text('关闭后，部分情况下你也无法看到对方的已读时间')
+                Text($r('app.string.ps_read_time')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
+                Text($r('app.string.ps_read_time_sub'))
                   .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).maxLines(2);
               }.layoutWeight(1).alignItems(HorizontalAlign.Start);
               Toggle({ type: ToggleType.Switch, isOn: this.readDate })
@@ -485,8 +496,8 @@ struct PrivacySecurityPage {
             this.divider();
             Row({ space: 12 }) {
               Column({ space: 2 }) {
-                Text('允许陌生人发起新聊天').fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
-                Text(this.canSetNewChatPrivacy ? '限制非联系人主动发来私聊' : '当前账号暂不支持修改此项')
+                Text($r('app.string.ps_allow_new_chats')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
+                Text(this.canSetNewChatPrivacy ? $r('app.string.ps_allow_new_chats_sub') : $r('app.string.ps_not_supported'))
                   .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
               }.layoutWeight(1).alignItems(HorizontalAlign.Start);
               Toggle({ type: ToggleType.Switch, isOn: this.newChatPrivacy.allowUnknown })
@@ -499,9 +510,9 @@ struct PrivacySecurityPage {
             this.divider();
             Row({ space: 12 }) {
               Column({ space: 2 }) {
-                Text('归档并静音陌生人新聊天').fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
+                Text($r('app.string.ps_archive_new_chats')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
                 Text(this.canArchiveUnknown || this.archiveSettings.archiveUnknown
-                  ? '保留其他归档行为，不覆盖账号原有设置' : '当前账号暂不能启用')
+                  ? $r('app.string.ps_archive_new_chats_sub') : $r('app.string.ps_cannot_enable'))
                   .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
               }.layoutWeight(1).alignItems(HorizontalAlign.Start);
               Toggle({ type: ToggleType.Switch, isOn: this.archiveSettings.archiveUnknown })
@@ -515,10 +526,10 @@ struct PrivacySecurityPage {
             this.divider();
             Row({ space: 9 }) {
               Column({ space: 2 }) {
-                Text('新聊天默认自动删除').fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
-                Text('只影响开启后新建的聊天').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+                Text($r('app.string.ps_auto_delete')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
+                Text($r('app.string.ps_auto_delete_sub')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
               }.layoutWeight(1).alignItems(HorizontalAlign.Start);
-              Text(this.choiceLabel(AUTO_DELETE, this.autoDelete)).fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
+              Text(this.choiceLabel(autoDeleteChoices(), this.autoDelete)).fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
               this.disclosure();
             }
             .width('100%').constraintSize({ minHeight: 58 }).padding({ left: 16, right: 14 })
@@ -529,9 +540,9 @@ struct PrivacySecurityPage {
         .width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS).padding({ bottom: 5 });
 
         Column() {
-          this.sectionTitle('联系人与账号');
+          this.sectionTitle($r('app.string.ps_contacts_and_account'));
           Row({ space: 9 }) {
-            Text('已屏蔽的用户').fontSize(16).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
+            Text($r('app.string.bu_title')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
             Text(this.valueText(this.blocked)).fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
             this.disclosure();
           }
@@ -542,8 +553,8 @@ struct PrivacySecurityPage {
             this.divider();
             Row({ space: 12 }) {
               Column({ space: 2 }) {
-                Text('推荐常用联系人').fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
-                Text('在搜索中显示经常联系的人').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+                Text($r('app.string.ps_suggest_frequent')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
+                Text($r('app.string.ps_suggest_frequent_sub')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
               }.layoutWeight(1).alignItems(HorizontalAlign.Start);
               Toggle({ type: ToggleType.Switch, isOn: this.suggestFrequent })
                 .selectedColor(COLOR_PRIMARY).enabled(this.actionKey === '')
@@ -555,8 +566,8 @@ struct PrivacySecurityPage {
             this.divider();
             Row({ space: 12 }) {
               Column({ space: 2 }) {
-                Text('显示敏感内容').fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
-                Text('仅在服务器允许时显示此选项').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+                Text($r('app.string.ps_sensitive')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
+                Text($r('app.string.ps_sensitive_sub')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
               }.layoutWeight(1).alignItems(HorizontalAlign.Start);
               Toggle({ type: ToggleType.Switch, isOn: this.ignoreSensitive })
                 .selectedColor(COLOR_PRIMARY).enabled(this.actionKey === '')
@@ -568,10 +579,10 @@ struct PrivacySecurityPage {
             this.divider();
             Row({ space: 9 }) {
               Column({ space: 2 }) {
-                Text('自动删除账号').fontSize(16).fontColor(COLOR_DANGER);
-                Text('长期未登录后永久删除账号数据').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+                Text($r('app.string.ps_delete_account')).fontSize(16).fontColor(COLOR_DANGER);
+                Text($r('app.string.ps_delete_account_sub')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
               }.layoutWeight(1).alignItems(HorizontalAlign.Start);
-              Text(this.choiceLabel(ACCOUNT_TTL, this.accountTtl)).fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
+              Text(this.choiceLabel(accountTtlChoices(), this.accountTtl)).fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
               this.disclosure();
             }
             .width('100%').constraintSize({ minHeight: 60 }).padding({ left: 16, right: 14 })
@@ -581,7 +592,7 @@ struct PrivacySecurityPage {
         }
         .width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS).padding({ bottom: 5 });
 
-        Text('隐私规则按顺序由 Telegram 服务器执行；修改总规则时会完整保留已有例外。')
+        Text($r('app.string.ps_note'))
           .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).lineHeight(18)
           .width('100%').padding({ left: 16, right: 16, bottom: 4 });
       }

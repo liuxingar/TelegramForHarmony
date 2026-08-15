@@ -2,6 +2,7 @@ import { TdClient } from '../tdkit/TdClient';
 import { TdError, TdObject, TdRequest } from '../tdkit/TdTypes';
 import { formatLastSeen } from '../util/formatLastSeen';
 import { ContactItem } from './ContactsStore';
+import { str } from '../util/strings';
 
 const SEARCH_REQUEST_TIMEOUT_MS: number = 4500;
 const RESOLVE_REQUEST_TIMEOUT_MS: number = 3500;
@@ -91,7 +92,7 @@ async function resolvePrivateUser(client: TdClient, chatId: number): Promise<Con
       : formatLastSeen(status, Math.floor(Date.now() / 1000));
     return {
       id: userId,
-      name: name !== '' ? name : (username !== '' ? username : '未命名用户'),
+      name: name !== '' ? name : (username !== '' ? username : str('bu_untitled_user')),
       initials: name !== '' ? name.substring(0, 1).toUpperCase() : '?',
       avatarPath: avatarPath(user, chat),
       statusText: statusText,

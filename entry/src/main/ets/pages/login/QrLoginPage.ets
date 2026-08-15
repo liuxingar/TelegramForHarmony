@@ -4,6 +4,7 @@ import {
   canReturnToPreviousTdAccount, getAuthService, returnToPreviousTdAccount
 } from '../../tdkit/Globals';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import { str } from '../../util/strings';
 
 interface QrLoginStep {
   index: string;
@@ -11,9 +12,9 @@ interface QrLoginStep {
 }
 
 const QR_STEPS: QrLoginStep[] = [
-  { index: '1', text: '在手机上打开 Telegram' },
-  { index: '2', text: '进入 设置 → 设备 → 关联桌面设备' },
-  { index: '3', text: '扫描此二维码并确认登录' }
+  { index: '1', text: str('lg_qr_step1') },
+  { index: '2', text: str('lg_qr_step2') },
+  { index: '3', text: str('lg_qr_step3') }
 ];
 
 const QR_PIXEL_SIZE: number = 400;
@@ -92,7 +93,7 @@ export struct QrLoginPage {
       if (this.code !== null) {
         Image(this.code).width(212).height(212).interpolation(ImageInterpolation.None);
       } else if (this.failed) {
-        Text('二维码生成失败，请改用手机号登录')
+        Text($r('app.string.lg_qr_failed'))
           .fontSize(14).fontColor('#FF3B30')
           .width(212).height(212).textAlign(TextAlign.Center);
       } else {
@@ -109,9 +110,9 @@ export struct QrLoginPage {
   build() {
     Scroll() {
       Column({ space: 16 }) {
-        Text('扫码登录')
+        Text($r('app.string.lg_qr_title'))
           .fontSize(27).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
-        Text('用另一台已登录 Telegram 的设备扫描下方二维码，即可直接登录本机。')
+        Text($r('app.string.lg_qr_body'))
           .fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
           .textAlign(TextAlign.Center).lineHeight(21)
           .padding({ left: 18, right: 18 });
@@ -145,7 +146,7 @@ export struct QrLoginPage {
             .padding({ left: 4, right: 4 });
         }
 
-        Button('改用手机号登录')
+        Button($r('app.string.lg_use_phone'))
           .width('100%').height(50)
           .fontSize(16).fontWeight(FontWeight.Medium)
           .fontColor(COLOR_PRIMARY)
@@ -154,7 +155,7 @@ export struct QrLoginPage {
           .onClick((): void => this.switchToPhoneLogin());
 
         if (canReturnToPreviousTdAccount()) {
-          Button('返回原账号')
+          Button($r('app.string.lg_back_to_account'))
             .width('100%').height(45)
             .fontColor(COLOR_TEXT_SECONDARY)
             .backgroundColor(Color.Transparent)

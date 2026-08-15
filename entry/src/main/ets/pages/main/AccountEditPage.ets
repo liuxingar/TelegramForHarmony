@@ -4,6 +4,8 @@ import { floatingLiveWindow } from '../chat/LiveFloatingWindow';
 import { TdObject, TdRequest, TdError } from '../../tdkit/TdTypes';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
+import { str } from '../../util/strings';
+import { monthDay } from '../../util/intlFormat';
 
 const CARD_BG: ResourceColor = $r('app.color.surface');
 const CARD_RADIUS: number = 14;
@@ -100,7 +102,11 @@ struct AccountEditPage {
       if (birthdate !== undefined) {
         const day = (birthdate['day'] as number | undefined) ?? 0;
         const month = (birthdate['month'] as number | undefined) ?? 0;
-        this.birthday = day > 0 && month > 0 ? `${month}月${day}日` : '';
+        // A birthday has no year, but Intl needs a Date; the year is arbitrary
+        // and never shown. Formatting this by hand would give "3月5日" in
+        // English too — the month/day order itself is locale business.
+        this.birthday = day > 0 && month > 0
+          ? monthDay(new Date(2000, month - 1, day)) : '';
       } else {
         this.birthday = '';
       }
@@ -116,7 +122,7 @@ struct AccountEditPage {
       const error = caught as Error;
       console.error(`AccountEditPage.loadProfile failed: ${error.message}`);
       this.loading = false;
-      this.loadError = '账号资料加载失败';
+      this.loadError = str('settings_profile_failed');
       this.stopSkeletonPulse();
     }
   }
@@ -167,11 +173,11 @@ struct AccountEditPage {
     }
     this.discardDialogOpen = true;
     promptAction.showDialog({
-      title: '放弃修改？',
-      message: '尚未保存的姓名或个人简介将会丢失。',
+      title: $r('app.string.ae_discard_title'),
+      message: $r('app.string.ae_discard_body'),
       buttons: [
-        { text: '继续编辑', color: COLOR_TEXT_SECONDARY as string },
-        { text: '放弃修改', color: '#E64646' }
+        { text: $r('app.string.ae_keep_editing'), color: COLOR_TEXT_SECONDARY as string },
+        { text: $r('app.string.ae_discard'), color: '#E64646' }
       ]
     }).then((result: promptAction.ShowDialogSuccessResponse): void => {
       this.discardDialogOpen = false;
@@ -217,7 +223,7 @@ struct AccountEditPage {
       return;
     }
     if (this.firstName.trim() === '') {
-      promptAction.showToast({ message: '名字不能为空', duration: 1500 });
+      promptAction.showToast({ message: $r('app.string.ae_name_required'), duration: 1500 });
       return;
     }
     this.saveError = '';
@@ -241,16 +247,16 @@ struct AccountEditPage {
     }
     Promise.all(jobs).then(() => {
       this.saving = false;
-      promptAction.showToast({ message: '已保存', duration: 1200 });
+      promptAction.showToast({ message: $r('app.string.saved'), duration: 1200 });
       this.origFirst = this.firstName;
       this.origLast = this.lastName;
       this.origBio = this.bio;
       this.leavePage();
     }).catch((e: TdError) => {
       this.saving = false;
-      this.saveError = '保存未全部完成，请确认当前内容后重试';
+      this.saveError = str('ae_save_partial');
       console.error(`AccountEditPage.save failed: ${e.message}`);
-      promptAction.showToast({ message: '保存失败，请检查网络后重试', duration: 2000 });
+      promptAction.showToast({ message: $r('app.string.ae_save_failed'), duration: 2000 });
     });
   }
 
@@ -259,11 +265,11 @@ struct AccountEditPage {
   private confirmLogout(): void {
     if (this.loggingOut) { return; }
     promptAction.showDialog({
-      title: '退出登录',
-      message: '确定退出当前账号吗？退出后需要重新登录，云端消息不会被删除。',
+      title: $r('app.string.ae_log_out'),
+      message: $r('app.string.ae_log_out_confirm'),
       buttons: [
-        { text: '取消', color: COLOR_TEXT_SECONDARY as string },
-        { text: '退出', color: '#E64646' }
+        { text: $r('app.string.cancel'), color: COLOR_TEXT_SECONDARY as string },
+        { text: $r('app.string.ae_log_out_button'), color: '#E64646' }
       ]
     }).then((result: promptAction.ShowDialogSuccessResponse): void => {
       if (result.index !== 1) { return; }
@@ -281,7 +287,7 @@ struct AccountEditPage {
       .catch((caught: Error): void => {
         this.loggingOut = false;
         console.error(`AccountEditPage.logout failed: ${caught.message}`);
-        promptAction.showToast({ message: '退出登录失败，请重试', duration: 1800 });
+        promptAction.showToast({ message: $r('app.string.ae_log_out_failed'), duration: 1800 });
       });
   }
 
@@ -297,9 +303,9 @@ struct AccountEditPage {
       }
       .width(38).height(38).borderRadius(19).backgroundColor('#18E64646');
       Column({ space: 2 }) {
-        Text(this.loggingOut ? '正在退出…' : '退出登录')
+        Text(this.loggingOut ? $r('app.string.ae_logging_out') : $r('app.string.ae_log_out'))
           .fontSize(16).fontWeight(FontWeight.Medium).fontColor('#E64646');
-        Text('退出当前账号，不会删除云端消息')
+        Text($r('app.string.ae_log_out_sub'))
           .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
       }
       .alignItems(HorizontalAlign.Start)
@@ -310,7 +316,7 @@ struct AccountEditPage {
     .backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
     .margin({ top: 14 })
     .enabled(!this.loggingOut)
-    .accessibilityText('退出当前账号')
+    .accessibilityText($r('app.string.ae_log_out_a11y'))
     .onClick((): void => { this.confirmLogout(); });
   }
 
@@ -349,7 +355,7 @@ struct AccountEditPage {
 
       Row({ space: 10 }) {
         LoadingProgress().width(18).height(18).color(COLOR_PRIMARY);
-        Text('正在安全加载账号资料…')
+        Text($r('app.string.ae_loading_secure'))
           .fontSize(13)
           .fontColor(COLOR_TEXT_SECONDARY);
       }
@@ -362,7 +368,7 @@ struct AccountEditPage {
       duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 640),
       curve: Curve.EaseInOut
     })
-    .accessibilityText('正在加载账号资料')
+    .accessibilityText($r('app.string.settings_profile_loading'))
     .transition(TransitionEffect.OPACITY.animation({
       duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 160),
       curve: Curve.EaseOut
@@ -382,7 +388,7 @@ struct AccountEditPage {
         .fontSize(18)
         .fontWeight(FontWeight.Medium)
         .fontColor(COLOR_TEXT_PRIMARY);
-      Text('没有显示空白表单，避免误操作覆盖原资料')
+      Text($r('app.string.ae_no_blank_form'))
         .fontSize(13)
         .fontColor(COLOR_TEXT_SECONDARY)
         .textAlign(TextAlign.Center);
@@ -390,7 +396,7 @@ struct AccountEditPage {
         SymbolGlyph($r('sys.symbol.arrow_clockwise'))
           .fontSize(15)
           .fontColor([COLOR_PRIMARY]);
-        Text('重新加载')
+        Text($r('app.string.settings_reload'))
           .fontSize(14)
           .fontWeight(FontWeight.Medium)
           .fontColor(COLOR_PRIMARY);
@@ -404,7 +410,7 @@ struct AccountEditPage {
         pressed: this.retryActionPressedStyle
       })
       .enabled(!this.leavingPage)
-      .accessibilityText('重新加载账号资料')
+      .accessibilityText($r('app.string.ae_reload_profile'))
       .onClick((): void => { this.loadProfile(); });
     }
     .layoutWeight(1)
@@ -428,7 +434,7 @@ struct AccountEditPage {
         .fontSize(20)
         .fontColor(['#E64646']);
       Column({ space: 2 }) {
-        Text('保存失败')
+        Text($r('app.string.save_failed'))
           .fontSize(14)
           .fontWeight(FontWeight.Medium)
           .fontColor(COLOR_TEXT_PRIMARY);
@@ -442,7 +448,7 @@ struct AccountEditPage {
         SymbolGlyph($r('sys.symbol.arrow_clockwise'))
           .fontSize(13)
           .fontColor([COLOR_PRIMARY]);
-        Text('重试')
+        Text($r('app.string.settings_retry'))
           .fontSize(13)
           .fontWeight(FontWeight.Medium)
           .fontColor(COLOR_PRIMARY);
@@ -455,7 +461,7 @@ struct AccountEditPage {
         pressed: this.retryActionPressedStyle
       })
       .enabled(!this.saving)
-      .accessibilityText('重新保存账号资料')
+      .accessibilityText($r('app.string.ae_retry_save'))
       .onClick((): void => { this.save(); });
     }
     .width('100%')
@@ -473,7 +479,7 @@ struct AccountEditPage {
   }
 
   @Builder
-  sectionLabel(label: string) {
+  sectionLabel(label: ResourceStr) {
     Text(label).fontSize(15).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
       .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 2 });
   }
@@ -481,7 +487,7 @@ struct AccountEditPage {
   // NOTE: @Builder value parameters are captured at first render and are NOT
   // re-evaluated when @State changes. phone/username/birthday resolve
   // asynchronously, so each row inlines its markup and reads state directly —
-  // passing the value through a builder parameter would freeze it at '未设置'.
+  // passing the value through a builder parameter would freeze it at $r('app.string.not_set').
   @Builder
   phoneRow() {
     Row({ space: 14 }) {
@@ -490,15 +496,15 @@ struct AccountEditPage {
       }
       .width(34).height(34).borderRadius(9).backgroundColor('#34C759');
       Column({ space: 2 }) {
-        Text(this.phone !== '' ? `+${this.phone}` : '未设置').fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
-        Text('手机号码').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+        Text(this.phone !== '' ? `+${this.phone}` : $r('app.string.not_set')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
+        Text($r('app.string.ct_phone')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
       }.alignItems(HorizontalAlign.Start).layoutWeight(1);
       SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(15).fontColor([COLOR_TEXT_SECONDARY]);
     }
     .width('100%').padding({ left: 16, right: 16, top: 9, bottom: 9 })
     .alignItems(VerticalAlign.Center)
     .onClick(() => {
-      promptAction.showToast({ message: '更换手机号需要短信验证，暂未支持', duration: 2000 });
+      promptAction.showToast({ message: $r('app.string.ae_phone_change_unsupported'), duration: 2000 });
     });
   }
 
@@ -510,8 +516,8 @@ struct AccountEditPage {
       }
       .width(34).height(34).borderRadius(9).backgroundColor('#FF9500');
       Column({ space: 2 }) {
-        Text(this.username !== '' ? `@${this.username}` : '未设置').fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
-        Text('用户名（点击修改）').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+        Text(this.username !== '' ? `@${this.username}` : $r('app.string.not_set')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
+        Text($r('app.string.ae_username_tap')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
       }.alignItems(HorizontalAlign.Start).layoutWeight(1);
       SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(15).fontColor([COLOR_TEXT_SECONDARY]);
     }
@@ -531,8 +537,8 @@ struct AccountEditPage {
       }
       .width(34).height(34).borderRadius(9).backgroundColor('#3478F6');
       Column({ space: 2 }) {
-        Text(this.birthday !== '' ? this.birthday : '未设置').fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
-        Text('生日（点击修改）').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+        Text(this.birthday !== '' ? this.birthday : $r('app.string.not_set')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
+        Text($r('app.string.ae_birthday_tap')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
       }.alignItems(HorizontalAlign.Start).layoutWeight(1);
       SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(15).fontColor([COLOR_TEXT_SECONDARY]);
     }
@@ -561,10 +567,10 @@ struct AccountEditPage {
     req['username'] = name;
     getTdClient().send(req).then(() => {
       this.username = name;
-      promptAction.showToast({ message: '用户名已更新', duration: 1500 });
+      promptAction.showToast({ message: $r('app.string.ae_username_updated'), duration: 1500 });
     }).catch((e: TdError) => {
-      const msg = e.message.includes('OCCUPIED') ? '该用户名已被占用'
-        : (e.message.includes('INVALID') ? '用户名格式不正确（5-32 位字母/数字/下划线）' : `修改失败：${e.message}`);
+      const msg = e.message.includes('OCCUPIED') ? $r('app.string.ae_username_taken')
+        : (e.message.includes('INVALID') ? $r('app.string.ae_username_invalid') : str('ae_change_failed', e.message));
       promptAction.showToast({ message: msg, duration: 2200 });
     });
   }
@@ -583,10 +589,10 @@ struct AccountEditPage {
         bd['year'] = d.getFullYear();
         req['birthdate'] = bd;
         getTdClient().send(req).then(() => {
-          this.birthday = `${d.getMonth() + 1}月${d.getDate()}日`;
-          promptAction.showToast({ message: '生日已更新', duration: 1500 });
+          this.birthday = monthDay(d);
+          promptAction.showToast({ message: $r('app.string.ae_birthday_updated'), duration: 1500 });
         }).catch((e: TdError) => {
-          promptAction.showToast({ message: `修改失败：${e.message}`, duration: 2000 });
+          promptAction.showToast({ message: str('ae_change_failed', e.message), duration: 2000 });
         });
       }
     });
@@ -605,9 +611,9 @@ struct AccountEditPage {
           pressed: this.headerActionPressedStyle
         })
         .enabled(!this.saving && !this.leavingPage && !this.discardDialogOpen)
-        .accessibilityText('返回设置')
+        .accessibilityText($r('app.string.back_to_settings'))
         .onClick((): void => { this.requestBack(); });
-        Text('账号').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
+        Text($r('app.string.settings_account')).fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
           .layoutWeight(1);
         if (this.saving) {
           LoadingProgress().width(24).height(24).color(COLOR_PRIMARY);
@@ -624,7 +630,7 @@ struct AccountEditPage {
           .enabled(!this.loading && this.loadError === '' &&
             !this.leavingPage && !this.discardDialogOpen)
           .opacity(!this.loading && this.loadError === '' ? 1 : 0.34)
-          .accessibilityText('保存账号资料')
+          .accessibilityText($r('app.string.ae_save_profile'))
           .onClick((): void => { this.save(); });
         }
       }
@@ -652,8 +658,8 @@ struct AccountEditPage {
 
             // 你的姓名
             Column() {
-              this.sectionLabel('你的姓名');
-              TextInput({ text: this.firstName, placeholder: '名字' })
+              this.sectionLabel($r('app.string.ae_your_name'));
+              TextInput({ text: this.firstName, placeholder: $r('app.string.ct_first_name_short') })
                 .fontSize(17).backgroundColor(Color.Transparent)
                 .padding({ left: 16, right: 16, top: 10, bottom: 10 })
                 .onChange((v: string) => {
@@ -661,7 +667,7 @@ struct AccountEditPage {
                   this.saveError = '';
                 });
               Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 16, right: 16 });
-              TextInput({ text: this.lastName, placeholder: '姓' })
+              TextInput({ text: this.lastName, placeholder: $r('app.string.ct_last_name_short') })
                 .fontSize(17).backgroundColor(Color.Transparent)
                 .padding({ left: 16, right: 16, top: 10, bottom: 10 })
                 .onChange((v: string) => {
@@ -676,7 +682,7 @@ struct AccountEditPage {
             // 个人简介
             Column() {
               Row() {
-                TextInput({ text: this.bio, placeholder: '个人简介' })
+                TextInput({ text: this.bio, placeholder: $r('app.string.ae_bio') })
                   .fontSize(17).backgroundColor(Color.Transparent)
                   .padding({ left: 16, right: 8, top: 12, bottom: 12 })
                   .maxLength(BIO_MAX)
@@ -691,13 +697,13 @@ struct AccountEditPage {
             }
             .width('100%').backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
             .margin({ top: 14 });
-            Text('关于您自己的文字介绍。')
+            Text($r('app.string.ae_bio_hint'))
               .fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
               .width('100%').padding({ left: 24, right: 24, top: 6 });
 
             // 个人信息（只读）
             Column() {
-              this.sectionLabel('个人信息');
+              this.sectionLabel($r('app.string.ae_personal_info'));
               this.phoneRow();
               Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 64 });
               this.usernameRow();
@@ -741,10 +747,10 @@ struct UsernameDialog {
 
   build() {
     Column({ space: 16 }) {
-      Text('修改用户名').fontSize(17).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
+      Text($r('app.string.ae_change_username')).fontSize(17).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
       Row({ space: 4 }) {
         Text('@').fontSize(17).fontColor(COLOR_TEXT_SECONDARY);
-        TextInput({ text: this.input, placeholder: '用户名' })
+        TextInput({ text: this.input, placeholder: $r('app.string.ae_username') })
           .fontSize(17).layoutWeight(1)
           .backgroundColor(Color.Transparent).padding(0)
           .onChange((v: string) => { this.input = v; });
@@ -752,14 +758,14 @@ struct UsernameDialog {
       .width('100%').padding({ left: 14, right: 14, top: 8, bottom: 8 })
       .backgroundColor($r('app.color.surface_alt')).borderRadius(10)
       .alignItems(VerticalAlign.Center);
-      Text('5-32 位，可用字母、数字和下划线')
+      Text($r('app.string.ae_username_rule'))
         .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).width('100%');
       Row({ space: 12 }) {
         Blank().layoutWeight(1);
-        Text('取消').fontSize(16).fontColor(COLOR_TEXT_SECONDARY)
+        Text($r('app.string.cancel')).fontSize(16).fontColor(COLOR_TEXT_SECONDARY)
           .padding({ left: 14, right: 14, top: 8, bottom: 8 })
           .onClick(() => { this.controller?.close(); });
-        Text('保存').fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
+        Text($r('app.string.save')).fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
           .padding({ left: 14, right: 14, top: 8, bottom: 8 })
           .onClick(() => {
             this.controller?.close();

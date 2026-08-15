@@ -1,3 +1,5 @@
+import { str } from './strings';
+
 // What the chat header shows for a conversation whose identity may still be
 // loading, already resolved, or failed to resolve.
 
@@ -30,10 +32,10 @@ export interface ChatHeaderTitleInput {
 // so a named thread lost its name a moment after opening.
 export function chatHeaderTitle(input: ChatHeaderTitleInput): string {
   if (input.forumTopicId > 0) {
-    return input.topicName !== '' ? input.topicName : '话题';
+    return input.topicName !== '' ? input.topicName : str('chat_header_topic');
   }
   if (input.threadRootId > 0) {
-    return input.topicName !== '' ? input.topicName : '评论';
+    return input.topicName !== '' ? input.topicName : str('chat_header_comments');
   }
   return input.chatTitle;
 }
@@ -51,7 +53,7 @@ function headerTitleText(input: ChatHeaderInput): string {
   if (input.title !== '') {
     return input.title;
   }
-  return input.state === 'error' ? '无法读取聊天' : '正在加载';
+  return input.state === 'error' ? str('chat_header_unreadable') : str('chat_header_loading');
 }
 
 function headerSubtitleText(input: ChatHeaderInput): string {
@@ -61,19 +63,19 @@ function headerSubtitleText(input: ChatHeaderInput): string {
     return input.subtitle;
   }
   if (input.state === 'loading') {
-    return '正在获取会话信息…';
+    return str('chat_header_resolving');
   }
   if (input.state === 'error') {
-    return input.loadError !== '' ? input.loadError : '点击重试';
+    return input.loadError !== '' ? input.loadError : str('chat_header_tap_retry');
   }
   if (input.kind === 'channel') {
-    return '频道';
+    return str('chat_header_kind_channel');
   }
   if (input.kind === 'group') {
-    return '群组';
+    return str('chat_header_kind_group');
   }
   if (input.kind === 'secret') {
-    return '加密聊天';
+    return str('chat_header_kind_secret');
   }
-  return 'Telegram 用户';
+  return str('chat_header_kind_user');
 }

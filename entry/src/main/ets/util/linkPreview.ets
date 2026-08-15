@@ -1,3 +1,4 @@
+import { str } from './strings';
 import {
   normalizeTelegramLink, inviteLinkOf, bareUsernameOf,
   chatFolderInviteLinkOf, stickerSetLinkOf
@@ -77,8 +78,8 @@ export function linkPreviewPresentation(url: string, previewType: string,
   const explicitSite: string = siteName.trim();
   if (raw === '') {
     return {
-      kind: 'unavailable', actionLabel: '链接不可用',
-      siteLabel: explicitSite !== '' ? explicitSite : '链接预览',
+      kind: 'unavailable', actionLabel: str('link_preview_unavailable'),
+      siteLabel: explicitSite !== '' ? explicitSite : str('link_preview_title'),
       isTelegram: false, actionable: false
     };
   }
@@ -87,35 +88,35 @@ export function linkPreviewPresentation(url: string, previewType: string,
   if (!telegram) {
     const domain: string = linkPreviewDomain(raw);
     return {
-      kind: 'web', actionLabel: '打开网页',
-      siteLabel: explicitSite !== '' ? explicitSite : (domain !== '' ? domain : '网页链接'),
+      kind: 'web', actionLabel: str('link_preview_open_web'),
+      siteLabel: explicitSite !== '' ? explicitSite : (domain !== '' ? domain : str('link_preview_web_link')),
       isTelegram: false, actionable: true
     };
   }
   if (chatFolderInviteLinkOf(raw) !== '') {
     return {
-      kind: 'telegramResource', actionLabel: '查看聊天文件夹',
+      kind: 'telegramResource', actionLabel: str('link_preview_open_folder'),
       siteLabel: explicitSite !== '' ? explicitSite : 'Telegram',
       isTelegram: true, actionable: true
     };
   }
   if (stickerSetLinkOf(raw) !== null) {
     return {
-      kind: 'telegramResource', actionLabel: '查看贴纸包',
+      kind: 'telegramResource', actionLabel: str('link_preview_open_stickers'),
       siteLabel: explicitSite !== '' ? explicitSite : 'Telegram',
       isTelegram: true, actionable: true
     };
   }
   if (inviteLinkOf(raw) !== '') {
     return {
-      kind: 'telegramInvite', actionLabel: '查看邀请详情',
+      kind: 'telegramInvite', actionLabel: str('link_preview_open_invite'),
       siteLabel: explicitSite !== '' ? explicitSite : 'Telegram',
       isTelegram: true, actionable: true
     };
   }
   if (isTelegramMessageLink(raw, previewType)) {
     return {
-      kind: 'telegramMessage', actionLabel: '查看消息',
+      kind: 'telegramMessage', actionLabel: str('link_preview_open_message'),
       siteLabel: explicitSite !== '' ? explicitSite : 'Telegram',
       isTelegram: true, actionable: true
     };
@@ -123,7 +124,7 @@ export function linkPreviewPresentation(url: string, previewType: string,
   const directUsername: string = bareUsernameOf(raw);
   return {
     kind: directUsername !== '' ? 'telegramChat' : 'telegramResource',
-    actionLabel: directUsername !== '' ? '查看频道或资料' : '在 Telegram 中打开',
+    actionLabel: directUsername !== '' ? str('link_preview_open_profile') : str('link_preview_open_in_telegram'),
     siteLabel: explicitSite !== '' ? explicitSite : 'Telegram',
     isTelegram: true, actionable: true
   };

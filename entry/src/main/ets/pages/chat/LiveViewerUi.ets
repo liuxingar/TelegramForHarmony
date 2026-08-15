@@ -27,11 +27,11 @@ export function confirmLeaveLiveStream(
   onConfirm: () => void, onDismiss: () => void = (): void => {}
 ): void {
   promptAction.showDialog({
-    title: '退出直播？',
-    message: '退出后将停止接收当前直播的音视频，可从频道或群组中重新进入。',
+    title: $r('app.string.lv_leave_title'),
+    message: $r('app.string.lv_leave_body'),
     buttons: [
-      { text: '继续观看', color: SECONDARY_TEXT },
-      { text: '退出直播', color: EXIT_RED }
+      { text: $r('app.string.lv_keep_watching'), color: SECONDARY_TEXT },
+      { text: $r('app.string.lv_leave'), color: EXIT_RED }
     ]
   }).then((result: promptAction.ShowDialogSuccessResponse): void => {
     if (result.index === 1) { onConfirm(); }
@@ -43,12 +43,12 @@ export function confirmAdminLeaveLiveStream(
   onLeave: () => void, onEnd: () => void, onDismiss: () => void = (): void => {}
 ): void {
   promptAction.showDialog({
-    title: '管理直播',
-    message: '退出直播只会断开本机；结束直播会关闭直播间并断开所有成员。',
+    title: $r('app.string.lv_manage'),
+    message: $r('app.string.lv_manage_body'),
     buttons: [
-      { text: '继续直播', color: SECONDARY_TEXT },
-      { text: '退出直播', color: LEAVE_BLUE },
-      { text: '结束直播', color: EXIT_RED }
+      { text: $r('app.string.lv_keep_streaming'), color: SECONDARY_TEXT },
+      { text: $r('app.string.lv_leave'), color: LEAVE_BLUE },
+      { text: $r('app.string.lv_end'), color: EXIT_RED }
     ]
   }).then((result: promptAction.ShowDialogSuccessResponse): void => {
     if (result.index === 1) {

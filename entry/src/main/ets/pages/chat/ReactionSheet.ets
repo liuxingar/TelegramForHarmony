@@ -168,7 +168,7 @@ export struct ReactionSheet {
   customEmojiSection() {
     Column({ space: 6 }) {
       Row() {
-        Text('自定义表情').fontSize(13).fontColor(COLOR_TEXT_SECONDARY).layoutWeight(1);
+        Text($r('app.string.rs_custom_emoji')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY).layoutWeight(1);
       }
       .width('100%').padding({ left: 6, right: 6 });
       Scroll() {
@@ -194,7 +194,7 @@ export struct ReactionSheet {
               pressed: this.rowPressedStyle
             })
             .animation({ duration: this.reactionEffectDuration(130), curve: Curve.EaseOut })
-            .accessibilityText('自定义表情回应')
+            .accessibilityText($r('app.string.rs_custom_reaction'))
             .onClick(() => { this.pick(customEmojiReactionKey(option.id)); });
           }, (option: CustomEmojiOption) => `ce_${option.id}_${option.path}`);
         }.width('100%');
@@ -210,9 +210,9 @@ export struct ReactionSheet {
       Column({ space: 8 }) {
         Row().width(40).height(4).borderRadius(2).backgroundColor('#D0D0D0');
         Row() {
-          Text('选择表情回应').fontSize(16).fontColor(COLOR_TEXT_PRIMARY).fontWeight(FontWeight.Medium)
+          Text($r('app.string.rs_pick_reaction')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY).fontWeight(FontWeight.Medium)
             .layoutWeight(1);
-          Text('再次点击可取消')
+          Text($r('app.string.rs_tap_again'))
             .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
         }
         .width('100%').padding({ left: 6, right: 6 });

@@ -10,13 +10,14 @@ import {
   KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration
 } from '../../store/AppSettings';
 import {
-  FOLDER_COLORS, FOLDER_ICON_OPTIONS, FolderIconOption, folderColor, folderSymbol
+  FOLDER_COLORS, folderIconOptions, FolderIconOption, folderColor, folderSymbol
 } from '../../util/FolderVisuals';
 import { AvatarView } from '../chatlist/AvatarView';
 import {
   COLOR_DIVIDER, COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE,
   COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
+import { plural, str } from '../../util/strings';
 
 const CARD_RADIUS: number = 14;
 const PICK_INCLUDE: string = 'include';
@@ -130,7 +131,7 @@ struct FolderEditPage {
     }).catch((error: TdError): void => {
       if (!this.active || sequence !== this.loadSequence) { return; }
       this.loadState = 'error';
-      this.warning = '读取文件夹失败，未加载成功前不会覆盖原设置';
+      this.warning = str('fe_load_failed');
       console.error(`FolderEditPage.load failed: ${error.message}`);
     });
   }
@@ -212,16 +213,16 @@ struct FolderEditPage {
 
   private validate(): string {
     const title = this.name.trim();
-    if (title.length === 0) { return '请填写文件夹名称'; }
-    if (title.length > NAME_MAX || title.indexOf('\n') >= 0) { return '文件夹名称最多 12 个字符且不能换行'; }
-    if (!this.hasAnyFilter()) { return '至少要包含一个聊天或一类聊天'; }
+    if (title.length === 0) { return str('fe_name_required'); }
+    if (title.length > NAME_MAX || title.indexOf('\n') >= 0) { return str('fe_name_rule'); }
+    if (!this.hasAnyFilter()) { return str('fe_need_one'); }
     if (this.chosenChatCount() > this.limits.chosenChatCount) {
-      return `单独选择的聊天不能超过 ${this.limits.chosenChatCount} 个`;
+      return plural('fe_chosen_limit', this.limits.chosenChatCount, this.limits.chosenChatCount);
     }
     if (this.base.isShareable && (this.excluded.length > 0 || this.excludeMuted || this.excludeRead ||
       this.excludeArchived || this.includeContacts || this.includeNonContacts || this.includeBots ||
       this.includeGroups || this.includeChannels)) {
-      return '共享文件夹只能包含明确添加的聊天，请先删除共享链接再使用类型规则';
+      return str('fe_shared_explicit_only');
     }
     return '';
   }
@@ -248,7 +249,7 @@ struct FolderEditPage {
         this.included = this.included.filter(keep);
         this.excluded = this.excluded.filter(keep);
         promptAction.showToast({
-          message: `已移除 ${invalid.length} 个不在会话列表中的聊天`, duration: 2200
+          message: plural('fe_removed_invalid', invalid.length, invalid.length), duration: 2200
         });
         if (folder.pinnedChatIds.length === 0 && folder.includedChatIds.length === 0 &&
           !folder.includeContacts && !folder.includeNonContacts && !folder.includeBots &&
@@ -273,7 +274,7 @@ struct FolderEditPage {
         includeChannels: folder.includeChannels
       };
       this.originalSignature = this.signature();
-      promptAction.showToast({ message: folder.id === 0 ? '文件夹已创建' : '已保存', duration: 1500 });
+      promptAction.showToast({ message: folder.id === 0 ? $r('app.string.fe_created') : $r('app.string.saved'), duration: 1500 });
       router.back();
     }).catch((error: TdError): void => {
       if (!this.active) { return; }
@@ -285,24 +286,24 @@ struct FolderEditPage {
 
   private folderErrorMessage(error: TdError): string {
     if (error.message === 'FOLDER_EMPTY_AFTER_CLEANUP') {
-      return '移除无效聊天后文件夹为空，请重新选择聊天或规则';
+      return str('fe_empty_after_cleanup');
     }
     if (error.message.indexOf('CHATLISTS_TOO_MUCH') >= 0 || error.message.indexOf('FOLDER') >= 0 &&
-      error.message.indexOf('TOO_MUCH') >= 0) { return '已达到当前账号的文件夹数量上限'; }
-    if (error.message.indexOf('CHATLISTS_CHATS_TOO_MUCH') >= 0) { return '文件夹中单独选择的聊天过多'; }
-    if (error.message.indexOf('PREMIUM') >= 0) { return '该颜色或标签能力需要 Telegram Premium'; }
+      error.message.indexOf('TOO_MUCH') >= 0) { return str('cf_limit_reached'); }
+    if (error.message.indexOf('CHATLISTS_CHATS_TOO_MUCH') >= 0) { return str('fe_too_many_chosen'); }
+    if (error.message.indexOf('PREMIUM') >= 0) { return str('fe_needs_premium'); }
     if (error.message.indexOf('not in the chat list') >= 0) {
-      return '有所选聊天不在会话列表中（例如未加入的频道或群组），请从文件夹中移除后再保存';
+      return str('fe_chat_not_in_list');
     }
-    return '保存失败，输入内容已保留，请稍后重试';
+    return str('fe_save_failed');
   }
 
   private confirmDiscard(): void {
     promptAction.showDialog({
-      title: '放弃修改？', message: '尚未保存的文件夹设置会丢失。',
+      title: $r('app.string.ae_discard_title'), message: $r('app.string.fe_discard_body'),
       buttons: [
-        { text: '继续编辑', color: COLOR_TEXT_SECONDARY as string },
-        { text: '放弃', color: '#E64646' }
+        { text: $r('app.string.ae_keep_editing'), color: COLOR_TEXT_SECONDARY as string },
+        { text: $r('app.string.discard'), color: '#E64646' }
       ]
     }).then((result: promptAction.ShowDialogSuccessResponse): void => {
       if (result.index === 1) { this.originalSignature = this.signature(); router.back(); }
@@ -359,7 +360,7 @@ struct FolderEditPage {
 
   private summary(id: number): FolderChatSummary {
     return this.chatSummaries.get(id) ?? {
-      id, title: `聊天 ${id}`, initials: '?', avatarPath: '', kind: 'private'
+      id, title: str('fe_chat_id', id), initials: '?', avatarPath: '', kind: 'private'
     };
   }
 
@@ -419,14 +420,14 @@ struct FolderEditPage {
       }
     } else if (this.pickerMode === PICK_INCLUDE) {
       if (this.excluded.indexOf(id) < 0 && this.chosenChatCount() >= this.limits.chosenChatCount) {
-        promptAction.showToast({ message: `最多选择 ${this.limits.chosenChatCount} 个聊天`, duration: 1800 });
+        promptAction.showToast({ message: plural('fe_pick_limit', this.limits.chosenChatCount, this.limits.chosenChatCount), duration: 1800 });
         return;
       }
       this.included = [...this.included, id];
       this.excluded = this.excluded.filter((value: number): boolean => value !== id);
     } else {
       if (this.included.indexOf(id) < 0 && this.chosenChatCount() >= this.limits.chosenChatCount) {
-        promptAction.showToast({ message: `最多选择 ${this.limits.chosenChatCount} 个聊天`, duration: 1800 });
+        promptAction.showToast({ message: plural('fe_pick_limit', this.limits.chosenChatCount, this.limits.chosenChatCount), duration: 1800 });
         return;
       }
       this.excluded = [...this.excluded, id];
@@ -442,16 +443,16 @@ struct FolderEditPage {
   }
 
   private kindLabel(kind: string): string {
-    if (kind === 'channel') { return '频道'; }
-    if (kind === 'basicGroup' || kind === 'supergroup') { return '群组'; }
-    if (kind === 'secret') { return '秘密聊天'; }
-    return '私聊';
+    if (kind === 'channel') { return str('gn_channel'); }
+    if (kind === 'basicGroup' || kind === 'supergroup') { return str('gn_group'); }
+    if (kind === 'secret') { return str('storage_secret'); }
+    return str('ns_private');
   }
 
   private openShareLinks(): void {
     if (this.saving) { return; }
     if (this.isDirty()) {
-      promptAction.showToast({ message: '请先保存文件夹修改，再管理共享链接', duration: 1900 });
+      promptAction.showToast({ message: $r('app.string.fe_save_before_links'), duration: 1900 });
       return;
     }
     const params: Record<string, Object> = { 'folderId': this.folderId, 'title': this.name.trim() };
@@ -466,16 +467,16 @@ struct FolderEditPage {
         .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
         .onClick((): void => this.requestBack());
       Column({ space: 1 }) {
-        Text(this.folderId === 0 ? '新建文件夹' : '编辑文件夹')
+        Text(this.folderId === 0 ? $r('app.string.fe_new') : $r('app.string.cf_edit'))
           .fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
-        Text(this.previewState === 'ready' ? `预计约 ${this.previewCount} 个聊天` :
-          (this.previewState === 'loading' ? '正在计算范围…' : '设置包含与排除规则'))
+        Text(this.previewState === 'ready' ? plural('fe_preview_count', this.previewCount, this.previewCount) :
+          (this.previewState === 'loading' ? $r('app.string.fe_counting') : $r('app.string.fe_set_rules')))
           .fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
       if (this.saving) {
         LoadingProgress().width(19).height(19).color(COLOR_PRIMARY).margin({ right: 12 });
       } else {
-        Text('保存').fontSize(16).fontWeight(FontWeight.Medium)
+        Text($r('app.string.save')).fontSize(16).fontWeight(FontWeight.Medium)
           .fontColor(this.loadState === 'ready' && this.isDirty() ? COLOR_PRIMARY : COLOR_TEXT_SECONDARY)
           .width(52).height(40).textAlign(TextAlign.Center)
           .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
@@ -498,16 +499,16 @@ struct FolderEditPage {
   loadError() {
     Column({ space: 12 }) {
       Text('📁').fontSize(44);
-      Text('无法读取这个文件夹').fontSize(18).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-      Text('原设置不会被覆盖，可以重新加载或返回。').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
-      Text('重新加载').fontSize(15).fontColor(Color.White).fontWeight(FontWeight.Medium)
+      Text($r('app.string.fe_unreadable')).fontSize(18).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+      Text($r('app.string.fe_unreadable_sub')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+      Text($r('app.string.settings_reload')).fontSize(15).fontColor(Color.White).fontWeight(FontWeight.Medium)
         .padding({ left: 22, right: 22, top: 10, bottom: 10 }).backgroundColor(COLOR_PRIMARY).borderRadius(18)
         .stateStyles({ normal: this.pressNormal, pressed: this.pressDown }).onClick((): void => this.loadFolder());
     }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
   }
 
   @Builder
-  sectionTitle(title: string, subtitle: string = '') {
+  sectionTitle(title: ResourceStr, subtitle: ResourceStr = '') {
     Column({ space: 2 }) {
       Text(title).fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_SECONDARY).width('100%');
       if (subtitle !== '') { Text(subtitle).fontSize(11).fontColor(COLOR_TEXT_SECONDARY).width('100%'); }
@@ -525,7 +526,7 @@ struct FolderEditPage {
           .width(50).height(50).borderRadius(16).justifyContent(FlexAlign.Center)
           .backgroundColor(`${folderColor(this.colorId)}20`);
         Column({ space: 4 }) {
-          TextInput({ placeholder: '文件夹名称', text: this.name })
+          TextInput({ placeholder: $r('app.string.fe_name'), text: this.name })
             .fontSize(17).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY)
             .backgroundColor(Color.Transparent).padding(0).maxLength(NAME_MAX)
             .onChange((value: string): void => { this.name = value.replace(/\n/g, ''); this.warning = ''; });
@@ -534,7 +535,7 @@ struct FolderEditPage {
         }.layoutWeight(1).alignItems(HorizontalAlign.Start);
       }.width('100%');
       Divider().strokeWidth(0.5).color(COLOR_DIVIDER);
-      Text('图标').fontSize(12).fontColor(COLOR_TEXT_SECONDARY).width('100%');
+      Text($r('app.string.fe_icon')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY).width('100%');
       Scroll() {
         Row({ space: 9 }) {
           Column({ space: 3 }) {
@@ -544,9 +545,9 @@ struct FolderEditPage {
             }.width(42).height(42).borderRadius(14)
               .justifyContent(FlexAlign.Center).backgroundColor(this.iconName === '' ? '#225B8FF9' : COLOR_PAGE_BG)
               .border({ width: this.iconName === '' ? 1.5 : 0, color: COLOR_PRIMARY });
-            Text('自动').fontSize(10).fontColor(this.iconName === '' ? COLOR_PRIMARY : COLOR_TEXT_SECONDARY);
+            Text($r('app.string.fe_auto')).fontSize(10).fontColor(this.iconName === '' ? COLOR_PRIMARY : COLOR_TEXT_SECONDARY);
           }.onClick((): void => { this.iconName = ''; this.refreshDefaultIcon(); });
-          ForEach(FOLDER_ICON_OPTIONS, (option: FolderIconOption) => {
+          ForEach(folderIconOptions(), (option: FolderIconOption) => {
             Column({ space: 3 }) {
               Row() {
                 SymbolGlyph(option.symbol).fontSize(20)
@@ -561,7 +562,7 @@ struct FolderEditPage {
       }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).width('100%');
       if (getFolderStore().areTagsEnabled()) {
         Divider().strokeWidth(0.5).color(COLOR_DIVIDER);
-        Text('标签颜色').fontSize(12).fontColor(COLOR_TEXT_SECONDARY).width('100%');
+        Text($r('app.string.fe_tag_colour')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY).width('100%');
         Row({ space: 12 }) {
           Row() { SymbolGlyph($r('sys.symbol.xmark')).fontSize(14).fontColor([COLOR_TEXT_SECONDARY]); }
             .width(30).height(30).borderRadius(15).justifyContent(FlexAlign.Center)
@@ -592,7 +593,7 @@ struct FolderEditPage {
   }
 
   @Builder
-  toggleRow(title: string, subtitle: string, kind: string) {
+  toggleRow(title: ResourceStr, subtitle: ResourceStr, kind: string) {
     Row({ space: 12 }) {
       Column({ space: 2 }) {
         Text(title).fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
@@ -627,7 +628,7 @@ struct FolderEditPage {
   }
 
   @Builder
-  addRow(title: string, mode: string) {
+  addRow(title: ResourceStr, mode: string) {
     Row({ space: 10 }) {
       SymbolGlyph($r('sys.symbol.plus_circle')).fontSize(19).fontColor([COLOR_PRIMARY]);
       Text(title).fontSize(16).fontColor(COLOR_PRIMARY).layoutWeight(1);
@@ -644,42 +645,42 @@ struct FolderEditPage {
       if (this.base.isShareable) {
         Row({ space: 8 }) {
           Text('🔗').fontSize(16);
-          Text('共享文件夹只能使用明确添加的聊天').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.fe_shared_note')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
         }.width('100%').padding(14).backgroundColor('#105B8FF9');
       } else {
-        this.toggleRow('联系人', '所有联系人私聊', 'contacts');
+        this.toggleRow($r('app.string.tab_contacts'), $r('app.string.fe_contacts_sub'), 'contacts');
         Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
-        this.toggleRow('非联系人', '尚未保存为联系人的私聊', 'nonContacts');
+        this.toggleRow($r('app.string.fe_non_contacts'), $r('app.string.fe_non_contacts_sub'), 'nonContacts');
         Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
-        this.toggleRow('群组', '基础群组和超级群组', 'groups');
+        this.toggleRow($r('app.string.gn_group'), $r('app.string.fe_groups_sub'), 'groups');
         Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
-        this.toggleRow('频道', '订阅的广播频道', 'channels');
+        this.toggleRow($r('app.string.gn_channel'), $r('app.string.fe_channels_sub'), 'channels');
         Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
-        this.toggleRow('机器人', '与机器人的私聊', 'bots');
+        this.toggleRow($r('app.string.fe_bots'), $r('app.string.fe_bots_sub'), 'bots');
       }
       ForEach(this.included, (id: number) => {
         Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 58 });
         this.selectedChatRow(id, true);
       }, (id: number): string => `include_${id}`);
       Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
-      this.addRow('添加聊天', PICK_INCLUDE);
+      this.addRow($r('app.string.fe_add_chats'), PICK_INCLUDE);
     }.width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS).clip(true);
   }
 
   @Builder
   excludeCard() {
     Column() {
-      this.toggleRow('已静音', '排除关闭通知的聊天', 'muted');
+      this.toggleRow($r('app.string.gn_muted'), $r('app.string.fe_muted_sub'), 'muted');
       Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
-      this.toggleRow('已读', '只保留仍有未读消息的聊天', 'read');
+      this.toggleRow($r('app.string.fe_read'), $r('app.string.fe_read_sub'), 'read');
       Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
-      this.toggleRow('已归档', '排除归档列表中的聊天', 'archived');
+      this.toggleRow($r('app.string.fe_archived'), $r('app.string.fe_archived_sub'), 'archived');
       ForEach(this.excluded, (id: number) => {
         Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 58 });
         this.selectedChatRow(id, false);
       }, (id: number): string => `exclude_${id}`);
       Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
-      this.addRow('添加要排除的聊天', PICK_EXCLUDE);
+      this.addRow($r('app.string.fe_add_excluded'), PICK_EXCLUDE);
     }.width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS).clip(true)
       .opacity(this.base.isShareable ? 0.48 : 1).enabled(!this.base.isShareable);
   }
@@ -690,8 +691,8 @@ struct FolderEditPage {
       Row() { Text('🔗').fontSize(20); }.width(42).height(42).borderRadius(14)
         .justifyContent(FlexAlign.Center).backgroundColor('#165B8FF9');
       Column({ space: 3 }) {
-        Text('共享文件夹').fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-        Text(this.base.isShareable ? '管理共享链接和新增聊天' : '为明确添加的群组或频道创建链接')
+        Text($r('app.string.fl_title')).fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+        Text(this.base.isShareable ? $r('app.string.fe_manage_links') : $r('app.string.fe_create_link_sub'))
           .fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
       SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(16).fontColor([COLOR_TEXT_SECONDARY]);
@@ -716,14 +717,14 @@ struct FolderEditPage {
     Scroll() {
       Column({ space: 14 }) {
         this.warningBar();
-        this.sectionTitle('名称和外观');
+        this.sectionTitle($r('app.string.fe_name_and_look'));
         this.identityCard();
-        this.sectionTitle('包含的聊天', this.base.isShareable ? '共享文件夹仅支持明确添加' : '类型规则和单独聊天可以同时使用');
+        this.sectionTitle($r('app.string.fe_included'), this.base.isShareable ? $r('app.string.fe_included_shared_note') : $r('app.string.fe_included_sub'));
         this.includeCard();
-        this.sectionTitle('排除的聊天', '单独排除优先于包含规则');
+        this.sectionTitle($r('app.string.fe_excluded'), $r('app.string.fe_excluded_sub'));
         this.excludeCard();
         if (this.folderId > 0) {
-          this.sectionTitle('共享');
+          this.sectionTitle($r('app.string.share'));
           this.shareCard();
         }
       }.width('100%').padding({ left: 12, right: 12, top: 4, bottom: this.bottomSafe + 28 });
@@ -735,19 +736,19 @@ struct FolderEditPage {
     Column() {
       Row({ space: 8 }) {
         Column({ space: 2 }) {
-          Text(this.pickerMode === PICK_INCLUDE ? '添加聊天' : '排除聊天')
+          Text(this.pickerMode === PICK_INCLUDE ? $r('app.string.fe_add_chats') : $r('app.string.fe_exclude_chats'))
             .fontSize(19).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
-          Text(`已选择 ${this.pickerMode === PICK_INCLUDE ? this.included.length : this.excluded.length} 个`)
+          Text(plural('fe_selected_count', this.pickerMode === PICK_INCLUDE ? this.included.length : this.excluded.length, this.pickerMode === PICK_INCLUDE ? this.included.length : this.excluded.length))
             .fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
         }.layoutWeight(1).alignItems(HorizontalAlign.Start);
-        Text('完成').fontSize(15).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
+        Text($r('app.string.done')).fontSize(15).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
           .width(52).height(38).textAlign(TextAlign.Center)
           .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
           .onClick((): void => { this.pickerOpen = false; this.pickerQuery = ''; });
       }.width('100%').padding({ left: 16, right: 10, top: 12, bottom: 8 });
       Row({ space: 8 }) {
         SymbolGlyph($r('sys.symbol.magnifyingglass')).fontSize(17).fontColor([COLOR_TEXT_SECONDARY]);
-        TextInput({ placeholder: '搜索聊天、群组或频道', text: this.pickerQuery })
+        TextInput({ placeholder: $r('app.string.fe_search_hint'), text: this.pickerQuery })
           .fontSize(15).layoutWeight(1).backgroundColor(Color.Transparent).padding(0)
           .onChange((value: string): void => this.schedulePickerSearch(value));
         if (this.pickerState === 'loading') { LoadingProgress().width(17).height(17).color(COLOR_PRIMARY); }
@@ -755,15 +756,15 @@ struct FolderEditPage {
         .backgroundColor(COLOR_PAGE_BG).borderRadius(14);
       if (this.pickerState === 'error') {
         Column({ space: 10 }) {
-          Text('搜索暂时失败').fontSize(15).fontColor(COLOR_TEXT_PRIMARY);
-          Text('重新搜索').fontSize(14).fontColor(COLOR_PRIMARY)
+          Text($r('app.string.fe_search_failed')).fontSize(15).fontColor(COLOR_TEXT_PRIMARY);
+          Text($r('app.string.fe_search_again')).fontSize(14).fontColor(COLOR_PRIMARY)
             .onClick((): void => this.runPickerSearch(this.pickerQuery));
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else if (this.pickerState === 'empty') {
         Column({ space: 7 }) {
           Text('🔍').fontSize(36);
-          Text('没有找到聊天').fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
-          Text('可以尝试群组名称或公开用户名').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.fe_no_chats')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
+          Text($r('app.string.fe_no_chats_sub')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else {
         List() {
@@ -790,7 +791,7 @@ struct FolderEditPage {
           }, (chat: FolderChatSummary): string => `picker_${chat.id}`);
         }.layoutWeight(1).width('100%').scrollBar(BarState.Off);
       }
-      Text('选择会立即保留，点击完成返回编辑页').fontSize(11).fontColor(COLOR_TEXT_SECONDARY)
+      Text($r('app.string.fe_picker_note')).fontSize(11).fontColor(COLOR_TEXT_SECONDARY)
         .padding({ top: 8, bottom: this.bottomSafe + 10 });
     }.width('100%').height('100%');
   }

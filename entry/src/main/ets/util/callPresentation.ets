@@ -1,15 +1,17 @@
+import { str } from './strings';
+
 // 1对1 通话页的展示纯函数（可单测）。
 
 // 通话中（active）与空闲不显示状态行，由计时/无内容代替。
 export function callPhaseLabel(phase: string, isVideo: boolean): string {
   if (phase === 'dialing') {
-    return '正在呼叫…';
+    return str('call_state_dialing');
   }
   if (phase === 'ringing') {
-    return isVideo ? '视频来电' : '语音来电';
+    return str(isVideo ? 'call_state_incoming_video' : 'call_state_incoming_voice');
   }
   if (phase === 'connecting') {
-    return '连接中…';
+    return str('call_state_connecting');
   }
   return '';
 }
@@ -32,16 +34,16 @@ export function callDurationLabel(startedAtMs: number, nowMs: number): string {
 
 export function callEndLabel(reason: string, errorText: string): string {
   if (reason === 'declined') {
-    return '对方已拒绝';
+    return str('call_ended_declined');
   }
   if (reason === 'missed') {
-    return '未接听';
+    return str('call_ended_missed');
   }
   if (reason === 'busy') {
-    return '对方忙线中';
+    return str('call_ended_busy');
   }
   if (reason === 'error') {
-    return errorText !== '' ? errorText : '通话失败';
+    return errorText !== '' ? errorText : str('call_ended_failed');
   }
-  return '通话已结束';
+  return str('call_ended_normal');
 }

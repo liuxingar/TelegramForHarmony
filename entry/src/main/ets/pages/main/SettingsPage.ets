@@ -16,6 +16,8 @@ import {
 import { floatingLiveWindow } from '../chat/LiveFloatingWindow';
 import { STORAGE_UPDATE_AVAILABLE } from '../../services/UpdateChecker';
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
+import { str } from '../../util/strings';
 
 const CARD_BG: ResourceColor = $r('app.color.surface');
 const CARD_RADIUS: number = 14;
@@ -39,56 +41,65 @@ interface SettingGroup {
 
 // 账号 opens the same editor as 个人资料 → 编辑信息 (name, bio, username,
 // birthday) — one page, two entry points, as in the official clients.
-const SETTING_GROUPS: SettingGroup[] = [
+// A function, not a const: the labels come from str(), which resolves when it
+// is called. A module-level array would be built the first time this module is
+// imported — before the string source is installed — and would then keep that
+// language forever. They are plain strings rather than $r() because the search
+// box below filters on them, and a Resource cannot be compared or lowercased.
+function settingGroups(): SettingGroup[] {
+  return [
   {
-    title: '账号与聊天',
+    title: str('settings_group_account'),
     items: [
-      { icon: 'sys.symbol.person_fill', bg: '#3478F6', title: '账号', subtitle: '电话、用户名与简介',
+      { icon: 'sys.symbol.person_fill', bg: '#3478F6', title: str('settings_account'), subtitle: str('settings_account_sub'),
         page: 'pages/main/AccountEditPage' },
-      { icon: 'sys.symbol.message_fill', bg: '#FF9500', title: '聊天设置',
-        subtitle: '字号、圆角、夜间模式与动画效果', page: 'pages/main/ChatSettingsPage' },
-      { icon: 'sys.symbol.paintpalette', bg: '#FF2D55', title: '强调色',
-        subtitle: '名字颜色与资料页配色', page: 'pages/main/AccentColorPage' },
-      { icon: 'sys.symbol.face_smiling', bg: '#AF52DE', title: '贴纸包',
-        subtitle: '管理、排序与归档贴纸包', page: 'pages/main/StickerSetsPage' },
-      { icon: 'sys.symbol.star', bg: '#FFCC00', title: '表情状态',
-        subtitle: '名字旁的动态表情（Premium）', page: 'pages/main/EmojiStatusPage' },
-      { icon: 'sys.symbol.folder_fill', bg: '#34AADC', title: '聊天文件夹',
-        subtitle: '将聊天分类到文件夹中', page: 'pages/main/ChatFoldersPage' },
-      { icon: 'sys.symbol.bell_fill', bg: '#FF3B30', title: '通知',
-        subtitle: '私聊、群组与频道的默认通知', page: 'pages/main/NotificationSettingsPage' }
+      { icon: 'sys.symbol.message_fill', bg: '#FF9500', title: str('settings_chat'),
+        subtitle: str('settings_chat_sub'), page: 'pages/main/ChatSettingsPage' },
+      { icon: 'sys.symbol.paintpalette', bg: '#FF2D55', title: str('settings_accent'),
+        subtitle: str('settings_accent_sub'), page: 'pages/main/AccentColorPage' },
+      { icon: 'sys.symbol.face_smiling', bg: '#AF52DE', title: str('settings_stickers'),
+        subtitle: str('settings_stickers_sub'), page: 'pages/main/StickerSetsPage' },
+      { icon: 'sys.symbol.star', bg: '#FFCC00', title: str('settings_emoji_status'),
+        subtitle: str('settings_emoji_status_sub'), page: 'pages/main/EmojiStatusPage' },
+      { icon: 'sys.symbol.folder_fill', bg: '#34AADC', title: str('settings_folders'),
+        subtitle: str('settings_folders_sub'), page: 'pages/main/ChatFoldersPage' },
+      { icon: 'sys.symbol.bell_fill', bg: '#FF3B30', title: str('settings_notifications'),
+        subtitle: str('settings_notifications_sub'), page: 'pages/main/NotificationSettingsPage' },
+      { icon: 'sys.symbol.translate', bg: '#5856D6', title: str('language_title'),
+        subtitle: str('settings_language_sub'), page: 'pages/main/LanguagePage' }
     ]
   },
   {
-    title: '隐私与设备',
+    title: str('settings_group_privacy'),
     items: [
-      { icon: 'sys.symbol.lock_fill', bg: '#34C759', title: '隐私与安全',
-        subtitle: '最后上线时间、屏蔽名单、登录设备', page: 'pages/main/PrivacySecurityPage' },
-      { icon: 'sys.symbol.computer', bg: '#5AC8FA', title: '设备',
-        subtitle: '管理已连接的设备', page: 'pages/main/ActiveSessionsPage' }
+      { icon: 'sys.symbol.lock_fill', bg: '#34C759', title: str('settings_privacy'),
+        subtitle: str('settings_privacy_sub'), page: 'pages/main/PrivacySecurityPage' },
+      { icon: 'sys.symbol.computer', bg: '#5AC8FA', title: str('settings_devices'),
+        subtitle: str('settings_devices_sub'), page: 'pages/main/ActiveSessionsPage' }
     ]
   },
   {
-    title: '存储与性能',
+    title: str('settings_group_storage'),
     items: [
-      { icon: 'sys.symbol.data_proportion', bg: '#007AFF', title: '数据与存储',
-        subtitle: '存储占用与流量', page: 'pages/main/DataStoragePage' },
-      { icon: 'sys.symbol.link', bg: '#5856D6', title: '代理',
-        subtitle: '网络代理设置', page: 'pages/main/ProxyPage' },
-      { icon: 'sys.symbol.battery_100percent', bg: '#FF9500', title: '省电',
-        subtitle: '低电量时降低功耗', page: 'pages/main/PowerUsagePage' },
-      { icon: 'sys.symbol.play_fill', bg: '#30B0C7', title: '后台播放',
-        subtitle: '音乐、语音、视频与直播的后台续播', page: 'pages/main/BackgroundPlaybackPage' }
+      { icon: 'sys.symbol.data_proportion', bg: '#007AFF', title: str('settings_data'),
+        subtitle: str('settings_data_sub'), page: 'pages/main/DataStoragePage' },
+      { icon: 'sys.symbol.link', bg: '#5856D6', title: str('settings_proxy'),
+        subtitle: str('settings_proxy_sub'), page: 'pages/main/ProxyPage' },
+      { icon: 'sys.symbol.battery_100percent', bg: '#FF9500', title: str('settings_power'),
+        subtitle: str('settings_power_sub'), page: 'pages/main/PowerUsagePage' },
+      { icon: 'sys.symbol.play_fill', bg: '#30B0C7', title: str('settings_background_playback'),
+        subtitle: str('settings_background_playback_sub'), page: 'pages/main/BackgroundPlaybackPage' }
     ]
   },
   {
-    title: '关于',
+    title: str('settings_about'),
     items: [
-      { icon: 'sys.symbol.info_circle', bg: '#8E8E93', title: '关于',
-        subtitle: '版本信息与检查更新', page: 'pages/main/AboutPage' }
+      { icon: 'sys.symbol.info_circle', bg: '#8E8E93', title: str('settings_about'),
+        subtitle: str('settings_about_sub'), page: 'pages/main/AboutPage' }
     ]
   }
-];
+  ];
+}
 
 // The settings tab: user header (avatar with camera badge, name, phone·username)
 // followed by the grouped list of setting entries.
@@ -98,6 +109,10 @@ export struct SettingsPage {
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp(STORAGE_UPDATE_AVAILABLE) updateAvailable: boolean = false;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
+  // The setting titles come from str() rather than $r() so the search box can
+  // filter on them, which means they do not re-resolve by themselves. Observing
+  // the epoch is what rebuilds this list when the language changes.
+  @StorageProp(LANGUAGE_EPOCH) languageEpoch: number = 0;
   @StorageLink('tdAccountRegistryEpoch') @Watch('onAccountRegistryEpoch')
   accountRegistryEpoch: number = 0;
   @State myId: number = 0;
@@ -121,7 +136,9 @@ export struct SettingsPage {
   @State settingsSearchOpen: boolean = false;
   @State settingsQuery: string = '';
   @State accountNavigationLocked: boolean = false;
-  @State pressedSettingTitle: string = '';
+  // Keyed by route, not by title: the title is display text, and display text
+  // is not an identity — it changes with the language.
+  @State pressedSettingPage: string = '';
   @State openingSettingPage: string = '';
   private store: ProfileStore | null = null;
   private unsub: (() => void) | null = null;
@@ -142,7 +159,7 @@ export struct SettingsPage {
     this.closeProfileStore();
     this.releaseAccountNavigation();
     this.releaseSettingNavigation();
-    this.pressedSettingTitle = '';
+    this.pressedSettingPage = '';
     this.settingsSearchOpen = false;
     this.settingsQuery = '';
     this.stopProfileSkeletonPulse();
@@ -166,7 +183,7 @@ export struct SettingsPage {
       this.myId = (me['id'] as number | undefined) ?? 0;
       if (this.myId === 0) {
         this.profileLoading = false;
-        this.profileError = '暂时无法读取当前账号';
+        this.profileError = str('settings_account_unreadable');
         this.stopProfileSkeletonPulse();
         return;
       }
@@ -178,7 +195,7 @@ export struct SettingsPage {
         this.profileLoadTimer = -1;
         if (sequence === this.profileLoadSequence && this.profileLoading) {
           this.profileLoading = false;
-          this.profileError = '账号资料加载超时';
+          this.profileError = str('settings_profile_timeout');
           this.stopProfileSkeletonPulse();
         }
       }, PROFILE_LOAD_TIMEOUT_MS);
@@ -188,7 +205,7 @@ export struct SettingsPage {
       }
       this.clearProfileLoadTimer();
       this.profileLoading = false;
-      this.profileError = '账号资料加载失败';
+      this.profileError = str('settings_profile_failed');
       this.stopProfileSkeletonPulse();
       console.error(`SettingsPage.getMe failed: ${e.message}`);
     });
@@ -273,11 +290,11 @@ export struct SettingsPage {
   }
 
   private accountSubtitle(account: TdAccountSummary): string {
-    if (account.pendingLogin) { return '点击继续登录'; }
+    if (account.pendingLogin) { return str('settings_tap_to_sign_in'); }
     const parts: string[] = [];
     if (account.phone !== '') { parts.push(`+${account.phone}`); }
     if (account.username !== '') { parts.push(`@${account.username}`); }
-    return parts.length > 0 ? parts.join('  ·  ') : 'Telegram 账号';
+    return parts.length > 0 ? parts.join('  ·  ') : str('settings_telegram_account');
   }
 
   private otherAccounts(): TdAccountSummary[] {
@@ -290,10 +307,10 @@ export struct SettingsPage {
   private filteredSettingGroups(): SettingGroup[] {
     const query = this.settingsQuery.trim().toLowerCase();
     if (query === '') {
-      return SETTING_GROUPS;
+      return settingGroups();
     }
     const groups: SettingGroup[] = [];
-    for (const group of SETTING_GROUPS) {
+    for (const group of settingGroups()) {
       const items = group.items.filter((item: SettingItem): boolean =>
         item.title.toLowerCase().includes(query) ||
         item.subtitle.toLowerCase().includes(query) ||
@@ -327,7 +344,7 @@ export struct SettingsPage {
     }, 600);
     router.pushUrl({ url: 'pages/main/AccountEditPage' }).catch((error: Error): void => {
       console.error(`SettingsPage.openAccountEditor failed: ${error.message}`);
-      promptAction.showToast({ message: '无法打开账号资料，请稍后重试', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.settings_open_profile_failed'), duration: 1800 });
       this.releaseAccountNavigation();
     });
   }
@@ -346,7 +363,7 @@ export struct SettingsPage {
       return;
     }
     if (item.page === '') {
-      promptAction.showToast({ message: `${item.title}暂未支持`, duration: 1500 });
+      promptAction.showToast({ message: str('settings_not_supported', item.title), duration: 1500 });
       return;
     }
     this.openingSettingPage = item.title;
@@ -356,7 +373,7 @@ export struct SettingsPage {
     }, 800);
     router.pushUrl({ url: item.page }).catch((error: Error): void => {
       console.error(`SettingsPage.openSetting(${item.title}) failed: ${error.message}`);
-      promptAction.showToast({ message: `无法打开${item.title}，请稍后重试`, duration: 1800 });
+      promptAction.showToast({ message: str('settings_open_failed', item.title), duration: 1800 });
       this.releaseSettingNavigation();
     });
   }
@@ -448,9 +465,9 @@ export struct SettingsPage {
       .then((): Promise<void> => switchTdAccount(slotId))
       .catch((caught: Error): void => {
         console.error(`SettingsPage.switchAccount failed: ${caught.message}`);
-        promptAction.showToast({ message: '账号切换失败，请重试', duration: 1800 });
+        promptAction.showToast({ message: str('settings_switch_failed'), duration: 1800 });
         this.switchingSlotId = '';
-        this.accountActionError = '账号切换失败，请检查网络后重试';
+        this.accountActionError = str('settings_switch_failed_network');
         this.accountActionRetry = 'switch';
         this.accountActionTarget = slotId;
       });
@@ -465,9 +482,9 @@ export struct SettingsPage {
       .then((): Promise<void> => addTdAccount())
       .catch((caught: Error): void => {
         console.error(`SettingsPage.addAccount failed: ${caught.message}`);
-        promptAction.showToast({ message: '暂时无法添加账号，请重试', duration: 1800 });
+        promptAction.showToast({ message: str('settings_add_account_failed'), duration: 1800 });
         this.switchingSlotId = '';
-        this.accountActionError = '暂时无法启动账号登录';
+        this.accountActionError = str('settings_start_login_failed');
         this.accountActionRetry = 'add';
         this.accountActionTarget = '';
       });
@@ -526,14 +543,14 @@ export struct SettingsPage {
             normal: this.topActionNormalStyle,
             pressed: this.topActionPressedStyle
           })
-          .accessibilityText('关闭设置搜索')
+          .accessibilityText($r('app.string.settings_search_close'))
           .onClick((): void => { this.closeSettingsSearch(); });
 
           Row({ space: 8 }) {
             SymbolGlyph($r('sys.symbol.magnifyingglass'))
               .fontSize(17)
               .fontColor([COLOR_TEXT_SECONDARY]);
-            TextInput({ text: this.settingsQuery, placeholder: '搜索设置' })
+            TextInput({ text: this.settingsQuery, placeholder: $r('app.string.settings_search') })
               .layoutWeight(1)
               .height(44)
               .fontSize(16)
@@ -553,7 +570,7 @@ export struct SettingsPage {
               .width(32)
               .height(36)
               .justifyContent(FlexAlign.Center)
-              .accessibilityText('清除设置搜索')
+              .accessibilityText($r('app.string.settings_search_clear'))
               .onClick((): void => { this.settingsQuery = ''; });
             }
           }
@@ -575,7 +592,7 @@ export struct SettingsPage {
           }));
       } else {
         Row({ space: 4 }) {
-          Text('设置')
+          Text($r('app.string.settings_title'))
             .fontSize(28)
             .fontWeight(FontWeight.Bold)
             .fontColor(COLOR_TEXT_PRIMARY)
@@ -595,7 +612,7 @@ export struct SettingsPage {
           })
           .enabled(this.switchingSlotId === '' &&
             !this.accountNavigationLocked && this.openingSettingPage === '')
-          .accessibilityText('搜索设置')
+          .accessibilityText($r('app.string.settings_search'))
           .onClick((): void => {
             if (this.switchingSlotId === '') {
               this.settingsSearchOpen = true;
@@ -651,7 +668,7 @@ export struct SettingsPage {
       duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 640),
       curve: Curve.EaseInOut
     })
-    .accessibilityText('正在加载账号资料')
+    .accessibilityText($r('app.string.settings_profile_loading'))
     .transition(TransitionEffect.OPACITY.animation({
       duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 160),
       curve: Curve.EaseOut
@@ -668,7 +685,7 @@ export struct SettingsPage {
           .fontColor(['#E64646']);
       }
       Column({ space: 3 }) {
-        Text('账号资料加载失败')
+        Text(str('settings_profile_failed'))
           .fontSize(17)
           .fontWeight(FontWeight.Medium)
           .fontColor(COLOR_TEXT_PRIMARY);
@@ -681,7 +698,7 @@ export struct SettingsPage {
           SymbolGlyph($r('sys.symbol.arrow_clockwise'))
             .fontSize(14)
             .fontColor([COLOR_PRIMARY]);
-          Text('重新加载')
+          Text($r('app.string.settings_reload'))
             .fontSize(13)
             .fontWeight(FontWeight.Medium)
             .fontColor(COLOR_PRIMARY);
@@ -710,7 +727,7 @@ export struct SettingsPage {
     })
     .enabled(this.switchingSlotId === '' &&
       !this.accountNavigationLocked && this.openingSettingPage === '')
-    .accessibilityText('账号资料加载失败，重新加载')
+    .accessibilityText($r('app.string.settings_profile_failed_reload'))
     .onClick((): void => { this.loadProfile(); })
     .transition(TransitionEffect.OPACITY
       .combine(TransitionEffect.scale({ x: 0.97, y: 0.97 }))
@@ -742,7 +759,7 @@ export struct SettingsPage {
 
       Column({ space: 4 }) {
         Row({ space: 5 }) {
-          Text(this.name !== '' ? this.name : (this.profileLoading ? '正在加载账号…' : '当前账号'))
+          Text(this.name !== '' ? this.name : (this.profileLoading ? $r('app.string.settings_account_loading') : $r('app.string.settings_current_account')))
             .fontSize(20)
             .fontWeight(FontWeight.Bold)
             .fontColor(COLOR_TEXT_PRIMARY)
@@ -767,12 +784,12 @@ export struct SettingsPage {
         .alignItems(VerticalAlign.Center);
         Text(this.profileError !== ''
           ? this.profileError
-          : (this.subtitleLine() !== '' ? this.subtitleLine() : 'Telegram 账号'))
+          : (this.subtitleLine() !== '' ? this.subtitleLine() : str('settings_telegram_account')))
           .fontSize(13)
           .fontColor(this.profileError !== '' ? '#E64646' : COLOR_TEXT_SECONDARY)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
-        Text(this.profileError !== '' ? '点击重新加载' : '编辑个人资料')
+        Text(this.profileError !== '' ? $r('app.string.settings_tap_reload') : $r('app.string.settings_edit_profile'))
           .fontSize(12)
           .fontColor(COLOR_PRIMARY);
       }
@@ -802,8 +819,8 @@ export struct SettingsPage {
     .enabled(this.switchingSlotId === '' &&
       !this.accountNavigationLocked && this.openingSettingPage === '')
     .accessibilityText(this.profileError !== ''
-      ? '账号信息加载失败，点击重试'
-      : `${this.name !== '' ? this.name : '当前账号'}，编辑个人资料`)
+      ? str('settings_profile_failed_tap')
+      : str('a11y_edit_profile', this.name !== '' ? this.name : str('settings_current_account')))
     .onClick((): void => { this.openAccountEditor(); });
   }
 
@@ -817,7 +834,7 @@ export struct SettingsPage {
         avatarSize: 40
       });
       Column({ space: 2 }) {
-        Text(account.name !== '' ? account.name : 'Telegram 账号')
+        Text(account.name !== '' ? account.name : str('settings_telegram_account'))
           .fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
         Text(this.accountSubtitle(account))
@@ -842,7 +859,7 @@ export struct SettingsPage {
     })
     .enabled(this.switchingSlotId === '' &&
       !this.accountNavigationLocked && this.openingSettingPage === '')
-    .accessibilityText(`${account.name !== '' ? account.name : 'Telegram 账号'}，切换账号`)
+    .accessibilityText(str('a11y_switch_account', account.name !== '' ? account.name : str('settings_telegram_account')))
     .onClick((): void => this.switchAccount(account.slotId));
   }
 
@@ -853,7 +870,7 @@ export struct SettingsPage {
         .fontSize(21)
         .fontColor(['#E64646']);
       Column({ space: 2 }) {
-        Text('账号操作未完成')
+        Text($r('app.string.settings_account_action_incomplete'))
           .fontSize(14)
           .fontWeight(FontWeight.Medium)
           .fontColor(COLOR_TEXT_PRIMARY);
@@ -869,7 +886,7 @@ export struct SettingsPage {
         SymbolGlyph($r('sys.symbol.arrow_clockwise'))
           .fontSize(13)
           .fontColor([COLOR_PRIMARY]);
-        Text('重试')
+        Text($r('app.string.settings_retry'))
           .fontSize(13)
           .fontWeight(FontWeight.Medium)
           .fontColor(COLOR_PRIMARY);
@@ -882,7 +899,7 @@ export struct SettingsPage {
         pressed: this.retryActionPressedStyle
       })
       .enabled(this.switchingSlotId === '')
-      .accessibilityText('重试账号操作')
+      .accessibilityText($r('app.string.settings_retry_account_action'))
       .onClick((): void => { this.retryAccountAction(); });
       Row() {
         SymbolGlyph($r('sys.symbol.xmark'))
@@ -897,7 +914,7 @@ export struct SettingsPage {
         normal: this.topActionNormalStyle,
         pressed: this.topActionPressedStyle
       })
-      .accessibilityText('关闭错误提示')
+      .accessibilityText($r('app.string.settings_dismiss_error'))
       .onClick((): void => { this.clearAccountActionError(); });
     }
     .width('calc(100% - 24vp)')
@@ -929,7 +946,7 @@ export struct SettingsPage {
 
       Column() {
         if (this.otherAccounts().length > 0) {
-          Text('切换账号')
+          Text($r('app.string.settings_switch_account'))
             .width('100%')
             .height(34)
             .fontSize(13)
@@ -958,8 +975,8 @@ export struct SettingsPage {
           }
           .width(40).height(40).borderRadius(20).backgroundColor(COLOR_PRIMARY);
           Column({ space: 2 }) {
-            Text('添加账号').fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-            Text('登录另一个 Telegram 账号').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+            Text($r('app.string.settings_add_account')).fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+            Text($r('app.string.settings_add_account_sub')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
           }
           .alignItems(HorizontalAlign.Start)
           .layoutWeight(1);
@@ -979,7 +996,7 @@ export struct SettingsPage {
         })
         .enabled(this.switchingSlotId === '' &&
           !this.accountNavigationLocked && this.openingSettingPage === '')
-        .accessibilityText('添加账号')
+        .accessibilityText($r('app.string.settings_add_account'))
         .onClick((): void => this.addAccount());
       }
       .width('calc(100% - 24vp)')
@@ -1011,8 +1028,8 @@ export struct SettingsPage {
           .fontSize(18)
           .fontColor([Color.White])
           .scale({
-            x: this.pressedSettingTitle === item.title ? 0.88 : 1,
-            y: this.pressedSettingTitle === item.title ? 0.88 : 1
+            x: this.pressedSettingPage === item.page ? 0.88 : 1,
+            y: this.pressedSettingPage === item.page ? 0.88 : 1
           })
           .animation({
             duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 110),
@@ -1046,7 +1063,7 @@ export struct SettingsPage {
         SymbolGlyph($r('sys.symbol.chevron_right'))
           .fontSize(16)
           .fontColor([COLOR_TEXT_SECONDARY])
-          .translate({ x: this.pressedSettingTitle === item.title ? 2 : 0 })
+          .translate({ x: this.pressedSettingPage === item.page ? 2 : 0 })
           .animation({
             duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 110),
             curve: Curve.EaseOut
@@ -1066,15 +1083,15 @@ export struct SettingsPage {
     .accessibilityText(`${item.title}，${item.subtitle}`)
     .onTouch((event: TouchEvent): void => {
       if (event.type === TouchType.Down && this.openingSettingPage === '') {
-        this.pressedSettingTitle = item.title;
+        this.pressedSettingPage = item.page;
       } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        if (this.pressedSettingTitle === item.title) {
-          this.pressedSettingTitle = '';
+        if (this.pressedSettingPage === item.page) {
+          this.pressedSettingPage = '';
         }
       }
     })
     .onClick((): void => {
-      this.pressedSettingTitle = '';
+      this.pressedSettingPage = '';
       this.openSetting(item);
     });
   }
@@ -1126,18 +1143,18 @@ export struct SettingsPage {
               .fontSize(25)
               .fontColor([COLOR_TEXT_SECONDARY]);
           }
-          Text(`没有匹配“${this.settingsQuery.trim()}”的设置`)
+          Text(str('settings_no_match', this.settingsQuery.trim()))
             .fontSize(16)
             .fontWeight(FontWeight.Medium)
             .fontColor(COLOR_TEXT_PRIMARY);
-          Text('可以搜索设置名称、说明或分组')
+          Text($r('app.string.settings_search_hint'))
             .fontSize(12)
             .fontColor(COLOR_TEXT_SECONDARY);
           Row({ space: 5 }) {
             SymbolGlyph($r('sys.symbol.xmark_circle'))
               .fontSize(14)
               .fontColor([COLOR_PRIMARY]);
-            Text('清除关键词')
+            Text($r('app.string.settings_clear_query'))
               .fontSize(13)
               .fontWeight(FontWeight.Medium)
               .fontColor(COLOR_PRIMARY);
@@ -1150,7 +1167,7 @@ export struct SettingsPage {
             normal: this.retryActionNormalStyle,
             pressed: this.retryActionPressedStyle
           })
-          .accessibilityText('清除设置搜索关键词')
+          .accessibilityText($r('app.string.settings_clear_query_a11y'))
           .onClick((): void => { this.settingsQuery = ''; });
         }
         .width('calc(100% - 24vp)')

@@ -3,6 +3,7 @@ import { promptAction } from '@kit.ArkUI';
 import {
   VideoNoteRecorder, VideoNoteOpenResult, VIDEO_NOTE_MAX_SECONDS
 } from '../../services/VideoNoteRecorder';
+import { str } from '../../util/strings';
 
 type VideoNotePhase = 'opening' | 'ready' | 'recording' | 'sending' | 'error';
 
@@ -59,7 +60,7 @@ export struct VideoNoteRecorderView {
     const surfaceId: string = this.controller.getXComponentSurfaceId();
     if (surfaceId === '') {
       this.phase = 'error';
-      this.errorText = '取景画面初始化失败';
+      this.errorText = str('vn_preview_failed');
       return;
     }
     this.opening = true;
@@ -81,14 +82,14 @@ export struct VideoNoteRecorderView {
         }
         this.phase = 'error';
         this.errorText = result === 'denied'
-          ? '需要摄像头和麦克风权限才能录制圆形视频'
-          : '无法打开摄像头';
+          ? str('vn_needs_permission')
+          : str('vn_camera_failed');
       })
       .catch((e: Object): void => {
         this.opening = false;
         console.error(`VideoNoteRecorderView.openCamera failed: ${JSON.stringify(e)}`);
         this.phase = 'error';
-        this.errorText = '无法打开摄像头';
+        this.errorText = str('vn_camera_failed');
       });
   }
 
@@ -136,7 +137,7 @@ export struct VideoNoteRecorderView {
       }
       if (!ok) {
         this.phase = 'error';
-        this.errorText = '无法开始录制';
+        this.errorText = str('vn_record_failed');
         return;
       }
       this.phase = 'recording';
@@ -153,7 +154,7 @@ export struct VideoNoteRecorderView {
     }).catch((e: Object): void => {
       console.error(`VideoNoteRecorderView.beginRecord failed: ${JSON.stringify(e)}`);
       this.phase = 'error';
-      this.errorText = '无法开始录制';
+      this.errorText = str('vn_record_failed');
     });
   }
 
@@ -164,7 +165,7 @@ export struct VideoNoteRecorderView {
     }
     if (this.elapsedMs < MIN_RECORD_MS) {
       // 按太短只是这一条不算，不该把整个录制界面关掉——用户多半是想重录。
-      promptAction.showToast({ message: '按住录制圆形视频', duration: 1600 });
+      promptAction.showToast({ message: $r('app.string.vn_hold_to_record'), duration: 1600 });
       this.discardTake();
       return;
     }
@@ -247,15 +248,15 @@ export struct VideoNoteRecorderView {
       return this.errorText;
     }
     if (this.phase === 'opening') {
-      return '正在打开摄像头...';
+      return str('vn_opening_camera');
     }
     if (this.phase === 'sending') {
-      return '正在发送...';
+      return str('vn_sending');
     }
     if (this.phase === 'recording') {
-      return this.willCancel ? '松手取消' : '上滑取消 · 松手发送';
+      return this.willCancel ? str('vn_release_to_cancel') : str('vn_swipe_cancel');
     }
-    return '按住下方按钮录制，最长 60 秒';
+    return str('vn_hold_hint');
   }
 
   build() {
@@ -272,7 +273,7 @@ export struct VideoNoteRecorderView {
           .backgroundColor('#33FFFFFF')
           .margin({ right: 10 })
           .enabled(this.phase === 'ready')
-          .accessibilityText(this.useFront ? '切换到后置摄像头' : '切换到前置摄像头')
+          .accessibilityText(this.useFront ? $r('app.string.vn_switch_rear') : $r('app.string.vn_switch_front'))
           .onClick((): void => { this.switchCamera(); });
         }
         // 点击热区交给容器：裸图标只有 22vp，在屏幕角落几乎点不中。
@@ -283,7 +284,7 @@ export struct VideoNoteRecorderView {
         .width(44).height(44).borderRadius(22)
         .justifyContent(FlexAlign.Center)
         .backgroundColor('#33FFFFFF')
-        .accessibilityText('关闭圆形视频录制')
+        .accessibilityText($r('app.string.vn_close'))
         .onClick((): void => { this.cancelRecord(); });
       }
       .width('100%').height(56 + this.topSafe)
@@ -358,7 +359,7 @@ export struct VideoNoteRecorderView {
       })
       .animation({ duration: 140, curve: Curve.EaseOut })
       .enabled(this.phase === 'ready' || this.phase === 'recording')
-      .accessibilityText('按住录制圆形视频')
+      .accessibilityText($r('app.string.vn_hold_to_record'))
       .onTouch((event: TouchEvent): void => { this.onRecordTouch(event); })
       .margin({ bottom: 48 });
     }

@@ -29,12 +29,12 @@ export default function chatHeaderPresentationTest() {
 
     it('falls back to a loading title', 0, () => {
       expect(chatHeaderPresentation(input('', '', 'loading', '', '')).titleText)
-        .assertEqual('正在加载');
+        .assertEqual('chat_header_loading');
     });
 
     it('falls back to an error title', 0, () => {
       expect(chatHeaderPresentation(input('', '', 'error', 'x', '')).titleText)
-        .assertEqual('无法读取聊天');
+        .assertEqual('chat_header_unreadable');
     });
 
     it('a derived subtitle outranks everything else', 0, () => {
@@ -49,7 +49,7 @@ export default function chatHeaderPresentationTest() {
 
     it('loading without a subtitle explains itself', 0, () => {
       expect(chatHeaderPresentation(input('', '', 'loading', '', '')).subtitleText)
-        .assertEqual('正在获取会话信息…');
+        .assertEqual('chat_header_resolving');
     });
 
     it('an error surfaces its reason', 0, () => {
@@ -59,23 +59,23 @@ export default function chatHeaderPresentationTest() {
 
     it('an error without a reason invites a retry', 0, () => {
       expect(chatHeaderPresentation(input('', '', 'error', '', '')).subtitleText)
-        .assertEqual('点击重试');
+        .assertEqual('chat_header_tap_retry');
     });
 
     it('labels each chat kind when nothing better is known', 0, () => {
       expect(chatHeaderPresentation(input('C', '', 'ready', '', 'channel')).subtitleText)
-        .assertEqual('频道');
+        .assertEqual('chat_header_kind_channel');
       expect(chatHeaderPresentation(input('G', '', 'ready', '', 'group')).subtitleText)
-        .assertEqual('群组');
+        .assertEqual('chat_header_kind_group');
       expect(chatHeaderPresentation(input('S', '', 'ready', '', 'secret')).subtitleText)
-        .assertEqual('加密聊天');
+        .assertEqual('chat_header_kind_secret');
       expect(chatHeaderPresentation(input('U', '', 'ready', '', 'private')).subtitleText)
-        .assertEqual('Telegram 用户');
+        .assertEqual('chat_header_kind_user');
     });
 
     it('an unresolved kind still reads as a user', 0, () => {
       expect(chatHeaderPresentation(input('U', '', 'ready', '', '')).subtitleText)
-        .assertEqual('Telegram 用户');
+        .assertEqual('chat_header_kind_user');
     });
 
     it('an ordinary chat is titled after the chat', 0, () => {
@@ -93,7 +93,7 @@ export default function chatHeaderPresentationTest() {
     it('an unnamed forum topic falls back', 0, () => {
       expect(chatHeaderTitle({
         chatTitle: 'Group', topicName: '', forumTopicId: 5, threadRootId: 0
-      })).assertEqual('话题');
+      })).assertEqual('chat_header_topic');
     });
 
     it('a named comment thread keeps its name', 0, () => {
@@ -107,7 +107,7 @@ export default function chatHeaderPresentationTest() {
     it('an unnamed comment thread falls back', 0, () => {
       expect(chatHeaderTitle({
         chatTitle: 'Channel', topicName: '', forumTopicId: 0, threadRootId: 9
-      })).assertEqual('评论');
+      })).assertEqual('chat_header_comments');
     });
 
     it('a forum topic outranks a thread id', 0, () => {

@@ -11,6 +11,7 @@ import {
   removeFavoriteSticker
 } from '../../store/StickerApi';
 import { promptAction } from '@kit.ArkUI';
+import { str } from '../../util/strings';
 
 export interface StickerItem {
   fileId: number;   // the sticker's own file (what gets sent)
@@ -149,7 +150,7 @@ export struct StickerPicker {
         if (seq !== this.loadSeq) { return; }
         const sections: StickerSetTab[] = [];
         const specs: string[][] = [
-          ['fav', '收藏', '⭐'], ['recent', '最近使用', '🕘']
+          ['fav', str('sp_favourites'), '⭐'], ['recent', str('sp_recent'), '🕘']
         ];
         lists.forEach((raw: TdObject[], index: number): void => {
           if (raw.length === 0) { return; }
@@ -185,10 +186,10 @@ export struct StickerPicker {
       ? removeFavoriteSticker(s.fileId) : addFavoriteSticker(s.fileId);
     task.then((): void => {
       promptAction.showToast({
-        message: isFav ? '已取消收藏' : '已加入收藏', duration: 1300
+        message: isFav ? $r('app.string.sp_unfavourited') : $r('app.string.sp_favourited'), duration: 1300
       });
     }).catch((): void => {
-      promptAction.showToast({ message: '收藏操作失败', duration: 1300 });
+      promptAction.showToast({ message: $r('app.string.sp_favourite_failed'), duration: 1300 });
     });
   }
 
@@ -294,7 +295,7 @@ export struct StickerPicker {
       console.error(`StickerPicker.getInstalledStickerSets failed: ${e.message}`);
       this.loading = false;
       if (this.sets.length === 0) {
-        this.loadError = this.stickerType === 'custom_emoji' ? '表情包加载失败' : '贴纸包加载失败';
+        this.loadError = this.stickerType === 'custom_emoji' ? str('sp_emoji_load_failed') : str('sp_sticker_load_failed');
       }
       if (this.includeTrending) {
         this.loadTrending();
@@ -488,7 +489,7 @@ export struct StickerPicker {
       }
       console.error(`StickerPicker.searchStickers failed: ${e.message}`);
       this.searchLoading = false;
-      this.searchError = '搜索失败';
+      this.searchError = str('search_failed');
       this.searchItems = [];
       this.refreshGrid();
     });
@@ -662,7 +663,7 @@ export struct StickerPicker {
       this.refreshGrid();
     }).catch((e: TdError) => {
       this.loadingSet = false;
-      this.contentError = '贴纸包加载失败';
+      this.contentError = str('sp_sticker_load_failed');
       this.sets = this.sets.map((t: StickerSetTab): StickerSetTab =>
         t.id === setId
           ? {
@@ -866,7 +867,7 @@ export struct StickerPicker {
       Text(title).fontSize(15).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
       Text(detail).fontSize(13).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center);
       if (retry) {
-        Text('重新加载')
+        Text($r('app.string.settings_reload'))
           .fontSize(14).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
           .padding({ left: 16, right: 16, top: 7, bottom: 7 })
           .backgroundColor($r('app.color.selected_pill')).borderRadius(16)
@@ -882,18 +883,18 @@ export struct StickerPicker {
       if (this.loading) {
         Column() {
           LoadingProgress().width(28).height(28).color(COLOR_PRIMARY);
-          Text(this.stickerType === 'custom_emoji' ? '正在加载表情' : '正在加载贴纸')
+          Text(this.stickerType === 'custom_emoji' ? $r('app.string.sp_loading_emoji') : $r('app.string.sp_loading_stickers'))
             .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).margin({ top: 8 });
         }
         .layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else if (this.loadError !== '') {
         this.stateMessage($r('sys.symbol.exclamationmark_circle'), this.loadError,
-          '检查网络后重试', true);
+          str('check_network_retry'), true);
       } else if (this.sets.length === 0) {
         this.stateMessage(
           this.stickerType === 'custom_emoji' ? $r('sys.symbol.face_smiling') : $r('sys.symbol.gift'),
-          this.stickerType === 'custom_emoji' ? '暂无可用表情包' : '没有已安装的贴纸包',
-          this.stickerType === 'custom_emoji' ? '经典表情仍可正常使用' : '安装贴纸包后会显示在这里',
+          this.stickerType === 'custom_emoji' ? str('sp_no_emoji_packs') : str('sp_no_sticker_sets'),
+          this.stickerType === 'custom_emoji' ? str('sp_classic_still_works') : str('sp_install_hint'),
           false
         );
       } else {
@@ -933,7 +934,7 @@ export struct StickerPicker {
           SymbolGlyph($r('sys.symbol.magnifyingglass')).fontSize(15).fontColor([COLOR_TEXT_SECONDARY]);
           TextInput({
             text: this.searchQuery,
-            placeholder: this.stickerType === 'custom_emoji' ? '搜索表情' : '搜索贴纸'
+            placeholder: this.stickerType === 'custom_emoji' ? $r('app.string.sp_search_emoji') : $r('app.string.sp_search_stickers')
           })
             .fontSize(14).layoutWeight(1).height(30)
             .backgroundColor(Color.Transparent).padding(0)
@@ -962,7 +963,7 @@ export struct StickerPicker {
               .fontSize(15).fontColor([COLOR_TEXT_SECONDARY]);
             Text(this.contentError).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
             Blank().layoutWeight(1);
-            Text('重试').fontSize(13).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
+            Text($r('app.string.settings_retry')).fontSize(13).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
               .onClick(() => { this.retryCurrentSet(); });
           }
           .width('100%').height(30).padding({ left: 14, right: 14 })
@@ -970,7 +971,7 @@ export struct StickerPicker {
         } else if (this.loadingSet && this.searchQuery.trim() === '') {
           Row({ space: 7 }) {
             LoadingProgress().width(15).height(15).color(COLOR_PRIMARY);
-            Text('正在加载贴纸包').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+            Text($r('app.string.sp_loading_sets')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
           }
           .width('100%').height(26).padding({ left: 14, right: 14 });
         }
@@ -979,7 +980,7 @@ export struct StickerPicker {
         if (this.searchLoading) {
           Column() {
             LoadingProgress().width(24).height(24).color(COLOR_PRIMARY);
-            Text('正在搜索').fontSize(13).fontColor(COLOR_TEXT_SECONDARY).margin({ top: 7 });
+            Text($r('app.string.searching')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY).margin({ top: 7 });
           }
           .layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
         } else if (this.searchError !== '') {
@@ -987,7 +988,7 @@ export struct StickerPicker {
             SymbolGlyph($r('sys.symbol.exclamationmark_circle')).fontSize(24)
               .fontColor([COLOR_TEXT_SECONDARY]);
             Text(this.searchError).fontSize(14).fontColor(COLOR_TEXT_PRIMARY);
-            Text('重试').fontSize(14).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
+            Text($r('app.string.settings_retry')).fontSize(14).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
               .onClick(() => { this.runStickerSearch(); });
           }
           .layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
@@ -995,8 +996,8 @@ export struct StickerPicker {
           Column({ space: 7 }) {
             SymbolGlyph($r('sys.symbol.magnifyingglass')).fontSize(24)
               .fontColor([COLOR_TEXT_SECONDARY]);
-            Text('没有找到结果').fontSize(14).fontColor(COLOR_TEXT_PRIMARY);
-            Text('换个关键词或表情试试').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+            Text($r('app.string.no_results')).fontSize(14).fontColor(COLOR_TEXT_PRIMARY);
+            Text($r('app.string.sp_try_another')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
           }
           .layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
         } else {

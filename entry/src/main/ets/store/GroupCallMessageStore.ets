@@ -1,6 +1,7 @@
 import { TdClient } from '../tdkit/TdClient';
 import { TdError, TdObject, TdRequest } from '../tdkit/TdTypes';
 import { UserStore } from './UserStore';
+import { str } from '../util/strings';
 
 const MAX_VISIBLE_MESSAGES: number = 100;
 
@@ -124,13 +125,13 @@ export class GroupCallMessageStore {
     let senderName = knownName;
     if (senderType === 'messageSenderUser') {
       const userName = this.users.displayName(senderId);
-      senderName = userName !== '' ? userName : (knownName !== '' ? knownName : '观众');
+      senderName = userName !== '' ? userName : (knownName !== '' ? knownName : str('gcm_viewer'));
       this.users.ensure(senderId);
     } else if (senderType === 'messageSenderChat') {
-      senderName = knownName !== '' ? knownName : '频道';
+      senderName = knownName !== '' ? knownName : str('gn_channel');
       this.resolveChat(senderId, senderKey);
     } else {
-      senderName = '观众';
+      senderName = str('gcm_viewer');
     }
     const next: GroupCallMessageEntry = {
       id,
@@ -177,8 +178,8 @@ export class GroupCallMessageStore {
     if (((update['group_call_id'] as number | undefined) ?? 0) !== this.groupCallId) { return; }
     const error = update['error'] as TdObject | undefined;
     const message = error !== undefined
-      ? ((error['message'] as string | undefined) ?? '互动消息发送失败')
-      : '互动消息发送失败';
+      ? ((error['message'] as string | undefined) ?? str('gcm_send_failed'))
+      : str('gcm_send_failed');
     this.emitError(message);
   }
 
@@ -205,7 +206,7 @@ export class GroupCallMessageStore {
     const request: TdRequest = { '@type': 'getChat' };
     request['chat_id'] = chatId;
     this.client.send(request).then((chat: TdObject): void => {
-      const name = (chat['title'] as string | undefined) ?? '频道';
+      const name = (chat['title'] as string | undefined) ?? str('gn_channel');
       this.senderNames.set(senderKey, name);
       const photo = chat['photo'] as TdObject | undefined;
       const small = photo !== undefined ? (photo['small'] as TdObject | undefined) : undefined;

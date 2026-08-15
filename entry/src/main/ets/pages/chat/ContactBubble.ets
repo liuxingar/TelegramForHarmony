@@ -1,5 +1,6 @@
 import { AvatarView } from '../chatlist/AvatarView';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import { str } from '../../util/strings';
 
 @Component
 export struct ContactBubble {
@@ -42,7 +43,7 @@ export struct ContactBubble {
     if (value !== '') {
       return value;
     }
-    return this.userId > 0 ? 'Telegram 用户' : '未命名联系人';
+    return this.userId > 0 ? str('cb_telegram_user') : str('cb_unnamed');
   }
 
   private initials(): string {
@@ -63,12 +64,12 @@ export struct ContactBubble {
       return this.phone.trim();
     }
     if (this.userId > 0) {
-      return '点击查看 Telegram 资料';
+      return str('cb_tap_profile');
     }
     if (this.vcard.trim() !== '') {
-      return '联系人名片';
+      return str('cb_contact_card');
     }
-    return '联系人信息不可用';
+    return str('cb_unavailable');
   }
 
   build() {
@@ -105,7 +106,7 @@ export struct ContactBubble {
         pressed: this.cardPressedStyle
       })
       .animation({ duration: 110, curve: Curve.EaseOut })
-      .accessibilityText(this.available() ? `联系人 ${this.name()}` : '联系人信息不可用')
+      .accessibilityText(this.available() ? str('cb_contact_named', this.name()) : str('cb_unavailable'))
       .onClick((): void => {
         if (this.available()) {
           this.onOpen();
@@ -124,7 +125,7 @@ export struct ContactBubble {
           pressed: this.actionPressedStyle
         })
         .animation({ duration: 100, curve: Curve.EaseOut })
-        .accessibilityText(`拨打 ${this.phone.trim()}`)
+        .accessibilityText(str('cb_call_number', this.phone.trim()))
         .onClick((): void => { this.onCall(); });
       } else {
         SymbolGlyph($r(this.userId > 0 ? 'sys.symbol.chevron_right' : 'sys.symbol.person'))

@@ -12,6 +12,7 @@ import {
   COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
 import { AvatarView } from '../chatlist/AvatarView';
+import { plural, str } from '../../util/strings';
 
 interface FolderInviteParams {
   folderId: number;
@@ -90,7 +91,7 @@ struct FolderInviteLinksPage {
     }).catch((error: TdError): void => {
       if (!this.active || sequence !== this.loadSequence) { return; }
       this.loadState = 'error';
-      this.warning = '共享链接暂时无法加载';
+      this.warning = str('fl_load_failed_soft');
       console.error(`FolderInviteLinksPage.load failed: ${error.message}`);
     });
   }
@@ -98,16 +99,16 @@ struct FolderInviteLinksPage {
   private copy(link: string): void {
     const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, link);
     pasteboard.getSystemPasteboard().setData(data).then((): void => {
-      promptAction.showToast({ message: '链接已复制', duration: 1400 });
+      promptAction.showToast({ message: $r('app.string.link_copied'), duration: 1400 });
     }).catch((): void => {
-      promptAction.showToast({ message: '复制失败', duration: 1500 });
+      promptAction.showToast({ message: $r('app.string.copy_failed'), duration: 1500 });
     });
   }
 
   private openCreate(): void {
     if (this.operationKey !== '') { return; }
     if (this.eligibleChats.length === 0) {
-      this.warning = '只有明确添加到文件夹且允许分享的群组或频道才能创建链接';
+      this.warning = str('fl_eligibility');
       return;
     }
     this.editingLink = '';
@@ -132,7 +133,7 @@ struct FolderInviteLinksPage {
 
   private saveLink(): void {
     if (this.operationKey !== '' || this.selectedChatIds.length === 0) {
-      if (this.selectedChatIds.length === 0) { this.warning = '至少选择一个可分享的聊天'; }
+      if (this.selectedChatIds.length === 0) { this.warning = str('fl_pick_one'); }
       return;
     }
     const key = this.editingLink === '' ? 'create' : 'edit';
@@ -149,12 +150,12 @@ struct FolderInviteLinksPage {
       this.operationKey = '';
       this.editorOpen = false;
       this.warning = '';
-      promptAction.showToast({ message: key === 'create' ? '共享链接已创建' : '共享链接已更新', duration: 1500 });
+      promptAction.showToast({ message: key === 'create' ? $r('app.string.fl_created') : $r('app.string.fl_updated'), duration: 1500 });
     }).catch((error: TdError): void => {
       if (!this.active) { return; }
       this.operationKey = '';
       this.warning = error.message.indexOf('PREMIUM') >= 0
-        ? '共享链接数量已达到当前账号上限' : '保存共享链接失败，请稍后重试';
+        ? str('fl_limit_reached') : str('fl_save_failed');
       promptAction.showToast({ message: this.warning, duration: 1900 });
       console.error(`FolderInviteLinksPage.saveLink failed: ${error.message}`);
     });
@@ -162,10 +163,10 @@ struct FolderInviteLinksPage {
 
   private confirmDelete(link: FolderInviteLinkData): void {
     promptAction.showDialog({
-      title: '删除共享链接', message: '删除后，已获得此链接的人将无法再通过它添加文件夹。',
+      title: $r('app.string.fl_delete'), message: $r('app.string.fl_delete_confirm'),
       buttons: [
-        { text: '取消', color: COLOR_TEXT_SECONDARY as string },
-        { text: '删除', color: DANGER }
+        { text: $r('app.string.cancel'), color: COLOR_TEXT_SECONDARY as string },
+        { text: $r('app.string.delete'), color: DANGER }
       ]
     }).then((result: promptAction.ShowDialogSuccessResponse): void => {
       if (result.index !== 1 || this.operationKey !== '') { return; }
@@ -174,11 +175,11 @@ struct FolderInviteLinksPage {
         if (!this.active) { return; }
         this.links = this.links.filter((item: FolderInviteLinkData): boolean => item.inviteLink !== link.inviteLink);
         this.operationKey = '';
-        promptAction.showToast({ message: '共享链接已删除', duration: 1500 });
+        promptAction.showToast({ message: $r('app.string.fl_deleted'), duration: 1500 });
       }).catch((error: TdError): void => {
         if (!this.active) { return; }
         this.operationKey = '';
-        this.warning = '删除链接失败，请重试';
+        this.warning = str('fl_delete_failed');
         console.error(`FolderInviteLinksPage.delete failed: ${error.message}`);
       });
     }).catch((): void => {});
@@ -200,11 +201,11 @@ struct FolderInviteLinksPage {
       this.selectedNewChatIds = [];
       this.newChatsOpen = false;
       this.operationKey = '';
-      promptAction.showToast({ message: '已添加共享文件夹的新聊天', duration: 1700 });
+      promptAction.showToast({ message: $r('app.string.fl_new_chats_added'), duration: 1700 });
     }).catch((error: TdError): void => {
       if (!this.active) { return; }
       this.operationKey = '';
-      this.warning = '部分聊天无法加入，请确认账号权限后重试';
+      this.warning = str('fl_join_partial');
       console.error(`FolderInviteLinksPage.newChats failed: ${error.message}`);
     });
   }
@@ -216,7 +217,7 @@ struct FolderInviteLinksPage {
         .width(44).height(44).borderRadius(22).justifyContent(FlexAlign.Center)
         .stateStyles({ normal: this.pressNormal, pressed: this.pressDown }).onClick((): void => router.back());
       Column({ space: 1 }) {
-        Text('共享文件夹').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
+        Text($r('app.string.fl_title')).fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
         Text(this.title).fontSize(11).fontColor(COLOR_TEXT_SECONDARY).maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
@@ -227,9 +228,9 @@ struct FolderInviteLinksPage {
   @Builder
   linkMenu(link: FolderInviteLinkData) {
     Menu() {
-      MenuItem({ content: '编辑链接' }).onClick((): void => this.openEdit(link));
-      MenuItem({ content: '复制链接' }).onClick((): void => this.copy(link.inviteLink));
-      MenuItem({ content: '删除链接' }).onClick((): void => this.confirmDelete(link));
+      MenuItem({ content: $r('app.string.fl_edit_link') }).onClick((): void => this.openEdit(link));
+      MenuItem({ content: $r('app.string.fl_copy_link') }).onClick((): void => this.copy(link.inviteLink));
+      MenuItem({ content: $r('app.string.fl_delete_link') }).onClick((): void => this.confirmDelete(link));
     }
   }
 
@@ -239,9 +240,9 @@ struct FolderInviteLinksPage {
       Row() { Text('🔗').fontSize(20); }.width(42).height(42).borderRadius(14)
         .justifyContent(FlexAlign.Center).backgroundColor('#165B8FF9');
       Column({ space: 3 }) {
-        Text(link.name !== '' ? link.name : '共享链接').fontSize(16).fontWeight(FontWeight.Medium)
+        Text(link.name !== '' ? link.name : $r('app.string.fl_links')).fontSize(16).fontWeight(FontWeight.Medium)
           .fontColor(COLOR_TEXT_PRIMARY).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
-        Text(`${link.chatIds.length} 个聊天 · ${link.inviteLink}`)
+        Text(str('fl_chats_and_link', link.chatIds.length, link.inviteLink))
           .fontSize(11).fontColor(COLOR_TEXT_SECONDARY).maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
       }.layoutWeight(1).alignItems(HorizontalAlign.Start).onClick((): void => this.copy(link.inviteLink));
@@ -265,19 +266,19 @@ struct FolderInviteLinksPage {
           Row({ space: 12 }) {
             Text('✨').fontSize(22);
             Column({ space: 2 }) {
-              Text(`${this.newChats.length} 个新聊天`).fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-              Text('共享文件夹创建者添加了新的群组或频道').fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
+              Text(plural('fl_new_chats', this.newChats.length, this.newChats.length)).fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+              Text($r('app.string.fl_new_chats_sub')).fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
             }.layoutWeight(1).alignItems(HorizontalAlign.Start);
-            Text('查看').fontSize(14).fontColor(COLOR_PRIMARY).onClick((): void => { this.newChatsOpen = true; });
+            Text($r('app.string.view')).fontSize(14).fontColor(COLOR_PRIMARY).onClick((): void => { this.newChatsOpen = true; });
           }.width('100%').padding(14).backgroundColor('#125B8FF9').borderRadius(CARD_RADIUS);
         }
-        Text('链接').fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_SECONDARY)
+        Text($r('app.string.fl_link')).fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_SECONDARY)
           .width('100%').padding({ left: 4 });
         if (this.links.length === 0) {
           Column({ space: 7 }) {
             Text('🔗').fontSize(38);
-            Text('还没有共享链接').fontSize(17).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-            Text('创建后，其他人可以一次添加链接中的群组和频道。')
+            Text($r('app.string.fl_empty')).fontSize(17).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+            Text($r('app.string.fl_empty_sub'))
               .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center);
           }.width('100%').padding({ top: 28, bottom: 28 }).backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
         } else {
@@ -286,10 +287,10 @@ struct FolderInviteLinksPage {
         }
         Row({ space: 9 }) {
           SymbolGlyph($r('sys.symbol.plus_circle')).fontSize(20).fontColor([COLOR_PRIMARY]);
-          Text('创建共享链接').fontSize(16).fontColor(COLOR_PRIMARY).layoutWeight(1);
+          Text($r('app.string.fl_create')).fontSize(16).fontColor(COLOR_PRIMARY).layoutWeight(1);
         }.width('100%').padding(14).backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS)
           .stateStyles({ normal: this.pressNormal, pressed: this.pressDown }).onClick((): void => this.openCreate());
-        Text('共享链接只能包含明确添加到文件夹、并允许当前账号分享的群组和频道。')
+        Text($r('app.string.fl_create_note'))
           .fontSize(11).fontColor(COLOR_TEXT_SECONDARY).padding({ left: 8, right: 8 });
       }.width('100%').padding({ left: 12, right: 12, top: 6, bottom: this.bottomSafe + 24 });
     }.layoutWeight(1).width('100%').scrollBar(BarState.Off).align(Alignment.Top);
@@ -300,14 +301,14 @@ struct FolderInviteLinksPage {
     Column() {
       Row() {
         Column({ space: 2 }) {
-          Text(this.editingLink === '' ? '创建共享链接' : '编辑共享链接')
+          Text(this.editingLink === '' ? $r('app.string.fl_create') : $r('app.string.fl_edit'))
             .fontSize(19).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
-          Text(`已选择 ${this.selectedChatIds.length} 个聊天`).fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
+          Text(plural('fl_selected_chats', this.selectedChatIds.length, this.selectedChatIds.length)).fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
         }.layoutWeight(1).alignItems(HorizontalAlign.Start);
-        Text('保存').fontSize(15).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
+        Text($r('app.string.save')).fontSize(15).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
           .width(52).height(38).textAlign(TextAlign.Center).onClick((): void => this.saveLink());
       }.width('100%').padding({ left: 16, right: 10, top: 12, bottom: 8 });
-      TextInput({ placeholder: '链接名称（可选）', text: this.linkName })
+      TextInput({ placeholder: $r('app.string.fl_link_name'), text: this.linkName })
         .fontSize(15).maxLength(32).height(44).margin({ left: 16, right: 16, bottom: 8 })
         .padding({ left: 12, right: 12 }).backgroundColor(COLOR_PAGE_BG).borderRadius(12)
         .onChange((value: string): void => { this.linkName = value; });
@@ -330,7 +331,7 @@ struct FolderInviteLinksPage {
           }
         }, (chat: FolderChatSummary): string => `eligible_${chat.id}`);
       }.layoutWeight(1).width('100%').scrollBar(BarState.Off);
-      Text('只有被选中的聊天会出现在这个链接中').fontSize(11).fontColor(COLOR_TEXT_SECONDARY)
+      Text($r('app.string.fl_only_selected')).fontSize(11).fontColor(COLOR_TEXT_SECONDARY)
         .padding({ top: 8, bottom: this.bottomSafe + 10 });
     }.width('100%').height('100%');
   }
@@ -338,9 +339,9 @@ struct FolderInviteLinksPage {
   @Builder
   newChatsSheet() {
     Column() {
-      Text('共享文件夹的新聊天').fontSize(19).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
+      Text($r('app.string.fl_new_chats_title')).fontSize(19).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
         .padding({ top: 14, bottom: 6 });
-      Text('选择要加入并添加到文件夹的聊天').fontSize(12).fontColor(COLOR_TEXT_SECONDARY).padding({ bottom: 8 });
+      Text($r('app.string.fl_pick_to_join')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY).padding({ bottom: 8 });
       List() {
         ForEach(this.newChats, (chat: FolderChatSummary) => {
           ListItem() {
@@ -353,7 +354,7 @@ struct FolderInviteLinksPage {
           }
         }, (chat: FolderChatSummary): string => `new_${chat.id}`);
       }.layoutWeight(1).width('100%').scrollBar(BarState.Off);
-      Text(`添加 ${this.selectedNewChatIds.length} 个聊天`).fontSize(16).fontWeight(FontWeight.Medium)
+      Text(plural('fl_add_chats', this.selectedNewChatIds.length, this.selectedNewChatIds.length)).fontSize(16).fontWeight(FontWeight.Medium)
         .fontColor(Color.White).textAlign(TextAlign.Center).width('100%')
         .padding({ top: 12, bottom: 12 }).backgroundColor(COLOR_PRIMARY).borderRadius(12)
         .margin({ left: 16, right: 16, top: 8, bottom: this.bottomSafe + 10 })
@@ -369,8 +370,8 @@ struct FolderInviteLinksPage {
           .layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else if (this.loadState === 'error') {
         Column({ space: 10 }) {
-          Text('共享链接加载失败').fontSize(17).fontColor(COLOR_TEXT_PRIMARY);
-          Text('重新加载').fontSize(14).fontColor(COLOR_PRIMARY).onClick((): void => this.load());
+          Text($r('app.string.fl_load_failed')).fontSize(17).fontColor(COLOR_TEXT_PRIMARY);
+          Text($r('app.string.settings_reload')).fontSize(14).fontColor(COLOR_PRIMARY).onClick((): void => this.load());
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else { this.readyContent(); }
     }.width('100%').height('100%').backgroundColor(COLOR_PAGE_BG)

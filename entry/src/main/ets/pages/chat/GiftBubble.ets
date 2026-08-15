@@ -75,7 +75,7 @@ export struct GiftBubble {
         if (this.photoFailed) {
           Row({ space: 4 }) {
             SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(13).fontColor([Color.White]);
-            Text('重试礼物图').fontSize(10).fontColor(Color.White);
+            Text($r('app.string.gift_retry_image')).fontSize(10).fontColor(Color.White);
           }
           .padding({ left: 8, right: 8, top: 5, bottom: 5 })
           .backgroundColor('#78000000').borderRadius(10)
@@ -106,7 +106,7 @@ export struct GiftBubble {
   build() {
     Column({ space: 8 }) {
       this.artwork();
-      Text(this.title.trim() !== '' ? this.title : 'Telegram 礼物')
+      Text(this.title.trim() !== '' ? this.title : $r('app.string.gift_regular_title'))
         .fontSize(15).fontWeight(FontWeight.Medium)
         .fontColor(this.refunded ? COLOR_TEXT_SECONDARY : COLOR_TEXT_PRIMARY)
         .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis });
@@ -122,13 +122,13 @@ export struct GiftBubble {
       }
       Row({ space: 5 }) {
         Circle({ width: 6, height: 6 }).fill(this.refunded ? '#8C96A1' : '#39A96B');
-        Text(this.status.trim() !== '' ? this.status : '礼物状态未知')
+        Text(this.status.trim() !== '' ? this.status : $r('app.string.gift_status_unknown'))
           .fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
         Blank();
         if (this.code !== '') {
           Row({ space: 4 }) {
             SymbolGlyph($r('sys.symbol.doc_text')).fontSize(12).fontColor([COLOR_PRIMARY]);
-            Text('复制兑换码').fontSize(11).fontColor(COLOR_PRIMARY);
+            Text($r('app.string.gift_copy_code')).fontSize(11).fontColor(COLOR_PRIMARY);
           }
           .padding({ left: 8, right: 8, top: 5, bottom: 5 })
           .backgroundColor('#123390EC').borderRadius(9)

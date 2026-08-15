@@ -1,8 +1,11 @@
-import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
+import { AbilityConstant, Configuration, UIAbility, Want } from '@kit.AbilityKit';
 import { notificationManager } from '@kit.NotificationKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window, KeyboardAvoidMode } from '@kit.ArkUI';
 import { initTdKit, setTdOnlineState, setUiAbilityContext } from '../tdkit/Globals';
+import { installStringsFromContext } from '../util/strings';
+import { refreshLocale } from '../util/intlFormat';
+import { bumpLanguageEpoch } from '../util/appLanguage';
 import { backgroundGraceTask } from '../services/BackgroundGraceTask';
 import { initSettings, refreshPowerSavingState } from '../store/AppSettings';
 import { beginNetworkMonitoring, refreshNetworkState } from '../services/NetworkStateService';
@@ -13,6 +16,11 @@ const DOMAIN = 0x0000;
 
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    // Before anything that formats text: stores build chat previews during
+    // startup, and without a source installed those would come out as raw keys.
+    // ApplicationContext rather than this.context — the lookup is not tied to
+    // any Ability or window, and locale is application-level configuration.
+    installStringsFromContext(this.context.getApplicationContext());
     // Loads persisted settings into AppStorage and applies the stored night
     // mode (which subsumes the old unconditional COLOR_MODE_NOT_SET).
     initSettings(this.context);
@@ -35,6 +43,15 @@ export default class EntryAbility extends UIAbility {
   // tg:// link arrives. Index's @Watch picks up the new value and routes it.
   onNewWant(want: Want, _launchParam: AbilityConstant.LaunchParam): void {
     this.stashDeepLink(want);
+  }
+
+  // Fires when the system language (or colour mode, font scale, …) changes
+  // while the app is running. Resources re-resolve themselves; the Intl
+  // formatters are cached in-process and do not, so they would keep rendering
+  // dates in the language the user just left.
+  onConfigurationUpdate(_config: Configuration): void {
+    refreshLocale();
+    bumpLanguageEpoch();
   }
 
   // Publish the launch URI for the UI layer. Cleared to '' first so re-opening

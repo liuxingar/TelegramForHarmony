@@ -2,6 +2,7 @@ import { TdClient } from '../tdkit/TdClient';
 import { TdObject, TdRequest, TdError } from '../tdkit/TdTypes';
 import { UserStore } from '../store/UserStore';
 import { CallMediaBridge, CallMediaConfig, CALL_VIDEO_OFF } from './CallMediaBridge';
+import { str } from '../util/strings';
 
 // TDLib callProtocol 的 min/max_layer 取官方移动端长期使用的取值。
 const CALL_MIN_LAYER: number = 65;
@@ -285,7 +286,7 @@ export class CallSession {
       const err = state!['error'] as TdObject | undefined;
       const message: string = err !== undefined
         ? ((err['message'] as string | undefined) ?? '') : '';
-      this.endWith('error', message !== '' ? message : '通话失败');
+      this.endWith('error', message !== '' ? message : str('svc_call_failed'));
       return;
     }
   }
@@ -311,7 +312,7 @@ export class CallSession {
     this.mediaStarted = true;
     if (!this.media.start(config)) {
       this.sendDiscard(this.callId, 0);
-      this.endWith('error', '媒体通道创建失败');
+      this.endWith('error', str('svc_media_channel_failed'));
       return;
     }
     if (this.isVideo) {
@@ -362,7 +363,7 @@ export class CallSession {
           console.error(`CallSession.discardCall(failed) failed: ${e.message}`);
         });
       }
-      this.endWith('error', '连接失败');
+      this.endWith('error', str('svc_connect_failed'));
     }
   }
 

@@ -21,6 +21,7 @@ import {
 } from '../../tdkit/GroupCallApi';
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
 import { MUTE_LONG, setMute } from '../../store/ChatActions';
+import { str } from '../../util/strings';
 
 const CARD_BG: ResourceColor = $r('app.color.surface');
 const CARD_RADIUS: number = 14;
@@ -33,16 +34,16 @@ interface ProfileTabItem {
 }
 
 const PROFILE_TABS: ProfileTabItem[] = [
-  { key: PROFILE_TAB_MEMBERS, label: '成员' },
-  { key: PROFILE_TAB_MEDIA, label: '媒体' },
-  { key: PROFILE_TAB_FILES, label: '文件' },
-  { key: PROFILE_TAB_LINKS, label: '链接' },
-  { key: PROFILE_TAB_MUSIC, label: '音乐' },
-  { key: PROFILE_TAB_POLLS, label: '投票' },
-  { key: PROFILE_TAB_VOICE, label: '语音' },
-  { key: PROFILE_TAB_VIDEO_NOTES, label: '圆形视频' },
+  { key: PROFILE_TAB_MEMBERS, label: str('ng_members') },
+  { key: PROFILE_TAB_MEDIA, label: str('cpp_media') },
+  { key: PROFILE_TAB_FILES, label: str('storage_file') },
+  { key: PROFILE_TAB_LINKS, label: str('cpp_links') },
+  { key: PROFILE_TAB_MUSIC, label: str('storage_audio') },
+  { key: PROFILE_TAB_POLLS, label: str('poll_word') },
+  { key: PROFILE_TAB_VOICE, label: str('storage_voice') },
+  { key: PROFILE_TAB_VIDEO_NOTES, label: str('cp_video_message') },
   { key: PROFILE_TAB_GIFS, label: 'GIF' },
-  { key: PROFILE_TAB_GIFTS, label: '礼物' }
+  { key: PROFILE_TAB_GIFTS, label: str('cpp_gifts') }
 ];
 
 // Group / channel detail page — visually mirrors ProfilePage (header, action
@@ -137,7 +138,7 @@ struct ChatProfilePage {
       this.loadInvitePreview();
     } else {
       this.pageState = 'error';
-      this.errorText = '链接中没有可识别的频道或群组';
+      this.errorText = str('cpp_link_no_chat');
     }
   }
 
@@ -261,22 +262,22 @@ struct ChatProfilePage {
 
   private leaveCurrentChat(): void {
     promptAction.showDialog({
-      title: this.isChannel ? '退出频道' : '退出群组',
-      message: `确定退出「${this.title}」吗？`,
+      title: this.isChannel ? $r('app.string.cp_leave_channel') : $r('app.string.cp_leave_group'),
+      message: str('cp_leave_confirm', this.title),
       buttons: [
-        { text: '取消', color: '#8E8E93' },
-        { text: '退出', color: '#E5484D' }
+        { text: $r('app.string.cancel'), color: '#8E8E93' },
+        { text: $r('app.string.cp_leave'), color: '#E5484D' }
       ]
     }).then((result): void => {
       if (result.index !== 1) { return; }
       const req: TdRequest = { '@type': 'leaveChat' };
       req['chat_id'] = this.chatId;
       getTdClient().send(req).then((): void => {
-        promptAction.showToast({ message: '已退出', duration: 1500 });
+        promptAction.showToast({ message: $r('app.string.cpp_left'), duration: 1500 });
         router.back();
       }).catch((error: TdError): void => {
         console.error(`ChatProfilePage.leave failed: ${error.message}`);
-        promptAction.showToast({ message: '退出失败，请稍后重试', duration: 1800 });
+        promptAction.showToast({ message: $r('app.string.cpp_leave_failed'), duration: 1800 });
       });
     }).catch((): void => {});
   }
@@ -289,12 +290,12 @@ struct ChatProfilePage {
       const count = (status['boost_count'] as number | undefined) ?? 0;
       const next = (status['next_level_boost_count'] as number | undefined) ?? 0;
       promptAction.showDialog({
-        title: '助力频道',
-        message: `当前等级 Lv.${level} · ${count} 次助力` +
-          (next > 0 ? `，升级还需 ${Math.max(0, next - count)} 次` : ''),
+        title: $r('app.string.cpp_boost_channel'),
+        message: str('cpp_boost_level', level, count) +
+          (next > 0 ? str('cpp_boost_needed', Math.max(0, next - count)) : ''),
         buttons: [
-          { text: '取消', color: '#8E8E93' },
-          { text: '助力', color: $r('app.color.primary') }
+          { text: $r('app.string.cancel'), color: '#8E8E93' },
+          { text: $r('app.string.cpp_boost'), color: $r('app.color.primary') }
         ]
       }).then((result): void => {
         if (result.index !== 1) { return; }
@@ -302,7 +303,7 @@ struct ChatProfilePage {
       }).catch((): void => {});
     }).catch((error: TdError): void => {
       console.error(`ChatProfilePage.boostStatus failed: ${error.message}`);
-      promptAction.showToast({ message: '获取助力信息失败', duration: 1700 });
+      promptAction.showToast({ message: $r('app.string.cpp_boost_info_failed'), duration: 1700 });
     });
   }
 
@@ -314,7 +315,7 @@ struct ChatProfilePage {
           ((slot['currently_boosted_chat_id'] as number | undefined) ?? 0) !== this.chatId);
         if (usable === undefined) {
           promptAction.showToast({
-            message: '没有可用的助力名额（助力需要 Telegram Premium）', duration: 2200
+            message: $r('app.string.cpp_no_boost_slots'), duration: 2200
           });
           return;
         }
@@ -322,14 +323,14 @@ struct ChatProfilePage {
         req['chat_id'] = this.chatId;
         req['slot_ids'] = [(usable['slot_id'] as number | undefined) ?? 0];
         getTdClient().send(req).then((): void => {
-          promptAction.showToast({ message: '助力成功', duration: 1600 });
+          promptAction.showToast({ message: $r('app.string.cpp_boosted'), duration: 1600 });
         }).catch((error: TdError): void => {
           console.error(`ChatProfilePage.boost failed: ${error.message}`);
-          promptAction.showToast({ message: '助力失败，请稍后重试', duration: 1800 });
+          promptAction.showToast({ message: $r('app.string.cpp_boost_failed'), duration: 1800 });
         });
       }).catch((error: TdError): void => {
         console.error(`ChatProfilePage.boostSlots failed: ${error.message}`);
-        promptAction.showToast({ message: '获取助力名额失败', duration: 1700 });
+        promptAction.showToast({ message: $r('app.string.cpp_boost_slots_failed'), duration: 1700 });
       });
   }
 
@@ -344,7 +345,7 @@ struct ChatProfilePage {
     getTdClient().send(req, 15000).then((result: TdObject): void => {
       const typeName = (result['@type'] as string | undefined) ?? '';
       if (typeName === 'reportChatResultOk') {
-        promptAction.showToast({ message: '举报已提交', duration: 1700 });
+        promptAction.showToast({ message: $r('app.string.cpp_report_sent'), duration: 1700 });
         return;
       }
       if (typeName === 'reportChatResultTextRequired') {
@@ -353,19 +354,19 @@ struct ChatProfilePage {
         if (((result['is_optional'] as boolean | undefined) ?? false) && nextId !== optionId) {
           this.reportChat(nextId);
         } else {
-          promptAction.showToast({ message: '该举报类型需要补充说明，暂不支持', duration: 2000 });
+          promptAction.showToast({ message: $r('app.string.cpp_report_needs_text'), duration: 2000 });
         }
         return;
       }
       if (typeName === 'reportChatResultOptionRequired') {
         const options = (result['options'] as TdObject[] | undefined) ?? [];
         if (options.length === 0) {
-          promptAction.showToast({ message: '当前不支持举报该会话', duration: 1800 });
+          promptAction.showToast({ message: $r('app.string.cpp_report_unsupported'), duration: 1800 });
           return;
         }
         const shown = options.slice(0, 6);
         promptAction.showActionMenu({
-          title: (result['title'] as string | undefined) ?? '选择举报原因',
+          title: (result['title'] as string | undefined) ?? $r('app.string.cpp_report_reason'),
           buttons: shown.map((option: TdObject): promptAction.Button =>
             ({ text: (option['text'] as string | undefined) ?? '', color: '#E5484D' } as promptAction.Button)) as
             [promptAction.Button, promptAction.Button?, promptAction.Button?,
@@ -378,10 +379,10 @@ struct ChatProfilePage {
         }).catch((): void => {});
         return;
       }
-      promptAction.showToast({ message: '举报流程暂不支持该步骤', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.cpp_report_step_unsupported'), duration: 1800 });
     }).catch((error: TdError): void => {
       console.error(`ChatProfilePage.report failed: ${error.message}`);
-      promptAction.showToast({ message: '举报失败，请稍后重试', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.cpp_report_failed'), duration: 1800 });
     });
   }
 
@@ -401,7 +402,7 @@ struct ChatProfilePage {
         this.startStore();
         return;
       }
-      this.title = (info['title'] as string | undefined) ?? 'Telegram 群组';
+      this.title = (info['title'] as string | undefined) ?? str('cpp_telegram_group');
       this.initials = this.title !== '' ? this.title.substring(0, 1).toUpperCase() : '?';
       this.description = (info['description'] as string | undefined) ?? '';
       const count = (info['member_count'] as number | undefined) ?? 0;
@@ -412,8 +413,8 @@ struct ChatProfilePage {
         || inviteTypeName.indexOf('Channel') >= 0
         || inviteTypeName.indexOf('channel') >= 0;
       this.subtitle = count > 0
-        ? `${count} 位${this.isChannel ? '订阅者' : '成员'}`
-        : (this.isChannel ? '频道' : '群组');
+        ? str('subtitle_member_count', count, this.isChannel ? str('subscribers_word') : str('members_word'))
+        : (this.isChannel ? str('gn_channel') : str('gn_group'));
       this.joinByRequest =
         (info['creates_join_request'] as boolean | undefined) ?? false;
       this.membershipState = 'joinable';
@@ -424,7 +425,7 @@ struct ChatProfilePage {
     }).catch((e: TdError): void => {
       console.error(`ChatProfilePage.checkChatInviteLink failed: ${e.message}`);
       this.pageState = 'error';
-      this.errorText = '邀请链接无效、已过期或无法访问';
+      this.errorText = str('cpp_invite_invalid');
       this.membershipState = 'blocked';
     });
   }
@@ -450,13 +451,13 @@ struct ChatProfilePage {
       }
       if (this.joinByRequest) {
         this.joinRequestSent = true;
-        promptAction.showToast({ message: '加入申请已发送', duration: 1800 });
+        promptAction.showToast({ message: $r('app.string.cpp_join_requested'), duration: 1800 });
         return;
       }
       this.membershipState = 'writable';
       this.justJoined = true;
       promptAction.showToast({
-        message: this.isChannel ? '已加入频道' : '已加入群组',
+        message: this.isChannel ? $r('app.string.cpp_joined_channel') : $r('app.string.cpp_joined_group'),
         duration: 1500
       });
       if (this.chatId !== 0 && this.store === null) {
@@ -465,30 +466,30 @@ struct ChatProfilePage {
     }).catch((e: TdError): void => {
       this.joining = false;
       console.error(`ChatProfilePage.join failed: ${e.message}`);
-      promptAction.showToast({ message: '加入失败，链接可能已失效', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.cpp_join_failed'), duration: 1800 });
     });
   }
 
   private primaryActionLabel(): string {
     if (this.joinRequestSent) {
-      return '已申请';
+      return str('cpp_requested');
     }
     if (this.membershipState === 'checking') {
-      return '加载中';
+      return str('loading_short');
     }
     if (this.membershipState === 'blocked') {
-      return '无法加入';
+      return str('cpp_cannot_join');
     }
     if (this.membershipState === 'joinable') {
       if (this.joining) {
-        return '正在加入';
+        return str('cpp_joining');
       }
       if (this.joinByRequest) {
-        return '申请加入';
+        return str('cpp_request_join');
       }
-      return this.isChannel ? '加入频道' : '加入群组';
+      return this.isChannel ? str('cpp_join_channel') : str('cpp_join_group');
     }
-    return '消息';
+    return str('cps_messages');
   }
 
   private toggleMute(): void {
@@ -500,7 +501,7 @@ struct ChatProfilePage {
     this.isMuted = willMute;
     pending.then((success: boolean): void => {
       if (success) {
-        promptAction.showToast({ message: willMute ? '已静音' : '已取消静音', duration: 1500 });
+        promptAction.showToast({ message: willMute ? $r('app.string.cl_muted') : $r('app.string.cpp_unmuted'), duration: 1500 });
       } else {
         this.isMuted = !willMute;
       }
@@ -618,13 +619,13 @@ struct ChatProfilePage {
 
   private emptyStateText(): string {
     if (this.store === null && this.membershipState !== 'writable') {
-      return `加入后可查看${this.currentTabLabel()}`;
+      return str('cpp_join_to_view', this.currentTabLabel());
     }
     const label = this.currentTabLabel();
     if (this.currentTabKey() === PROFILE_TAB_GIFTS && this.contentHasMore) {
-      return '最近的消息中没有礼物';
+      return str('cpp_no_gifts');
     }
-    return `暂无${label}内容`;
+    return str('cpp_no_content', label);
   }
 
   private visibleTabs(): ProfileTabItem[] {
@@ -669,14 +670,14 @@ struct ChatProfilePage {
         active = (groupCall['is_active'] as boolean | undefined) ?? false;
       }
       if (!active) {
-        promptAction.showToast({ message: '直播尚未开始或已经结束', duration: 1600 });
+        promptAction.showToast({ message: $r('app.string.cpp_live_not_active'), duration: 1600 });
         return;
       }
       const isRtmp = (groupCall['is_rtmp_stream'] as boolean | undefined) ?? false;
       this.openLiveViewer(groupCallId, isRtmp);
     } catch (caught) {
       const error = caught as TdError;
-      promptAction.showToast({ message: `进入直播失败：${error.message}`, duration: 1800 });
+      promptAction.showToast({ message: str('cpp_join_live_failed', error.message), duration: 1800 });
     } finally {
       this.creatingLive = false;
     }
@@ -688,10 +689,10 @@ struct ChatProfilePage {
     // everyone (endGroupCall), which plain "leave" never does.
     if (this.liveGroupCallId > 0) {
       promptAction.showActionMenu({
-        title: '直播进行中',
+        title: $r('app.string.cp_live_in_progress'),
         buttons: [
-          { text: '进入直播', color: '#3390EC' },
-          { text: '结束直播（所有人）', color: '#E5484D' }
+          { text: $r('app.string.cp_live_join'), color: '#3390EC' },
+          { text: $r('app.string.cpp_end_live_all'), color: '#E5484D' }
         ]
       }).then((result): void => {
         if (result.index === 0) {
@@ -703,10 +704,10 @@ struct ChatProfilePage {
       return;
     }
     promptAction.showActionMenu({
-      title: '发起直播',
+      title: $r('app.string.cpp_start_live'),
       buttons: [
-        { text: '多人语音/视频直播', color: '#3390EC' },
-        { text: '单向频道直播（RTMP）', color: '#3390EC' }
+        { text: $r('app.string.cpp_group_live'), color: '#3390EC' },
+        { text: $r('app.string.cpp_rtmp_live'), color: '#3390EC' }
       ]
     }).then((result): void => {
       if (result.index === 0) {
@@ -721,20 +722,20 @@ struct ChatProfilePage {
     const groupCallId = this.liveGroupCallId;
     if (groupCallId <= 0) { return; }
     promptAction.showDialog({
-      title: '结束直播',
-      message: '直播将对所有参与者结束，无法恢复。',
+      title: $r('app.string.lv_end'),
+      message: $r('app.string.cpp_end_live_body'),
       buttons: [
-        { text: '取消', color: '#8E8E93' },
-        { text: '结束', color: '#E5484D' }
+        { text: $r('app.string.cancel'), color: '#8E8E93' },
+        { text: $r('app.string.cp_stop'), color: '#E5484D' }
       ]
     }).then((result): void => {
       if (result.index !== 1) { return; }
       endGroupCall(getTdClient(), groupCallId).then((): void => {
         this.liveGroupCallId = 0;
-        promptAction.showToast({ message: '直播已结束', duration: 1500 });
+        promptAction.showToast({ message: $r('app.string.lfw_ended'), duration: 1500 });
       }).catch((error: TdError): void => {
         console.error(`ChatProfilePage.endLive failed: ${error.message}`);
-        promptAction.showToast({ message: '结束直播失败，请重试', duration: 1700 });
+        promptAction.showToast({ message: $r('app.string.cpp_end_live_failed'), duration: 1700 });
       });
     }).catch((): void => {});
   }
@@ -745,13 +746,13 @@ struct ChatProfilePage {
     try {
       const groupCallId = await createVideoChat(getTdClient(), this.chatId, isRtmpStream);
       if (groupCallId <= 0) {
-        throw new Error('Telegram 未返回直播间标识');
+        throw new Error(str('cpp_no_group_call_id'));
       }
       this.liveGroupCallId = groupCallId;
       this.openLiveViewer(groupCallId, isRtmpStream);
     } catch (caught) {
       const error = caught as Error;
-      promptAction.showToast({ message: `发起直播失败：${error.message}`, duration: 2000 });
+      promptAction.showToast({ message: str('cpp_start_live_failed', error.message), duration: 2000 });
     } finally {
       this.creatingLive = false;
     }
@@ -829,7 +830,7 @@ struct ChatProfilePage {
               }));
         }
       }.height(24);
-      Text(this.isMuted ? '取消静音' : '静音').fontSize(12).fontColor(COLOR_PRIMARY);
+      Text(this.isMuted ? $r('app.string.cp_unmute') : $r('app.string.cp_mute')).fontSize(12).fontColor(COLOR_PRIMARY);
     }
     .layoutWeight(1).height(62)
     .justifyContent(FlexAlign.Center)
@@ -841,7 +842,7 @@ struct ChatProfilePage {
   liveButton() {
     Column({ space: 5 }) {
       SymbolGlyph($r('sys.symbol.camera')).fontSize(22).fontColor([COLOR_PRIMARY]);
-      Text(this.creatingLive ? '处理中' : '直播')
+      Text(this.creatingLive ? $r('app.string.processing_short') : $r('app.string.lv_stream'))
         .fontSize(12).fontColor(COLOR_PRIMARY);
     }
     .layoutWeight(1).height(62)
@@ -907,7 +908,7 @@ struct ChatProfilePage {
         }
         if (this.chatId !== 0) {
           this.muteButton();
-          this.actionButton('sys.symbol.magnifyingglass', '搜索', () => { this.openSearchInChat(); });
+          this.actionButton('sys.symbol.magnifyingglass', str('cp_search'), () => { this.openSearchInChat(); });
           if (this.canManageVideoChats) {
             this.liveButton();
           }
@@ -916,7 +917,7 @@ struct ChatProfilePage {
       if (this.chatId !== 0) {
         Row({ space: 8 }) {
           if (!this.isChannel) {
-            this.actionButton('sys.symbol.paintpalette', '主题', () => {
+            this.actionButton('sys.symbol.paintpalette', str('chat_theme_title'), () => {
               const params: Record<string, Object> = { 'chatId': this.chatId };
               router.pushUrl({ url: 'pages/main/ChatThemePage', params })
                 .catch((error: Error): void => {
@@ -926,7 +927,7 @@ struct ChatProfilePage {
           }
           // Only creators / admins with real rights see the management entry.
           if (this.canManageChat) {
-            this.actionButton('sys.symbol.gearshape', '管理', () => {
+            this.actionButton('sys.symbol.gearshape', str('lv_manage_short'), () => {
               const params: Record<string, Object> = { 'chatId': this.chatId };
               router.pushUrl({ url: 'pages/main/GroupAdminPage', params })
                 .catch((error: Error): void => {
@@ -934,8 +935,8 @@ struct ChatProfilePage {
                 });
             });
           }
-          this.actionButton('sys.symbol.bolt', '助力', () => { this.boostChat(); });
-          this.actionButton('sys.symbol.flag', '举报', () => { this.reportChat(''); });
+          this.actionButton('sys.symbol.bolt', str('cpp_boost'), () => { this.boostChat(); });
+          this.actionButton('sys.symbol.flag', str('mb_report'), () => { this.reportChat(''); });
         }.width('100%');
       }
     }
@@ -947,15 +948,15 @@ struct ChatProfilePage {
     Column({ space: 10 }) {
       if (this.pageState === 'loading') {
         LoadingProgress().width(28).height(28).color(COLOR_PRIMARY);
-        Text('正在获取详情…').fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
+        Text($r('app.string.cpp_loading_details')).fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
       } else {
         SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
           .fontSize(28).fontColor([COLOR_TEXT_SECONDARY]);
-        Text(this.errorText !== '' ? this.errorText : '无法加载详情')
+        Text(this.errorText !== '' ? this.errorText : $r('app.string.cpp_details_failed'))
           .fontSize(14).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center);
         Row({ space: 6 }) {
           SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(16).fontColor([COLOR_PRIMARY]);
-          Text('重试').fontSize(14).fontColor(COLOR_PRIMARY);
+          Text($r('app.string.settings_retry')).fontSize(14).fontColor(COLOR_PRIMARY);
         }
         .height(36).padding({ left: 14, right: 14 }).borderRadius(18)
         .backgroundColor('#123390EC')
@@ -980,7 +981,7 @@ struct ChatProfilePage {
         if (this.description !== '') {
           Column({ space: 2 }) {
             ExpandableText({ content: this.description });
-            Text('简介').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+            Text($r('app.string.ps_bio')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
           }
           .alignItems(HorizontalAlign.Start)
           .width('100%').padding({ top: 8, bottom: 8 });
@@ -992,7 +993,7 @@ struct ChatProfilePage {
           Row() {
             Column({ space: 2 }) {
               Text(`@${this.chatUsername}`).fontSize(15).fontColor(COLOR_PRIMARY).copyOption(CopyOptions.LocalDevice);
-              Text('链接').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+              Text($r('app.string.cpp_links')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
             }.alignItems(HorizontalAlign.Start).layoutWeight(1);
             SymbolGlyph($r('sys.symbol.qrcode')).fontSize(22).fontColor([COLOR_TEXT_SECONDARY])
               .onClick(() => { this.openQr(); });
@@ -1001,7 +1002,7 @@ struct ChatProfilePage {
           .alignItems(VerticalAlign.Center);
         }
         if (this.description === '' && this.chatUsername === '') {
-          Text('暂无资料').fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
+          Text($r('app.string.cpp_no_profile')).fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
             .padding({ top: 10, bottom: 10 });
         }
       }
@@ -1078,7 +1079,7 @@ struct ChatProfilePage {
   tabsLoadingCard() {
     Row({ space: 9 }) {
       LoadingProgress().width(18).height(18).color(COLOR_PRIMARY);
-      Text('正在整理共享内容').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+      Text($r('app.string.cpp_organising_shared')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
     }
     .width('calc(100% - 24vp)').height(52)
     .margin({ left: 12, right: 12, top: 12, bottom: 20 })
@@ -1115,19 +1116,19 @@ struct ChatProfilePage {
         if (this.store !== null && this.store.hasMoreMembers) {
           Row({ space: 8 }) {
             LoadingProgress().width(18).height(18).color(COLOR_PRIMARY);
-            Text('正在加载更多成员').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+            Text($r('app.string.cpp_loading_more_members')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
           }.height(52).justifyContent(FlexAlign.Center).width('100%');
         }
       } else if (this.membersState === 'loading') {
-        this.inlineState('loading', '正在获取成员…');
+        this.inlineState('loading', str('cpp_loading_members'));
       } else if (this.membersState === 'restricted') {
         this.inlineState('restricted', this.isChannel
-          ? 'Telegram 未向当前账号开放完整订阅者列表'
-          : '当前账号无权查看成员列表');
+          ? str('cpp_no_full_subscribers')
+          : str('cpp_no_member_access'));
       } else if (this.membersState === 'error') {
-        this.inlineState('error', '成员列表加载失败');
+        this.inlineState('error', str('cpp_members_failed'));
       } else {
-        this.inlineState('empty', '暂无可显示的成员');
+        this.inlineState('empty', str('cpp_no_members'));
       }
     }
     .width('calc(100% - 24vp)')
@@ -1162,14 +1163,14 @@ struct ChatProfilePage {
     Column({ space: 10 }) {
       if (this.contentState === 'loading') {
         LoadingProgress().width(28).height(28).color(COLOR_PRIMARY);
-        Text(`正在加载${this.currentTabLabel()}…`)
+        Text(str('cpp_loading_tab', this.currentTabLabel()))
           .fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
       } else if (this.contentState === 'error') {
         SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
           .fontSize(28).fontColor([COLOR_TEXT_SECONDARY]);
-        Text(this.contentErrorText !== '' ? this.contentErrorText : '加载失败')
+        Text(this.contentErrorText !== '' ? this.contentErrorText : $r('app.string.load_failed'))
           .fontSize(14).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center);
-        Text('重试').fontSize(14).fontColor(COLOR_PRIMARY)
+        Text($r('app.string.settings_retry')).fontSize(14).fontColor(COLOR_PRIMARY)
           .height(34).padding({ left: 16, right: 16 }).textAlign(TextAlign.Center)
           .backgroundColor('#123390EC').borderRadius(17)
           .onClick((): void => { if (this.store !== null) { this.store.retryContent(); } });
@@ -1179,7 +1180,7 @@ struct ChatProfilePage {
           .fontSize(27).fontColor([COLOR_TEXT_SECONDARY]);
         Text(this.emptyStateText()).fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
         if (this.currentTabKey() === PROFILE_TAB_GIFTS && this.contentHasMore) {
-          Text('继续查找更早消息').fontSize(14).fontColor(COLOR_PRIMARY)
+          Text($r('app.string.cpp_search_older')).fontSize(14).fontColor(COLOR_PRIMARY)
             .height(34).padding({ left: 16, right: 16 }).textAlign(TextAlign.Center)
             .backgroundColor('#123390EC').borderRadius(17)
             .onClick((): void => { if (this.store !== null) { this.store.loadMoreContent(); } });
@@ -1315,12 +1316,12 @@ struct ChatProfilePage {
     Row({ space: 8 }) {
       if (this.contentPaging) {
         LoadingProgress().width(18).height(18).color(COLOR_PRIMARY);
-        Text('正在加载更多').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+        Text($r('app.string.cpp_loading_more')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
       } else if (this.contentPagingError) {
         SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(16).fontColor([COLOR_PRIMARY]);
-        Text('加载失败，点击重试').fontSize(13).fontColor(COLOR_PRIMARY);
+        Text($r('app.string.load_failed_tap')).fontSize(13).fontColor(COLOR_PRIMARY);
       } else if (!this.contentHasMore && this.contentItems.length > 0) {
-        Text('已经到底了').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+        Text($r('app.string.cpp_end_of_list')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
       }
     }
     .width('100%').height(this.contentItems.length > 0 ? 54 : 0)

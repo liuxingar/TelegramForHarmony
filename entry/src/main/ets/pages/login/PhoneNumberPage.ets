@@ -4,9 +4,10 @@ import {
 import { TdError } from '../../tdkit/TdTypes';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
 import {
-  CountryOption, FALLBACK_COUNTRIES, filterCountries, loadCountries
+  CountryOption, fallbackCountries, filterCountries, loadCountries
 } from './CountryData';
 import { LoginHero } from './LoginHero';
+import { str } from '../../util/strings';
 
 @Preview
 @Component
@@ -17,10 +18,10 @@ export struct PhoneNumberPage {
   @State pickerOpen: boolean = false;
   @State pickerReady: boolean = false;
   @State countrySearch: string = '';
-  @State countries: CountryOption[] = FALLBACK_COUNTRIES;
+  @State countries: CountryOption[] = fallbackCountries();
   @State selectedCountry: CountryOption = {
     iso2: 'CN',
-    name: '中国大陆',
+    name: str('country_cn'),
     englishName: 'China',
     callingCode: '86',
     flag: '🇨🇳'
@@ -47,7 +48,7 @@ export struct PhoneNumberPage {
   private submitPhone(): void {
     if (this.busy) { return; }
     if (this.phoneDigits.length < 4) {
-      this.errorText = '请输入正确的手机号码';
+      this.errorText = str('lg_invalid_phone');
       return;
     }
     this.busy = true;
@@ -93,7 +94,7 @@ export struct PhoneNumberPage {
   countryPickerSheet() {
     Column() {
       Row() {
-        Text('选择国家或地区')
+        Text($r('app.string.lg_pick_country'))
           .fontSize(24).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
           .layoutWeight(1);
       }
@@ -104,7 +105,7 @@ export struct PhoneNumberPage {
       Row({ space: 9 }) {
         SymbolGlyph($r('sys.symbol.magnifyingglass'))
           .fontSize(17).fontColor([COLOR_TEXT_SECONDARY]);
-        TextInput({ text: this.countrySearch, placeholder: '搜索国家、地区或区号' })
+        TextInput({ text: this.countrySearch, placeholder: $r('app.string.lg_search_country') })
           .fontSize(15).fontColor(COLOR_TEXT_PRIMARY)
           .placeholderColor(COLOR_TEXT_SECONDARY)
           .backgroundColor(Color.Transparent)
@@ -165,9 +166,9 @@ export struct PhoneNumberPage {
       Column({ space: 14 }) {
         LoginHero({ mode: 'phone' });
 
-        Text('你的手机号')
+        Text($r('app.string.lg_your_phone'))
           .fontSize(27).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
-        Text('请选择国家或地区，并输入用于登录 Telegram 的手机号码。')
+        Text($r('app.string.lg_phone_hint'))
           .fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
           .textAlign(TextAlign.Center)
           .lineHeight(21)
@@ -201,7 +202,7 @@ export struct PhoneNumberPage {
           .borderRadius(13)
           .border({ width: 1, color: '#263390EC' });
 
-          TextInput({ text: this.phoneDigits, placeholder: '手机号码' })
+          TextInput({ text: this.phoneDigits, placeholder: $r('app.string.ct_phone') })
             .type(InputType.PhoneNumber)
             .fontSize(17).fontColor(COLOR_TEXT_PRIMARY)
             .placeholderColor(COLOR_TEXT_SECONDARY)
@@ -224,7 +225,7 @@ export struct PhoneNumberPage {
             .padding({ left: 4, right: 4 });
         }
 
-        Button(this.busy ? '正在发送验证码…' : '继续')
+        Button(this.busy ? $r('app.string.lg_sending_code') : $r('app.string.lg_continue'))
           .width('100%').height(50)
           .fontSize(16).fontWeight(FontWeight.Medium)
           .backgroundColor(COLOR_PRIMARY)
@@ -235,7 +236,7 @@ export struct PhoneNumberPage {
         Row({ space: 8 }) {
           SymbolGlyph($r('sys.symbol.qrcode'))
             .fontSize(18).fontColor([COLOR_PRIMARY]);
-          Text('用其他设备扫码登录')
+          Text($r('app.string.lg_qr_sign_in'))
             .fontSize(15).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY);
         }
         .width('100%').height(46)
@@ -244,7 +245,7 @@ export struct PhoneNumberPage {
         .onClick((): void => this.startQrLogin());
 
         if (canReturnToPreviousTdAccount()) {
-          Button('返回原账号')
+          Button($r('app.string.lg_back_to_account'))
             .width('100%').height(46)
             .fontColor(COLOR_PRIMARY)
             .backgroundColor(Color.Transparent)

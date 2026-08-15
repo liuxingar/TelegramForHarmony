@@ -49,7 +49,7 @@ export default function liveInteractionPresentationTest() {
       expect(liveInteractionPresentation(loading).kind).assertEqual('loading');
       const readonly = input();
       readonly.canSendMessages = false;
-      expect(liveInteractionPresentation(readonly).statusText).assertEqual('只读');
+      expect(liveInteractionPresentation(readonly).statusText).assertEqual('live_chat_readonly_short');
       const failed = input();
       failed.channelHistoryState = 'error';
       failed.channelHistoryError = '网络错误';

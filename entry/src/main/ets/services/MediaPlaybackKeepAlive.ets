@@ -1,6 +1,7 @@
 import { common, wantAgent } from '@kit.AbilityKit';
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { avSession } from '@kit.AVSessionKit';
+import { str } from '../util/strings';
 
 // 媒体播放期后台保活：正在播（音乐/语音/视频原声）时挂 audioPlayback
 // 长时任务 + AVSession，切后台继续播放；全部停止即释放。
@@ -71,7 +72,7 @@ class MediaPlaybackKeepAlive {
       session.on('play', (): void => {});
       session.on('pause', (): void => {});
       session.on('stop', (): void => {});
-      await session.setAVMetadata({ assetId: 'telegram_media', title: '正在播放' });
+      await session.setAVMetadata({ assetId: 'telegram_media', title: str('svc_playing') });
       await session.setAVPlaybackState({
         state: avSession.PlaybackState.PLAYBACK_STATE_PLAY
       });

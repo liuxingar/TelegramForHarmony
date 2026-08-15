@@ -12,10 +12,17 @@ import {
 import {
   COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
+import { str } from '../../util/strings';
 
 const CARD_RADIUS: number = 14;
 const SLOW_MODE_VALUES: number[] = [0, 10, 30, 60, 300, 900, 3600];
-const SLOW_MODE_LABELS: string[] = ['关闭', '10 秒', '30 秒', '1 分钟', '5 分钟', '15 分钟', '1 小时'];
+// A function, not a const: the labels come from str(), which resolves at call
+// time. A module-level array would be built before the string source is
+// installed and would then keep that language.
+function slowModeLabels(): string[] {
+  return [str('slow_off'), str('slow_10s'), str('slow_30s'), str('slow_1m'),
+    str('slow_5m'), str('slow_15m'), str('slow_1h')];
+}
 
 interface AdminPageParams {
   chatId?: number;
@@ -88,7 +95,7 @@ struct GroupAdminPage {
 
   private nameOf(userId: number): string {
     const name = getUserStore().displayName(userId);
-    return name !== '' ? name : `用户 ${userId}`;
+    return name !== '' ? name : str('ga_user_id', userId);
   }
 
   private fail(error: TdError, fallback: string): void {
@@ -96,7 +103,7 @@ struct GroupAdminPage {
     console.error(`GroupAdminPage: ${error.message}`);
     promptAction.showToast({
       message: error.message.indexOf('rights') >= 0 || error.message.indexOf('ADMIN') >= 0
-        ? '权限不足' : fallback,
+        ? $r('app.string.ga_no_permission') : fallback,
       duration: 1700
     });
   }
@@ -107,8 +114,8 @@ struct GroupAdminPage {
     this.busy = true;
     setChatTitle(this.chatId, value).then((): void => {
       this.busy = false;
-      promptAction.showToast({ message: '名称已更新', duration: 1400 });
-    }).catch((e: TdError): void => this.fail(e, '修改名称失败'));
+      promptAction.showToast({ message: $r('app.string.ga_name_updated'), duration: 1400 });
+    }).catch((e: TdError): void => this.fail(e, str('ga_name_failed')));
   }
 
   private saveDescription(): void {
@@ -116,8 +123,8 @@ struct GroupAdminPage {
     this.busy = true;
     setChatDescription(this.chatId, this.description.trim()).then((): void => {
       this.busy = false;
-      promptAction.showToast({ message: '简介已更新', duration: 1400 });
-    }).catch((e: TdError): void => this.fail(e, '修改简介失败'));
+      promptAction.showToast({ message: $r('app.string.ga_bio_updated'), duration: 1400 });
+    }).catch((e: TdError): void => this.fail(e, str('ga_bio_failed')));
   }
 
   // Permission switches write the whole set — TDLib has no partial update.
@@ -136,14 +143,14 @@ struct GroupAdminPage {
     this.permissions = next;
     setChatPermissions(this.chatId, next).catch((e: TdError): void => {
       this.permissions = previous;
-      this.fail(e, '权限修改失败');
+      this.fail(e, str('ga_permission_failed'));
     });
   }
 
   private chooseSlowMode(): void {
     promptAction.showActionMenu({
-      title: '慢速模式',
-      buttons: SLOW_MODE_LABELS.slice(0, 6).map((text: string): promptAction.Button =>
+      title: $r('app.string.ga_slow_mode'),
+      buttons: slowModeLabels().slice(0, 6).map((text: string): promptAction.Button =>
         ({ text, color: '#3390EC' } as promptAction.Button)) as
         [promptAction.Button, promptAction.Button?, promptAction.Button?,
           promptAction.Button?, promptAction.Button?, promptAction.Button?]
@@ -153,19 +160,19 @@ struct GroupAdminPage {
       setSlowMode(this.chatId, seconds).then((): void => {
         this.slowModeIndex = chosen.index;
         promptAction.showToast({
-          message: seconds === 0 ? '已关闭慢速模式' : `发言间隔 ${SLOW_MODE_LABELS[chosen.index]}`,
+          message: seconds === 0 ? $r('app.string.ga_slow_off') : str('ga_slow_interval', slowModeLabels()[chosen.index]),
           duration: 1600
         });
-      }).catch((e: TdError): void => this.fail(e, '慢速模式设置失败'));
+      }).catch((e: TdError): void => this.fail(e, str('ga_slow_failed')));
     }).catch((): void => {});
   }
 
   private memberActions(userId: number, isAdmin: boolean): void {
-    const labels: string[] = isAdmin ? ['撤销管理员'] : ['设为管理员', '移出并封禁', '删除其全部消息'];
+    const labels: string[] = isAdmin ? [str('ga_demote')] : [str('ga_promote'), str('ga_ban'), str('ga_delete_all')];
     promptAction.showActionMenu({
       title: this.nameOf(userId),
       buttons: labels.map((text: string): promptAction.Button =>
-        ({ text, color: text.indexOf('封禁') >= 0 || text.indexOf('删除') >= 0
+        ({ text, color: text.indexOf(str('ga_ban_short')) >= 0 || text.indexOf(str('delete')) >= 0
           ? '#E5484D' : '#3390EC' } as promptAction.Button)) as
         [promptAction.Button, promptAction.Button?, promptAction.Button?,
           promptAction.Button?, promptAction.Button?, promptAction.Button?]
@@ -173,14 +180,14 @@ struct GroupAdminPage {
       const label = labels[chosen.index];
       if (label === undefined) { return; }
       let task: Promise<void> | null = null;
-      if (label === '撤销管理员') { task = setAdmin(this.chatId, userId, false); }
-      else if (label === '设为管理员') { task = setAdmin(this.chatId, userId, true); }
-      else if (label === '移出并封禁') { task = banMember(this.chatId, userId, false); }
+      if (label === str('ga_demote')) { task = setAdmin(this.chatId, userId, false); }
+      else if (label === str('ga_promote')) { task = setAdmin(this.chatId, userId, true); }
+      else if (label === str('ga_ban')) { task = banMember(this.chatId, userId, false); }
       else { task = deleteMessagesFromSender(this.chatId, userId); }
       task.then((): void => {
-        promptAction.showToast({ message: '操作成功', duration: 1400 });
+        promptAction.showToast({ message: $r('app.string.ga_done'), duration: 1400 });
         this.load();
-      }).catch((e: TdError): void => this.fail(e, '操作失败'));
+      }).catch((e: TdError): void => this.fail(e, str('ga_failed')));
     }).catch((): void => {});
   }
 
@@ -195,13 +202,13 @@ struct GroupAdminPage {
     check.then((issue: string): Promise<void> => {
       if (issue !== '') { return Promise.reject(new TdError(400, issue)); }
       if (this.supergroupId === 0) {
-        return Promise.reject(new TdError(400, '仅超级群/频道支持公开用户名'));
+        return Promise.reject(new TdError(400, str('ga_public_supergroup_only')));
       }
       return setPublicUsername(this.supergroupId, value);
     }).then((): void => {
       this.busy = false;
       promptAction.showToast({
-        message: value === '' ? '已设为私有群组' : `公开链接 t.me/${value} 已生效`, duration: 1900
+        message: value === '' ? $r('app.string.ga_now_private') : str('ga_public_link_set', value), duration: 1900
       });
     }).catch((e: TdError): void => {
       this.busy = false;
@@ -211,11 +218,11 @@ struct GroupAdminPage {
 
   private deleteTodayMessages(): void {
     promptAction.showDialog({
-      title: '删除今天的消息',
-      message: '将删除本会话今天的全部消息，所有人可见，且无法恢复。',
+      title: $r('app.string.ga_delete_today'),
+      message: $r('app.string.ga_delete_today_confirm'),
       buttons: [
-        { text: '取消', color: '#8E8E93' },
-        { text: '删除', color: '#E5484D' }
+        { text: $r('app.string.cancel'), color: '#8E8E93' },
+        { text: $r('app.string.delete'), color: '#E5484D' }
       ]
     }).then((result): void => {
       if (result.index !== 1) { return; }
@@ -223,8 +230,8 @@ struct GroupAdminPage {
       const start = new Date();
       start.setHours(0, 0, 0, 0);
       deleteMessagesByDate(this.chatId, Math.floor(start.getTime() / 1000), now).then((): void => {
-        promptAction.showToast({ message: '已删除', duration: 1500 });
-      }).catch((e: TdError): void => this.fail(e, '删除失败'));
+        promptAction.showToast({ message: $r('app.string.deleted'), duration: 1500 });
+      }).catch((e: TdError): void => this.fail(e, str('delete_failed')));
     }).catch((): void => {});
   }
 
@@ -236,17 +243,17 @@ struct GroupAdminPage {
       if (link !== '') {
         const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, link);
         pasteboard.getSystemPasteboard().setData(data).catch((): void => {});
-        promptAction.showToast({ message: '新链接已创建并复制', duration: 1700 });
+        promptAction.showToast({ message: $r('app.string.ga_link_created'), duration: 1700 });
       }
       this.load();
-    }).catch((e: TdError): void => this.fail(e, '创建邀请链接失败'));
+    }).catch((e: TdError): void => this.fail(e, str('ga_link_failed')));
   }
 
   private handleRequest(userId: number, approve: boolean): void {
     processJoinRequest(this.chatId, userId, approve).then((): void => {
       this.requests = this.requests.filter((r: JoinRequestRow): boolean => r.userId !== userId);
-      promptAction.showToast({ message: approve ? '已通过' : '已拒绝', duration: 1400 });
-    }).catch((e: TdError): void => this.fail(e, '处理失败'));
+      promptAction.showToast({ message: approve ? $r('app.string.ga_approved') : $r('app.string.ga_declined'), duration: 1400 });
+    }).catch((e: TdError): void => this.fail(e, str('ga_handle_failed')));
   }
 
   @Builder
@@ -256,7 +263,7 @@ struct GroupAdminPage {
         SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(24).fontColor([COLOR_TEXT_PRIMARY]);
       }.width(40).height(40).borderRadius(20).backgroundColor(Color.Transparent)
       .onClick((): void => { router.back(); });
-      Text('群组管理').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
+      Text($r('app.string.ga_title')).fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
         .layoutWeight(1);
       if (this.busy) { LoadingProgress().width(20).height(20).color(COLOR_PRIMARY); }
     }.width('100%').height(52).padding({ left: 8, right: 16 }).alignItems(VerticalAlign.Center);
@@ -291,63 +298,63 @@ struct GroupAdminPage {
       if (this.loadState === 'loading') {
         Column({ space: 9 }) {
           LoadingProgress().width(32).height(32).color(COLOR_PRIMARY);
-          Text('正在加载群组信息…').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.ga_loading')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else if (this.loadState === 'error') {
         Column({ space: 10 }) {
-          Text('加载失败').fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
-          Button('重新加载').onClick((): void => this.load());
+          Text($r('app.string.load_failed')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
+          Button($r('app.string.settings_reload')).onClick((): void => this.load());
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else {
         Scroll() {
           Column({ space: 12 }) {
             Column({ space: 10 }) {
-              Text('基本信息').fontSize(12).fontColor(COLOR_TEXT_SECONDARY).width('100%');
-              TextInput({ placeholder: '群组名称', text: this.title })
+              Text($r('app.string.ga_basic')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY).width('100%');
+              TextInput({ placeholder: $r('app.string.ng_group_name'), text: this.title })
                 .fontSize(15).backgroundColor(COLOR_PAGE_BG).borderRadius(10)
                 .onChange((value: string): void => { this.title = value; })
                 .onSubmit((): void => this.saveTitle());
-              TextArea({ placeholder: '群组简介', text: this.description })
+              TextArea({ placeholder: $r('app.string.ga_group_bio'), text: this.description })
                 .fontSize(14).height(72).backgroundColor(COLOR_PAGE_BG).borderRadius(10)
                 .onChange((value: string): void => { this.description = value; });
               Row({ space: 10 }) {
-                Button('保存名称').layoutWeight(1).height(38).fontSize(14)
+                Button($r('app.string.ga_save_name')).layoutWeight(1).height(38).fontSize(14)
                   .onClick((): void => this.saveTitle());
-                Button('保存简介').layoutWeight(1).height(38).fontSize(14)
+                Button($r('app.string.ga_save_bio')).layoutWeight(1).height(38).fontSize(14)
                   .onClick((): void => this.saveDescription());
               }.width('100%');
               Row({ space: 8 }) {
                 Text('t.me/').fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
-                TextInput({ placeholder: '公开用户名（留空则私有）', text: this.publicUsername })
+                TextInput({ placeholder: $r('app.string.ga_public_username'), text: this.publicUsername })
                   .fontSize(14).layoutWeight(1).backgroundColor(COLOR_PAGE_BG).borderRadius(10)
                   .onChange((value: string): void => { this.publicUsername = value; });
-                Button('保存').height(34).fontSize(13)
+                Button($r('app.string.save')).height(34).fontSize(13)
                   .onClick((): void => this.savePublicUsername());
               }.width('100%');
             }
             .width('100%').padding(14).backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
 
             Column() {
-              Text('成员权限').fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
+              Text($r('app.string.ga_member_rights')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
                 .width('100%').padding({ left: 14, top: 12, bottom: 4 });
-              this.permissionRow('发送消息', 'sendMessages');
-              this.permissionRow('发送媒体', 'sendMedia');
-              this.permissionRow('发起投票', 'sendPolls');
-              this.permissionRow('发送贴纸和 GIF', 'sendOther');
-              this.permissionRow('嵌入链接预览', 'addLinkPreviews');
-              this.permissionRow('修改群信息', 'changeInfo');
-              this.permissionRow('添加成员', 'inviteUsers');
-              this.permissionRow('置顶消息', 'pinMessages');
+              this.permissionRow(str('ga_send_messages'), 'sendMessages');
+              this.permissionRow(str('ga_send_media'), 'sendMedia');
+              this.permissionRow(str('ga_send_polls'), 'sendPolls');
+              this.permissionRow(str('ga_send_stickers'), 'sendOther');
+              this.permissionRow(str('ga_embed_links'), 'addLinkPreviews');
+              this.permissionRow(str('ga_change_info'), 'changeInfo');
+              this.permissionRow(str('ga_invite_users'), 'inviteUsers');
+              this.permissionRow(str('ga_pin_messages'), 'pinMessages');
               Row() {
-                Text('慢速模式').fontSize(15).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
-                Text(SLOW_MODE_LABELS[this.slowModeIndex]).fontSize(14).fontColor(COLOR_PRIMARY);
+                Text($r('app.string.ga_slow_mode')).fontSize(15).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
+                Text(slowModeLabels()[this.slowModeIndex]).fontSize(14).fontColor(COLOR_PRIMARY);
               }.width('100%').height(48).padding({ left: 14, right: 14 })
               .onClick((): void => this.chooseSlowMode());
             }.width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
 
             if (this.requests.length > 0) {
               Column() {
-                Text(`入群申请 · ${this.requests.length}`).fontSize(12)
+                Text(str('ga_join_requests', this.requests.length)).fontSize(12)
                   .fontColor(COLOR_TEXT_SECONDARY).width('100%')
                   .padding({ left: 14, top: 12, bottom: 4 });
                 ForEach(this.requests, (row: JoinRequestRow) => {
@@ -355,9 +362,9 @@ struct GroupAdminPage {
                     Text(this.nameOf(row.userId)).fontSize(15).fontColor(COLOR_TEXT_PRIMARY)
                       .layoutWeight(1).maxLines(1)
                       .textOverflow({ overflow: TextOverflow.Ellipsis });
-                    Button('通过').height(32).fontSize(13)
+                    Button($r('app.string.ga_approve')).height(32).fontSize(13)
                       .onClick((): void => this.handleRequest(row.userId, true));
-                    Button('拒绝').height(32).fontSize(13)
+                    Button($r('app.string.ga_decline')).height(32).fontSize(13)
                       .backgroundColor(COLOR_PAGE_BG).fontColor('#E5484D')
                       .onClick((): void => this.handleRequest(row.userId, false));
                   }.width('100%').height(52).padding({ left: 14, right: 12 });
@@ -366,7 +373,7 @@ struct GroupAdminPage {
             }
 
             Column() {
-              Text(`管理员 · ${this.admins.length}`).fontSize(12)
+              Text(str('ga_admins', this.admins.length)).fontSize(12)
                 .fontColor(COLOR_TEXT_SECONDARY).width('100%')
                 .padding({ left: 14, top: 12, bottom: 4 });
               ForEach(this.admins, (row: AdminRow) => {
@@ -374,8 +381,8 @@ struct GroupAdminPage {
                   Column({ space: 2 }) {
                     Text(this.nameOf(row.userId)).fontSize(15).fontColor(COLOR_TEXT_PRIMARY)
                       .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
-                    Text(row.isCreator ? '创建者'
-                      : (row.customTitle !== '' ? row.customTitle : '管理员'))
+                    Text(row.isCreator ? $r('app.string.ga_creator')
+                      : (row.customTitle !== '' ? row.customTitle : $r('app.string.ga_admin')))
                       .fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
                   }.layoutWeight(1).alignItems(HorizontalAlign.Start);
                   if (!row.isCreator) {
@@ -392,15 +399,15 @@ struct GroupAdminPage {
 
             Column() {
               Row() {
-                Text(`邀请链接 · ${this.links.length}`).fontSize(12)
+                Text(str('ga_invite_links', this.links.length)).fontSize(12)
                   .fontColor(COLOR_TEXT_SECONDARY).layoutWeight(1);
-                Text('新建').fontSize(13).fontColor(COLOR_PRIMARY)
+                Text($r('app.string.ga_new')).fontSize(13).fontColor(COLOR_PRIMARY)
                   .onClick((): void => this.newInviteLink());
               }.width('100%').padding({ left: 14, right: 14, top: 12, bottom: 4 });
               ForEach(this.links, (row: InviteLinkRow) => {
                 Row({ space: 8 }) {
                   Column({ space: 2 }) {
-                    Text(row.name !== '' ? row.name : (row.isPrimary ? '主链接' : '邀请链接'))
+                    Text(row.name !== '' ? row.name : (row.isPrimary ? $r('app.string.ga_primary_link') : $r('app.string.ga_invite_link')))
                       .fontSize(14).fontColor(COLOR_TEXT_PRIMARY);
                     Text(row.link).fontSize(11).fontColor(COLOR_TEXT_SECONDARY)
                       .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
@@ -410,16 +417,16 @@ struct GroupAdminPage {
                     .onClick((): void => {
                       const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, row.link);
                       pasteboard.getSystemPasteboard().setData(data).then((): void => {
-                        promptAction.showToast({ message: '已复制', duration: 1300 });
+                        promptAction.showToast({ message: $r('app.string.copied'), duration: 1300 });
                       }).catch((): void => {});
                     });
                   if (!row.isPrimary) {
                     SymbolGlyph($r('sys.symbol.trash')).fontSize(16).fontColor(['#E5484D'])
                       .onClick((): void => {
                         revokeInviteLink(this.chatId, row.link).then((): void => {
-                          promptAction.showToast({ message: '链接已撤销', duration: 1400 });
+                          promptAction.showToast({ message: $r('app.string.ga_link_revoked'), duration: 1400 });
                           this.load();
-                        }).catch((e: TdError): void => this.fail(e, '撤销失败'));
+                        }).catch((e: TdError): void => this.fail(e, str('ga_revoke_failed')));
                       });
                   }
                 }.width('100%').height(56).padding({ left: 14, right: 14 });
@@ -428,13 +435,13 @@ struct GroupAdminPage {
 
             Row({ space: 10 }) {
               SymbolGlyph($r('sys.symbol.trash')).fontSize(17).fontColor(['#E5484D']);
-              Text('删除今天的全部消息').fontSize(15).fontColor('#E5484D').layoutWeight(1);
+              Text($r('app.string.ga_delete_today_all')).fontSize(15).fontColor('#E5484D').layoutWeight(1);
             }
             .width('100%').height(48).padding({ left: 14, right: 14 })
             .backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS)
             .onClick((): void => this.deleteTodayMessages());
 
-            Text('所有操作都会由服务器校验权限；没有相应管理权限时会提示"权限不足"。')
+            Text($r('app.string.ga_note'))
               .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).lineHeight(18).width('100%');
           }.width('100%').padding({ left: 12, right: 12, bottom: this.bottomSafe + 24 });
         }.layoutWeight(1).width('100%').scrollBar(BarState.Off);

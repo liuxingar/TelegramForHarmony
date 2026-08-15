@@ -14,6 +14,7 @@ import { TdObject, TdRequest, TdError } from '../../tdkit/TdTypes';
 import { COLOR_DIVIDER, COLOR_PRIMARY, COLOR_TAB_PILL_BG, COLOR_TAB_UNSELECTED } from '../../util/theme';
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
 import { updateChecker, STORAGE_UPDATE_AVAILABLE } from '../../services/UpdateChecker';
+import { str } from '../../util/strings';
 
 // Translucent tint over a backdrop blur — the frosted-glass dock material.
 const DOCK_BG: ResourceColor = $r('app.color.dock_glass');
@@ -184,8 +185,8 @@ export struct MainScreen {
       pressed: this.dockItemPressedStyle
     })
     .accessibilityText(index === 0 && this.unread > 0
-      ? `${label}，${this.unread} 个未读${this.tab === index ? '，已选中' : ''}`
-      : `${label}${this.tab === index ? '，已选中' : ''}`)
+      ? str('a11y_tab_unread', label, this.unread, this.tab === index ? str('a11y_selected') : '')
+      : str('a11y_option_state', label, this.tab === index ? str('a11y_selected') : ''))
     .onClick(() => { this.select(index); });
   }
 
@@ -198,7 +199,7 @@ export struct MainScreen {
       .width(32).height(32).borderRadius(16).padding(2)
       // A constant border width avoids a size jump when this tab is selected.
       .border({ width: 2, color: this.tab === 3 ? COLOR_PRIMARY : Color.Transparent });
-      Text('个人资料').fontSize(10)
+      Text(str('tab_profile')).fontSize(10)
         .fontColor(this.tab === 3 ? COLOR_PRIMARY : COLOR_TAB_UNSELECTED);
     }
     .layoutWeight(1).height('100%')
@@ -208,7 +209,7 @@ export struct MainScreen {
       normal: this.dockItemNormalStyle,
       pressed: this.dockItemPressedStyle
     })
-    .accessibilityText(`个人资料${this.tab === 3 ? '，已选中' : ''}`)
+    .accessibilityText(str('a11y_option_state', str('tab_profile'), this.tab === 3 ? str('a11y_selected') : ''))
     .onClick(() => { this.select(3); });
   }
 
@@ -236,9 +237,9 @@ export struct MainScreen {
             .hitTestBehavior(HitTestMode.None);
         }
         Row() {
-          this.dockItem(0, 'sys.symbol.message', '聊天');
-          this.dockItem(1, 'sys.symbol.person_2', '联系人');
-          this.dockItem(2, 'sys.symbol.gearshape', '设置');
+          this.dockItem(0, 'sys.symbol.message', str('tab_chats'));
+          this.dockItem(1, 'sys.symbol.person_2', str('tab_contacts'));
+          this.dockItem(2, 'sys.symbol.gearshape', str('settings_title'));
           this.profileDockItem();
         }
         .width('100%').height('100%')

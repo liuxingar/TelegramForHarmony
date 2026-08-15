@@ -33,19 +33,19 @@ export default function newGroupLogicTest() {
     });
 
     it('validates_title_and_member_limit', 0, (): void => {
-      expect(newGroupTitleError('   ')).assertEqual('请输入群组名称');
+      expect(newGroupTitleError('   ')).assertEqual('new_group_name_required');
       expect(newGroupTitleError('测试群组')).assertEqual('');
-      expect(newGroupTitleError('a'.repeat(129))).assertEqual('群组名称不能超过 128 个字符');
+      expect(newGroupTitleError('a'.repeat(129))).assertEqual('new_group_name_too_long');
       expect(maxSelectableBasicGroupMembers(200)).assertEqual(199);
       expect(maxSelectableBasicGroupMembers(0)).assertEqual(1);
     });
 
     it('maps_creation_errors_to_actionable_copy', 0, (): void => {
-      expect(newGroupCreationErrorText('FLOOD_WAIT_20')).assertEqual('操作过于频繁，请稍后再试');
+      expect(newGroupCreationErrorText('FLOOD_WAIT_20')).assertEqual('new_group_error_flood');
       expect(newGroupCreationErrorText('USERS_TOO_MUCH'))
-        .assertEqual('选择的成员数量超过当前群组上限');
+        .assertEqual('new_group_error_too_many');
       expect(newGroupCreationErrorText('NETWORK_ERROR'))
-        .assertEqual('网络连接失败，请检查网络后重试');
+        .assertEqual('new_group_error_network');
       expect(newGroupCreationOutcomeUncertain('request timeout')).assertTrue();
       expect(newGroupCreationOutcomeUncertain('NETWORK_ERROR')).assertFalse();
     });

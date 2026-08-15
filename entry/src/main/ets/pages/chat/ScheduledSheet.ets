@@ -3,6 +3,8 @@ import { formatPreview } from '../../util/formatPreview';
 import { getTdClient } from '../../tdkit/Globals';
 import { TdObject, TdRequest, TdError } from '../../tdkit/TdTypes';
 import { COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import { monthDayTime } from '../../util/intlFormat';
+import { str } from '../../util/strings';
 
 // "定时消息" list, extracted from ChatPage.
 //
@@ -55,15 +57,14 @@ export struct ScheduledSheet {
         const schedulingType: string = scheduling !== undefined
           ? ((scheduling['@type'] as string | undefined) ?? '') : '';
         if (schedulingType === 'messageSchedulingStateSendWhenOnline') {
-          timeLabels.push('对方上线时发送');
+          timeLabels.push(str('sched_when_online'));
         } else {
           const sendDate: number = scheduling !== undefined
             ? ((scheduling['send_date'] as number | undefined) ?? 0) : 0;
-          const at = new Date(sendDate * 1000);
-          const two = (n: number): string => (n < 10 ? `0${n}` : `${n}`);
-          timeLabels.push(sendDate > 0
-            ? `${at.getMonth() + 1}月${at.getDate()}日 ${two(at.getHours())}:${two(at.getMinutes())}`
-            : '');
+          // Date and time in one Intl formatter: the separator and the order
+          // are locale business, and a hand-built "M月D日 HH:mm" is wrong in
+          // every language but this one.
+          timeLabels.push(sendDate > 0 ? monthDayTime(new Date(sendDate * 1000)) : '');
         }
       }
       this.ids = ids;
@@ -88,7 +89,7 @@ export struct ScheduledSheet {
       this.load();
     }).catch((e: TdError): void => {
       console.error(`ScheduledSheet.sendNow failed: ${e.message}`);
-      promptAction.showToast({ message: '发送失败，请稍后重试', duration: 1700 });
+      promptAction.showToast({ message: $r('app.string.send_failed_retry'), duration: 1700 });
     });
   }
 
@@ -101,7 +102,7 @@ export struct ScheduledSheet {
       this.load();
     }).catch((e: TdError): void => {
       console.error(`ScheduledSheet.remove failed: ${e.message}`);
-      promptAction.showToast({ message: '删除失败，请稍后重试', duration: 1700 });
+      promptAction.showToast({ message: $r('app.string.delete_failed_retry_soon'), duration: 1700 });
     });
   }
 
@@ -112,15 +113,15 @@ export struct ScheduledSheet {
       });
       Column({ space: 10 }) {
         Row().width(40).height(4).borderRadius(2).backgroundColor('#D0D0D0');
-        Text('定时消息').fontSize(17).fontWeight(FontWeight.Medium)
+        Text($r('app.string.sched_title')).fontSize(17).fontWeight(FontWeight.Medium)
           .fontColor(COLOR_TEXT_PRIMARY);
         if (this.loadState === 'loading') {
           LoadingProgress().width(28).height(28).margin({ top: 24, bottom: 24 });
         } else if (this.loadState === 'error') {
-          Text('定时消息加载失败').fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
+          Text($r('app.string.sched_load_failed')).fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
             .margin({ top: 24, bottom: 24 });
         } else if (this.ids.length === 0) {
-          Text('没有待发送的定时消息').fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
+          Text($r('app.string.sched_empty')).fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
             .margin({ top: 24, bottom: 24 });
         } else {
           List({ space: 6 }) {
@@ -135,7 +136,7 @@ export struct ScheduledSheet {
                       .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
                   }
                   .alignItems(HorizontalAlign.Start).layoutWeight(1);
-                  Button('立即发送').fontSize(12).height(30)
+                  Button($r('app.string.sched_send_now')).fontSize(12).height(30)
                     .onClick((): void => this.sendNow(id));
                   Row() {
                     SymbolGlyph($r('sys.symbol.trash')).fontSize(17)

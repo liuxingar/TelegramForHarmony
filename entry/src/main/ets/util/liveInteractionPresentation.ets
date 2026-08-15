@@ -1,3 +1,4 @@
+import { str } from './strings';
 export interface LiveInteractionEntry {
   key: string;
   revision: string;
@@ -137,72 +138,72 @@ export function liveInteractionPresentation(
     input.messageCount === 0;
   if (!input.valid) {
     return {
-      kind: 'invalid', statusText: '不可用', statusTone: 'muted',
-      subtitle: '互动通道不可用', emptyTitle: '无法载入互动',
-      emptyDetail: '直播参数无效，请返回后重试', composerEnabled: false,
-      composerHint: '当前没有可用的消息通道', showProgress: false,
+      kind: 'invalid', statusText: str('live_chat_unavailable_short'), statusTone: 'muted',
+      subtitle: str('live_chat_channel_unavailable'), emptyTitle: str('live_chat_invalid_title'),
+      emptyDetail: str('live_chat_invalid_detail'), composerEnabled: false,
+      composerHint: str('live_chat_no_channel'), showProgress: false,
       showHistoryRetry: false
     };
   }
   if (input.resolved && !input.active) {
     return {
-      kind: 'ended', statusText: '已结束', statusTone: 'muted',
-      subtitle: '直播已结束，已有互动仍可查看', emptyTitle: '直播已结束',
-      emptyDetail: '本场直播没有互动消息', composerEnabled: false,
-      composerHint: '直播已结束，互动已关闭', showProgress: false,
+      kind: 'ended', statusText: str('live_chat_ended_short'), statusTone: 'muted',
+      subtitle: str('live_chat_ended_readable'), emptyTitle: str('live_chat_ended_title'),
+      emptyDetail: str('live_chat_ended_empty'), composerEnabled: false,
+      composerHint: str('live_chat_ended_closed'), showProgress: false,
       showHistoryRetry: historyFailed
     };
   }
   if (input.recovering) {
     return {
-      kind: 'recovering', statusText: '重连中', statusTone: 'accent',
-      subtitle: '现有消息可继续查看，正在恢复实时互动', emptyTitle: '正在恢复互动',
-      emptyDetail: '网络恢复后会自动继续', composerEnabled: false,
-      composerHint: '正在恢复互动连接…', showProgress: input.messageCount === 0,
+      kind: 'recovering', statusText: str('live_chat_reconnecting_short'), statusTone: 'accent',
+      subtitle: str('live_chat_recovering_note'), emptyTitle: str('live_chat_recovering_title'),
+      emptyDetail: str('live_chat_recovering_detail'), composerEnabled: false,
+      composerHint: str('live_chat_recovering_status'), showProgress: input.messageCount === 0,
       showHistoryRetry: historyFailed
     };
   }
   if (!input.joined && !input.joinedOnce) {
     return {
-      kind: 'connecting', statusText: '连接中', statusTone: 'accent',
-      subtitle: '正在连接实时互动通道', emptyTitle: '正在载入互动',
-      emptyDetail: '连接成功后会自动显示新消息', composerEnabled: false,
-      composerHint: '正在连接互动…', showProgress: true, showHistoryRetry: historyFailed
+      kind: 'connecting', statusText: str('live_chat_connecting_short'), statusTone: 'accent',
+      subtitle: str('live_chat_loading_detail'), emptyTitle: str('live_chat_loading_title'),
+      emptyDetail: str('live_chat_loading_note'), composerEnabled: false,
+      composerHint: str('live_chat_connecting_status'), showProgress: true, showHistoryRetry: historyFailed
     };
   }
   if (historyLoading) {
     return {
-      kind: 'loading', statusText: '同步中', statusTone: 'accent',
-      subtitle: '实时互动已连接，正在同步频道消息', emptyTitle: '正在同步消息',
-      emptyDetail: '新互动仍会实时出现',
+      kind: 'loading', statusText: str('live_chat_syncing_short'), statusTone: 'accent',
+      subtitle: str('live_chat_syncing_detail'), emptyTitle: str('live_chat_syncing_title'),
+      emptyDetail: str('live_chat_syncing_note'),
       composerEnabled: input.messagesAllowed && input.canSendMessages,
-      composerHint: '说点什么…', showProgress: true, showHistoryRetry: false
+      composerHint: str('live_chat_input_hint'), showProgress: true, showHistoryRetry: false
     };
   }
   if (!input.messagesAllowed) {
     return {
-      kind: 'disabled', statusText: '已关闭', statusTone: 'muted',
-      subtitle: historyFailed ? '实时互动已关闭，频道历史加载失败' :
-        (input.channelAttached ? '可以继续查看频道消息' : '主播没有开启互动消息'),
-      emptyTitle: '主播暂未开启互动', emptyDetail: '开启后新消息会自动显示',
-      composerEnabled: false, composerHint: '当前没有可用的消息通道',
+      kind: 'disabled', statusText: str('live_chat_off_short'), statusTone: 'muted',
+      subtitle: historyFailed ? str('live_chat_off_detail') :
+        (input.channelAttached ? str('live_chat_off_note') : str('live_chat_off_title')),
+      emptyTitle: str('live_chat_off_empty'), emptyDetail: str('live_chat_off_hint'),
+      composerEnabled: false, composerHint: str('live_chat_no_channel'),
       showProgress: false, showHistoryRetry: historyFailed
     };
   }
   if (!input.canSendMessages) {
     return {
-      kind: 'readonly', statusText: '只读', statusTone: 'muted',
-      subtitle: historyFailed ? '实时互动正常，频道历史加载失败' : '互动消息会实时更新',
-      emptyTitle: '还没有互动消息', emptyDetail: '你可以观看，但当前账号暂时不能发送',
-      composerEnabled: false, composerHint: '当前账号暂时不能发送互动消息',
+      kind: 'readonly', statusText: str('live_chat_readonly_short'), statusTone: 'muted',
+      subtitle: historyFailed ? str('live_chat_readonly_detail') : str('live_chat_readonly_note'),
+      emptyTitle: str('live_chat_readonly_empty'), emptyDetail: str('live_chat_readonly_reason'),
+      composerEnabled: false, composerHint: str('live_chat_readonly_hint'),
       showProgress: false, showHistoryRetry: historyFailed
     };
   }
   return {
-    kind: 'live', statusText: '实时', statusTone: 'live',
-    subtitle: historyFailed ? '实时互动正常，频道历史加载失败' :
-      (input.channelAttached ? '直播互动与频道消息实时汇总' : '互动消息仅在本次直播期间显示'),
-    emptyTitle: '还没有互动消息', emptyDetail: '来说第一句吧', composerEnabled: true,
-    composerHint: '说点什么…', showProgress: false, showHistoryRetry: historyFailed
+    kind: 'live', statusText: str('live_chat_live_short'), statusTone: 'live',
+    subtitle: historyFailed ? str('live_chat_readonly_detail') :
+      (input.channelAttached ? str('live_chat_live_detail') : str('live_chat_live_note')),
+    emptyTitle: str('live_chat_readonly_empty'), emptyDetail: str('live_chat_live_empty'), composerEnabled: true,
+    composerHint: str('live_chat_input_hint'), showProgress: false, showHistoryRetry: historyFailed
   };
 }

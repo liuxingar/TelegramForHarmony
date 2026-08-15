@@ -10,6 +10,7 @@ import {
   COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE,
   COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
+import { plural, str } from '../../util/strings';
 
 const CARD_RADIUS: number = 14;
 const COLOR_MISSED: string = '#E64646';
@@ -114,7 +115,7 @@ struct CallsPage {
     router.pushUrl({ url: 'pages/chat/ChatPage', params }).catch((error: Error): void => {
       this.navigationLocked = false;
       console.error(`CallsPage.openChat failed: ${error.message}`);
-      promptAction.showToast({ message: '无法打开聊天，请稍后重试', duration: 1700 });
+      promptAction.showToast({ message: $r('app.string.open_chat_failed'), duration: 1700 });
     });
     this.navigationTimer = setTimeout((): void => {
       this.navigationLocked = false;
@@ -131,11 +132,11 @@ struct CallsPage {
   private confirmClear(): void {
     if (this.calls.length === 0 || this.actionKey !== '' || this.store === null) { return; }
     promptAction.showDialog({
-      title: '清空通话记录',
-      message: '通话记录将只从你的账号中删除，不会影响对方。',
+      title: $r('app.string.calls_clear_title'),
+      message: $r('app.string.calls_clear_confirm'),
       buttons: [
-        { text: '取消', color: COLOR_TEXT_SECONDARY as string },
-        { text: '清空', color: COLOR_MISSED }
+        { text: $r('app.string.cancel'), color: COLOR_TEXT_SECONDARY as string },
+        { text: $r('app.string.clear_all'), color: COLOR_MISSED }
       ]
     }).then((result: promptAction.ShowDialogSuccessResponse): void => {
       if (!this.active || result.index !== 1 || this.store === null || this.actionKey !== '') { return; }
@@ -143,12 +144,12 @@ struct CallsPage {
       this.store.clearAll().then((): void => {
         if (!this.active) { return; }
         this.actionKey = '';
-        promptAction.showToast({ message: '通话记录已清空', duration: 1500 });
+        promptAction.showToast({ message: $r('app.string.calls_cleared'), duration: 1500 });
       }).catch((error: Error): void => {
         if (!this.active) { return; }
         this.actionKey = '';
         console.error(`CallsPage.clearAll failed: ${error.message}`);
-        promptAction.showToast({ message: '清空失败，记录已恢复', duration: 1900 });
+        promptAction.showToast({ message: $r('app.string.calls_clear_failed'), duration: 1900 });
       });
     }).catch((): void => {});
   }
@@ -156,11 +157,11 @@ struct CallsPage {
   private confirmDelete(call: CallItem): void {
     if (this.actionKey !== '' || this.store === null) { return; }
     promptAction.showDialog({
-      title: '删除通话记录',
-      message: `确定删除与「${call.name !== '' ? call.name : '该联系人'}」的这条通话记录吗？`,
+      title: $r('app.string.calls_delete_title'),
+      message: str('calls_delete_confirm', call.name !== '' ? call.name : str('calls_this_contact')),
       buttons: [
-        { text: '取消', color: COLOR_TEXT_SECONDARY as string },
-        { text: '删除', color: COLOR_MISSED }
+        { text: $r('app.string.cancel'), color: COLOR_TEXT_SECONDARY as string },
+        { text: $r('app.string.delete'), color: COLOR_MISSED }
       ]
     }).then((result: promptAction.ShowDialogSuccessResponse): void => {
       if (!this.active || result.index !== 1 || this.store === null || this.actionKey !== '') { return; }
@@ -168,12 +169,12 @@ struct CallsPage {
       this.store.deleteCall(call).then((): void => {
         if (!this.active) { return; }
         this.actionKey = '';
-        promptAction.showToast({ message: '通话记录已删除', duration: 1400 });
+        promptAction.showToast({ message: $r('app.string.calls_deleted'), duration: 1400 });
       }).catch((error: Error): void => {
         if (!this.active) { return; }
         this.actionKey = '';
         console.error(`CallsPage.deleteCall failed: ${error.message}`);
-        promptAction.showToast({ message: '删除失败，记录已恢复', duration: 1800 });
+        promptAction.showToast({ message: $r('app.string.calls_delete_failed'), duration: 1800 });
       });
     }).catch((): void => {});
   }
@@ -186,9 +187,9 @@ struct CallsPage {
   }
 
   private countLabel(): string {
-    if (this.loadState === 'loading') { return '正在同步…'; }
-    if (this.totalCount > this.calls.length) { return `约 ${this.totalCount} 条记录`; }
-    return `${this.calls.length} 条记录`;
+    if (this.loadState === 'loading') { return str('syncing'); }
+    if (this.totalCount > this.calls.length) { return plural('calls_about_count', this.totalCount, this.totalCount); }
+    return plural('calls_count', this.calls.length, this.calls.length);
   }
 
   private isSectionStart(index: number): boolean {
@@ -251,9 +252,9 @@ struct CallsPage {
   @Builder
   topMenu() {
     Menu() {
-      MenuItem({ content: '刷新通话记录' }).enabled(!this.refreshing && this.actionKey === '')
+      MenuItem({ content: $r('app.string.calls_refresh') }).enabled(!this.refreshing && this.actionKey === '')
         .onClick((): void => this.refresh());
-      MenuItem({ content: '清空通话记录' }).enabled(this.calls.length > 0 && this.actionKey === '')
+      MenuItem({ content: $r('app.string.calls_clear_title') }).enabled(this.calls.length > 0 && this.actionKey === '')
         .onClick((): void => this.confirmClear());
     }
   }
@@ -273,16 +274,16 @@ struct CallsPage {
   callContextMenu() {
     Menu() {
       if (!(this.menuCall()?.isGroup ?? true)) {
-        MenuItem({ content: '回拨' }).onClick((): void => {
+        MenuItem({ content: $r('app.string.calls_call_back') }).onClick((): void => {
           const call = this.menuCall();
           if (call !== undefined) { this.redial(call); }
         });
       }
-      MenuItem({ content: '打开聊天' }).onClick((): void => {
+      MenuItem({ content: $r('app.string.open_chat') }).onClick((): void => {
         const call = this.menuCall();
         if (call !== undefined) { this.openChat(call); }
       });
-      MenuItem({ content: '删除这条记录' }).onClick((): void => {
+      MenuItem({ content: $r('app.string.calls_delete_this') }).onClick((): void => {
         const call = this.menuCall();
         if (call !== undefined) { this.confirmDelete(call); }
       });
@@ -297,7 +298,7 @@ struct CallsPage {
         .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
         .onClick((): void => router.back());
       Column({ space: 1 }) {
-        Text('通话记录').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
+        Text($r('app.string.calls_title')).fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
         Text(this.countLabel()).fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
       if (this.actionKey !== '' || this.refreshing) {
@@ -312,7 +313,7 @@ struct CallsPage {
   }
 
   @Builder
-  segmentItem(mode: CallsMode, title: string) {
+  segmentItem(mode: CallsMode, title: ResourceStr) {
     Text(title).fontSize(14).fontWeight(this.mode === mode ? FontWeight.Medium : FontWeight.Regular)
       .fontColor(this.mode === mode ? COLOR_PRIMARY : COLOR_TEXT_SECONDARY)
       .width((SEGMENT_WIDTH - SEGMENT_INSET * 2) / 2).height(SEGMENT_HEIGHT - SEGMENT_INSET * 2)
@@ -338,8 +339,8 @@ struct CallsPage {
             curve: Curve.EaseOut
           });
         Row() {
-          this.segmentItem('all', '全部');
-          this.segmentItem('missed', '未接');
+          this.segmentItem('all', $r('app.string.filter_all'));
+          this.segmentItem('missed', $r('app.string.filter_missed'));
         }.width('100%').height('100%').padding(SEGMENT_INSET);
       }.width(SEGMENT_WIDTH).height(SEGMENT_HEIGHT)
         .backgroundColor($r('app.color.surface_alt')).borderRadius(SEGMENT_HEIGHT / 2);
@@ -368,10 +369,10 @@ struct CallsPage {
   errorState() {
     Column({ space: 12 }) {
       Text('📞').fontSize(44);
-      Text('通话记录加载失败').fontSize(18).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-      Text('网络恢复后可以重新加载，聊天内容不会受影响。')
+      Text($r('app.string.calls_load_failed')).fontSize(18).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+      Text($r('app.string.calls_load_failed_sub'))
         .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center);
-      Text('重新加载').fontSize(15).fontColor(Color.White).fontWeight(FontWeight.Medium)
+      Text($r('app.string.settings_reload')).fontSize(15).fontColor(Color.White).fontWeight(FontWeight.Medium)
         .padding({ left: 22, right: 22, top: 10, bottom: 10 })
         .backgroundColor(COLOR_PRIMARY).borderRadius(18)
         .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
@@ -384,11 +385,11 @@ struct CallsPage {
   emptyState() {
     Column({ space: 9 }) {
       Text(this.mode === 'missed' ? '✓' : '📞').fontSize(44).fontColor(COLOR_PRIMARY);
-      Text(this.mode === 'missed' ? '没有未接来电' : '暂无通话记录')
+      Text(this.mode === 'missed' ? $r('app.string.calls_no_missed') : $r('app.string.calls_empty'))
         .fontSize(18).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-      Text(this.mode === 'missed' ? '新的未接或拒接通话会显示在这里' : '完成通话后，记录会显示在这里')
+      Text(this.mode === 'missed' ? $r('app.string.calls_no_missed_sub') : $r('app.string.calls_empty_sub'))
         .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center);
-      Text('刷新记录').fontSize(14).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
+      Text($r('app.string.calls_refresh_short')).fontSize(14).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
         .padding({ left: 18, right: 18, top: 9, bottom: 9 })
         .backgroundColor('#145B8FF9').borderRadius(17)
         .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
@@ -403,7 +404,7 @@ struct CallsPage {
       Row({ space: 8 }) {
         SymbolGlyph($r('sys.symbol.exclamationmark_circle')).fontSize(16).fontColor([COLOR_WARNING]);
         Text(this.syncError).fontSize(12).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
-        Text('重试').fontSize(12).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY);
+        Text($r('app.string.settings_retry')).fontSize(12).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY);
       }.width('100%').padding({ left: 12, right: 12, top: 9, bottom: 9 })
         .margin({ left: 12, right: 12, bottom: 7 })
         .backgroundColor('#16E68A00').borderRadius(11)
@@ -432,7 +433,7 @@ struct CallsPage {
       });
       Column({ space: 5 }) {
         Row({ space: 7 }) {
-          Text(call.name !== '' ? call.name : '正在读取聊天…')
+          Text(call.name !== '' ? call.name : $r('app.string.opening_chat'))
             .fontSize(16).fontWeight(FontWeight.Medium)
             .fontColor(call.name !== '' ? COLOR_TEXT_PRIMARY : COLOR_TEXT_SECONDARY)
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1);
@@ -445,7 +446,7 @@ struct CallsPage {
           Text(call.statusText).fontSize(12).fontColor(this.toneColor(call))
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1);
           if (call.isGroup && call.participantCount > 0) {
-            Text(`${call.participantCount}人`).fontSize(10).fontColor(COLOR_TEXT_SECONDARY);
+            Text(plural('calls_participants', call.participantCount, call.participantCount)).fontSize(10).fontColor(COLOR_TEXT_SECONDARY);
           }
           SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(13).fontColor([COLOR_TEXT_SECONDARY]);
         }.width('100%').alignItems(VerticalAlign.Center);
@@ -524,12 +525,12 @@ struct CallsPage {
             .width('100%').justifyContent(FlexAlign.Center).padding({ top: 12, bottom: 12 });
         } else if (this.pageState === 'error') {
           Row({ space: 7 }) {
-            Text('更多记录加载失败').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
-            Text('重试').fontSize(13).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY);
+            Text($r('app.string.calls_load_more_failed')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+            Text($r('app.string.settings_retry')).fontSize(13).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY);
           }.width('100%').justifyContent(FlexAlign.Center).padding({ top: 12, bottom: 12 })
             .onClick((): void => this.store?.retry());
         } else if (this.pageState === 'end' && this.calls.length >= 20) {
-          Text('已显示全部通话记录').fontSize(11).fontColor(COLOR_TEXT_SECONDARY)
+          Text($r('app.string.calls_all_shown')).fontSize(11).fontColor(COLOR_TEXT_SECONDARY)
             .width('100%').textAlign(TextAlign.Center).padding({ top: 11, bottom: 11 });
         }
       }

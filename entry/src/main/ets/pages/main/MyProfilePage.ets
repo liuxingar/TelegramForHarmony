@@ -17,6 +17,7 @@ import { TdObject, TdRequest, TdError } from '../../tdkit/TdTypes';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
 import { publicLink } from '../../util/telegramLink';
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
+import { plural, str } from '../../util/strings';
 
 const CARD_BG: ResourceColor = $r('app.color.surface');
 const CARD_RADIUS: number = 14;
@@ -116,7 +117,7 @@ export struct MyProfilePage {
       this.myId = (me['id'] as number | undefined) ?? 0;
       if (this.myId === 0) {
         this.profileLoading = false;
-        this.profileError = '暂时无法读取个人资料';
+        this.profileError = str('mp_unreadable');
         return;
       }
       const store = new ProfileStore(getTdClient(), this.myId);
@@ -130,7 +131,7 @@ export struct MyProfilePage {
         this.profileLoadTimer = -1;
         if (sequence === this.profileLoadSequence && this.profileLoading) {
           this.profileLoading = false;
-          this.profileError = '个人资料加载超时';
+          this.profileError = str('mp_timeout');
         }
       }, PROFILE_LOAD_TIMEOUT_MS);
     }).catch((e: TdError) => {
@@ -139,7 +140,7 @@ export struct MyProfilePage {
       }
       this.clearProfileLoadTimer();
       this.profileLoading = false;
-      this.profileError = '个人资料加载失败';
+      this.profileError = str('mp_load_failed');
       console.error(`MyProfilePage.getMe failed: ${e.message}`);
     });
   }
@@ -215,7 +216,7 @@ export struct MyProfilePage {
       return;
     }
     if (this.usernames.length === 0) {
-      promptAction.showToast({ message: '未设置用户名，无法生成二维码', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.mp_no_username_qr'), duration: 1800 });
       return;
     }
     this.qrLink = publicLink(this.usernames[0]);
@@ -235,7 +236,7 @@ export struct MyProfilePage {
     }, 700);
     router.pushUrl({ url: 'pages/main/AccountEditPage' }).catch((error: Error): void => {
       console.error(`MyProfilePage.openEditor failed: ${error.message}`);
-      promptAction.showToast({ message: '无法打开账号资料，请稍后重试', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.settings_open_profile_failed'), duration: 1800 });
       if (this.editorNavigationTimer !== -1) {
         clearTimeout(this.editorNavigationTimer);
         this.editorNavigationTimer = -1;
@@ -266,11 +267,11 @@ export struct MyProfilePage {
     }
     this.topMenuOpen = true;
     promptAction.showActionMenu({
-      title: this.name !== '' ? this.name : '个人资料',
+      title: this.name !== '' ? this.name : $r('app.string.tab_profile'),
       buttons: [
-        { text: '编辑个人资料', color: '#3390EC' },
-        { text: '设置头像', color: '#3390EC' },
-        { text: '显示二维码', color: '#3390EC' }
+        { text: $r('app.string.settings_edit_profile'), color: '#3390EC' },
+        { text: $r('app.string.mp_set_photo'), color: '#3390EC' },
+        { text: $r('app.string.mp_show_qr'), color: '#3390EC' }
       ]
     }).then((result): void => {
       this.topMenuOpen = false;
@@ -302,11 +303,11 @@ export struct MyProfilePage {
     }
     this.photoMenuOpen = true;
     promptAction.showActionMenu({
-      title: '设置照片',
+      title: $r('app.string.mp_set_photo_title'),
       buttons: [
-        { text: '拍照', color: '#3390EC' },
-        { text: '从相册选择', color: '#3390EC' },
-        { text: '表情贴纸', color: '#3390EC' }
+        { text: $r('app.string.mp_take_photo'), color: '#3390EC' },
+        { text: $r('app.string.mp_from_gallery'), color: '#3390EC' },
+        { text: $r('app.string.mp_emoji_sticker'), color: '#3390EC' }
       ]
     }).then((r) => {
       this.photoMenuOpen = false;
@@ -395,7 +396,7 @@ export struct MyProfilePage {
         console.error(`MyProfilePage thumb download failed: ${e.message}`);
       });
     } else {
-      promptAction.showToast({ message: '该表情暂不可用作头像（unicode 表情请截图或用贴纸）', duration: 2000 });
+      promptAction.showToast({ message: $r('app.string.mp_emoji_unsupported'), duration: 2000 });
     }
   }
 
@@ -453,7 +454,7 @@ export struct MyProfilePage {
         return;
       }
       this.photoUploading = false;
-      promptAction.showToast({ message: '头像已更新', duration: 1500 });
+      promptAction.showToast({ message: $r('app.string.mp_photo_updated'), duration: 1500 });
       if (this.store !== null) {
         this.store.reload();
       }
@@ -463,7 +464,7 @@ export struct MyProfilePage {
       }
       this.photoUploading = false;
       console.error(`MyProfilePage.setProfilePhoto failed: ${e.message}`);
-      promptAction.showToast({ message: '头像设置失败，请稍后重试', duration: 2000 });
+      promptAction.showToast({ message: $r('app.string.mp_photo_failed'), duration: 2000 });
     });
   }
 
@@ -541,9 +542,9 @@ export struct MyProfilePage {
 
   private displayedStatusText(): string {
     if (this.appIsForeground) {
-      return '在线';
+      return str('status_online');
     }
-    return this.statusText !== '' ? this.statusText : 'Telegram 账号';
+    return this.statusText !== '' ? this.statusText : str('settings_telegram_account');
   }
 
   private quickActionBusy(key: string): boolean {
@@ -569,13 +570,13 @@ export struct MyProfilePage {
 
   private quickActionLabel(key: string, label: string): string {
     if (key === 'photo') {
-      return this.photoUploading ? '上传中' : (this.photoMenuOpen ? '选择中' : label);
+      return this.photoUploading ? str('uploading') : (this.photoMenuOpen ? str('selecting') : label);
     }
     if (key === 'edit' && this.openingEditor) {
-      return '打开中';
+      return str('opening');
     }
     if (key === 'settings' && this.switchingToSettings) {
-      return '切换中';
+      return str('switching');
     }
     return label;
   }
@@ -592,22 +593,22 @@ export struct MyProfilePage {
 
   private infoTitle(key: string): string {
     if (key === 'phone') {
-      return '手机号码';
+      return str('ct_phone');
     }
     if (key === 'username') {
-      return '用户名';
+      return str('ae_username');
     }
-    return '生日';
+    return str('mp_birthday');
   }
 
   private infoHint(key: string): string {
     if (key === 'phone') {
-      return '用于登录和账号安全';
+      return str('mp_phone_sub');
     }
     if (key === 'username') {
-      return '他人可通过用户名找到你';
+      return str('mp_username_sub');
     }
-    return '你的个人生日信息';
+    return str('mp_birthday_sub');
   }
 
   private infoIcon(key: string): string {
@@ -661,7 +662,7 @@ export struct MyProfilePage {
       this.copyingInfoKey = '';
       this.copiedInfoKey = key;
       promptAction.showToast({
-        message: `已复制${this.infoTitle(key)}`,
+        message: str('mp_copied', this.infoTitle(key)),
         duration: 1200
       });
       if (this.copiedInfoTimer !== -1) {
@@ -676,7 +677,7 @@ export struct MyProfilePage {
     }).catch((caught: Object): void => {
       this.copyingInfoKey = '';
       console.error(`MyProfilePage.copyInfo(${key}) failed: ${JSON.stringify(caught)}`);
-      promptAction.showToast({ message: '复制失败，请稍后重试', duration: 1500 });
+      promptAction.showToast({ message: $r('app.string.copy_failed_retry'), duration: 1500 });
     });
   }
 
@@ -725,16 +726,16 @@ export struct MyProfilePage {
   private storyPostUnavailableText(result: TdObject): string {
     const type = (result['@type'] as string | undefined) ?? '';
     if (type === 'canPostStoryResultPremiumNeeded') {
-      return '当前账号需要 Telegram Premium 才能发布动态';
+      return str('mp_story_needs_premium');
     }
     if (type === 'canPostStoryResultActiveStoryLimitExceeded') {
-      return '当前动态数量已达到上限';
+      return str('mp_story_limit');
     }
     if (type === 'canPostStoryResultWeeklyLimitExceeded' ||
       type === 'canPostStoryResultMonthlyLimitExceeded') {
-      return '动态发布次数已达到限制，请稍后再试';
+      return str('mp_story_rate_limit');
     }
-    return '当前暂时无法发布动态';
+    return str('mp_story_unavailable');
   }
 
   private openStoryComposer(): void {
@@ -759,10 +760,10 @@ export struct MyProfilePage {
           return;
         }
         promptAction.showActionMenu({
-          title: '添加动态',
+          title: $r('app.string.mp_add_story'),
           buttons: [
-            { text: '拍摄照片', color: '#3390EC' },
-            { text: '从相册选择', color: '#3390EC' }
+            { text: $r('app.string.mp_capture_photo'), color: '#3390EC' },
+            { text: $r('app.string.mp_from_gallery'), color: '#3390EC' }
           ]
         }).then((choice): void => {
           this.storyPickerOpen = false;
@@ -777,7 +778,7 @@ export struct MyProfilePage {
       }).catch((error: TdError): void => {
         this.storyPickerOpen = false;
         console.error(`MyProfilePage.canPostStory failed: ${error.message}`);
-        promptAction.showToast({ message: '暂时无法添加动态，请稍后重试', duration: 1800 });
+        promptAction.showToast({ message: $r('app.string.mp_add_story_failed'), duration: 1800 });
       });
     };
     if (this.storyChatId > 0) {
@@ -796,7 +797,7 @@ export struct MyProfilePage {
     }).catch((error: TdError): void => {
       this.storyPickerOpen = false;
       console.error(`MyProfilePage.createStoryChat failed: ${error.message}`);
-      promptAction.showToast({ message: '暂时无法添加动态，请稍后重试', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.mp_add_story_failed'), duration: 1800 });
     });
   }
 
@@ -815,7 +816,7 @@ export struct MyProfilePage {
       }
     } catch (error) {
       console.error(`MyProfilePage.storyFromCamera failed: ${error}`);
-      promptAction.showToast({ message: '无法打开相机，请稍后重试', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.mp_camera_failed'), duration: 1800 });
     }
   }
 
@@ -834,7 +835,7 @@ export struct MyProfilePage {
       }
     }).catch((error: Object): void => {
       console.error(`MyProfilePage.storyFromGallery failed: ${JSON.stringify(error)}`);
-      promptAction.showToast({ message: '无法打开相册，请稍后重试', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.mp_gallery_failed'), duration: 1800 });
     });
   }
 
@@ -844,11 +845,11 @@ export struct MyProfilePage {
     }
     this.storyPickerOpen = true;
     promptAction.showActionMenu({
-      title: '谁可以查看这条动态？',
+      title: $r('app.string.mp_story_privacy'),
       buttons: [
-        { text: '所有人', color: '#3390EC' },
-        { text: '我的联系人', color: '#3390EC' },
-        { text: '亲密好友', color: '#3390EC' }
+        { text: $r('app.string.privacy_everybody'), color: '#3390EC' },
+        { text: $r('app.string.privacy_contacts'), color: '#3390EC' },
+        { text: $r('app.string.mp_close_friends'), color: '#3390EC' }
       ]
     }).then((choice): void => {
       this.storyPickerOpen = false;
@@ -923,7 +924,7 @@ export struct MyProfilePage {
     }
     if (path === '') {
       this.storyPosting = false;
-      promptAction.showToast({ message: '照片处理失败，请重新选择', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.mp_photo_process_failed'), duration: 1800 });
       return;
     }
     const inputFile: TdObject = { '@type': 'inputFileLocal' };
@@ -953,7 +954,7 @@ export struct MyProfilePage {
         return;
       }
       this.storyPosting = false;
-      promptAction.showToast({ message: '动态已发布', duration: 1500 });
+      promptAction.showToast({ message: $r('app.string.mp_story_posted'), duration: 1500 });
       this.store?.reloadStories();
     }).catch((error: TdError): void => {
       if (sequence !== this.storyUploadSequence) {
@@ -961,7 +962,7 @@ export struct MyProfilePage {
       }
       this.storyPosting = false;
       console.error(`MyProfilePage.postStory failed: ${error.message}`);
-      promptAction.showToast({ message: '动态发布失败，请稍后重试', duration: 2000 });
+      promptAction.showToast({ message: $r('app.string.mp_story_post_failed'), duration: 2000 });
     });
   }
 
@@ -1174,7 +1175,7 @@ export struct MyProfilePage {
       curve: Curve.EaseOut
     })
     .enabled(this.copyingInfoKey === '' && !this.openingEditor && !this.switchingToSettings)
-    .accessibilityText(`${this.infoTitle(key)}，${this.infoValue(key)}，点击复制`)
+    .accessibilityText(str('mp_info_a11y', this.infoTitle(key), this.infoValue(key)))
     .onTouch((event: TouchEvent): void => {
       if (event.type === TouchType.Down && this.copyingInfoKey === '') {
         this.pressedInfoKey = key;
@@ -1200,9 +1201,9 @@ export struct MyProfilePage {
   header() {
     Column({ space: 8 }) {
       Row() {
-        this.circleButton('sys.symbol.qrcode', '显示个人资料二维码', () => { this.openQr(); });
+        this.circleButton('sys.symbol.qrcode', str('mp_show_profile_qr'), () => { this.openQr(); });
         Blank().layoutWeight(1);
-        this.circleButton('sys.symbol.more', '个人资料更多操作', () => { this.showTopMenu(); });
+        this.circleButton('sys.symbol.more', str('mp_more_actions'), () => { this.showTopMenu(); });
       }.width('100%').padding({ left: 12, right: 12 });
 
       Stack({ alignContent: Alignment.BottomEnd }) {
@@ -1278,8 +1279,8 @@ export struct MyProfilePage {
       .enabled(!this.profileLoading && !this.photoUploading && !this.photoMenuOpen &&
         !this.openingEditor && !this.switchingToSettings)
       .accessibilityText(this.profileError !== ''
-        ? '个人资料加载失败，点击重新加载'
-        : '当前头像，点击设置头像')
+        ? $r('app.string.mp_load_failed_tap')
+        : $r('app.string.mp_photo_a11y'))
       .onTouch((event: TouchEvent): void => {
         if (event.type === TouchType.Down) {
           this.avatarPressed = true;
@@ -1298,8 +1299,8 @@ export struct MyProfilePage {
 
       Row({ space: 5 }) {
         Text(this.profileLoading
-          ? '正在加载个人资料…'
-          : (this.profileError !== '' ? '个人资料' : (this.name !== '' ? this.name : 'Telegram 账号')))
+          ? $r('app.string.mp_loading')
+          : (this.profileError !== '' ? $r('app.string.tab_profile') : (this.name !== '' ? this.name : $r('app.string.settings_telegram_account'))))
           .fontSize(20).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
           .flexShrink(1);
@@ -1317,12 +1318,12 @@ export struct MyProfilePage {
           Circle({ width: 7, height: 7 })
             .fill(this.profileError !== ''
               ? '#E64646'
-              : (this.displayedStatusText() === '在线' ? '#34C759' : COLOR_TEXT_SECONDARY));
+              : (this.displayedStatusText() === str('status_online') ? '#34C759' : COLOR_TEXT_SECONDARY));
         }
         Text(this.profileLoading
-          ? '正在同步头像和状态'
+          ? $r('app.string.mp_syncing')
           : (this.profileError !== ''
-            ? '点击头像重新加载'
+            ? $r('app.string.mp_tap_photo_reload')
             : this.displayedStatusText()))
           .fontSize(13)
           .fontColor(this.profileError !== '' ? '#E64646' : COLOR_TEXT_SECONDARY);
@@ -1344,15 +1345,15 @@ export struct MyProfilePage {
   actionsRow() {
     Row({ space: 8 }) {
       this.actionButton(
-        'sys.symbol.camera', '设置照片', 'photo', '#3478F6',
+        'sys.symbol.camera', str('mp_set_photo_title'), 'photo', '#3478F6',
         (): void => { this.setPhotoMenu(); }
       );
       this.actionButton(
-        'sys.symbol.pencil_line', '编辑信息', 'edit', '#3478F6',
+        'sys.symbol.pencil_line', str('mp_edit_info'), 'edit', '#3478F6',
         (): void => { this.openEditor(); }
       );
       this.actionButton(
-        'sys.symbol.gearshape', '设置', 'settings', '#7D69D9',
+        'sys.symbol.gearshape', str('settings_title'), 'settings', '#7D69D9',
         (): void => { this.openSettings(); }
       );
     }
@@ -1370,14 +1371,14 @@ export struct MyProfilePage {
   infoCard() {
     Column({ space: 5 }) {
       Row() {
-        Text('账号资料')
+        Text($r('app.string.mp_account_info'))
           .fontSize(13)
           .fontWeight(FontWeight.Medium)
           .fontColor(COLOR_TEXT_SECONDARY)
           .layoutWeight(1);
         Text(this.profileLoading
-          ? '同步中'
-          : (this.profileError !== '' ? '不可用' : `${this.infoItemCount()} 项`))
+          ? $r('app.string.syncing_short')
+          : (this.profileError !== '' ? $r('app.string.unavailable') : plural('mp_item_count', this.infoItemCount(), this.infoItemCount())))
           .fontSize(12)
           .fontColor(this.profileError !== '' ? '#E64646' : COLOR_TEXT_SECONDARY);
       }
@@ -1412,11 +1413,11 @@ export struct MyProfilePage {
                 .fontColor(['#E64646']);
             }
             Column({ space: 3 }) {
-              Text('账号资料暂不可用')
+              Text($r('app.string.mp_account_info_unavailable'))
                 .fontSize(15)
                 .fontWeight(FontWeight.Medium)
                 .fontColor(COLOR_TEXT_PRIMARY);
-              Text('点击重新加载')
+              Text($r('app.string.tap_to_reload'))
                 .fontSize(12)
                 .fontColor(COLOR_PRIMARY);
             }
@@ -1430,7 +1431,7 @@ export struct MyProfilePage {
           .height(76)
           .padding({ left: 12, right: 14 })
           .alignItems(VerticalAlign.Center)
-          .accessibilityText('账号资料加载失败，重新加载')
+          .accessibilityText($r('app.string.mp_account_info_failed'))
           .onClick((): void => { this.retryProfile(); });
         } else if (this.infoItemCount() === 0) {
           Row({ space: 12 }) {
@@ -1441,11 +1442,11 @@ export struct MyProfilePage {
                 .fontColor([COLOR_PRIMARY]);
             }
             Column({ space: 3 }) {
-              Text('尚未填写账号资料')
+              Text($r('app.string.mp_account_info_empty'))
                 .fontSize(15)
                 .fontWeight(FontWeight.Medium)
                 .fontColor(COLOR_TEXT_PRIMARY);
-              Text('点击前往编辑姓名、用户名和生日')
+              Text($r('app.string.mp_account_info_empty_sub'))
                 .fontSize(12)
                 .fontColor(COLOR_TEXT_SECONDARY);
             }
@@ -1459,7 +1460,7 @@ export struct MyProfilePage {
           .height(76)
           .padding({ left: 12, right: 14 })
           .alignItems(VerticalAlign.Center)
-          .accessibilityText('尚未填写账号资料，前往编辑')
+          .accessibilityText($r('app.string.mp_account_info_empty_a11y'))
           .onClick((): void => { this.openEditor(); });
         } else {
           if (this.phone !== '') {
@@ -1542,7 +1543,7 @@ export struct MyProfilePage {
       duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 120),
       curve: Curve.EaseOut
     })
-    .accessibilityText(`${label}${this.postTab === index ? '，已选中' : ''}`)
+    .accessibilityText(str('a11y_option_state', label, this.postTab === index ? str('a11y_selected') : ''))
     .onTouch((event: TouchEvent): void => {
       if (event.type === TouchType.Down) {
         this.pressedPostTab = index;
@@ -1583,8 +1584,8 @@ export struct MyProfilePage {
           });
 
         Row() {
-          this.postTabPill('动态', 0);
-          this.postTabPill('已归档的动态', 1);
+          this.postTabPill(str('mp_stories'), 0);
+          this.postTabPill(str('mp_archived_stories'), 1);
         }
         .width('100%')
         .height(46)
@@ -1635,7 +1636,7 @@ export struct MyProfilePage {
           .width(16)
           .height(16)
           .color(COLOR_PRIMARY);
-        Text(this.postTab === 0 ? '正在同步动态…' : '正在读取归档动态…')
+        Text(this.postTab === 0 ? $r('app.string.mp_syncing_stories') : $r('app.string.mp_loading_archived'))
           .fontSize(13)
           .fontColor(COLOR_TEXT_SECONDARY);
       }
@@ -1676,7 +1677,7 @@ export struct MyProfilePage {
         SymbolGlyph($r('sys.symbol.arrow_clockwise'))
           .fontSize(17)
           .fontColor([COLOR_PRIMARY]);
-        Text('重新加载')
+        Text($r('app.string.settings_reload'))
           .fontSize(14)
           .fontWeight(FontWeight.Medium)
           .fontColor(COLOR_PRIMARY);
@@ -1694,7 +1695,7 @@ export struct MyProfilePage {
         duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 110),
         curve: Curve.EaseOut
       })
-      .accessibilityText(`${title}，重新加载`)
+      .accessibilityText(str('mp_reload_a11y', title))
       .onTouch((event: TouchEvent): void => {
         if (event.type === TouchType.Down) {
           this.pressedPostStateAction = key;
@@ -1749,7 +1750,7 @@ export struct MyProfilePage {
               .fontSize(17)
               .fontColor([COLOR_PRIMARY]);
           }
-          Text(this.storyPosting ? '正在发布' : '添加动态')
+          Text(this.storyPosting ? $r('app.string.mp_posting') : $r('app.string.mp_add_story'))
             .fontSize(14)
             .fontWeight(FontWeight.Medium)
             .fontColor(COLOR_PRIMARY);
@@ -1758,7 +1759,7 @@ export struct MyProfilePage {
         .padding({ left: 18, right: 18 })
         .borderRadius(20)
         .backgroundColor($r('app.color.selected_pill'))
-        .accessibilityText('添加动态')
+        .accessibilityText($r('app.string.mp_add_story'))
         .onClick((): void => {
           this.openStoryComposer();
         });
@@ -1835,7 +1836,7 @@ export struct MyProfilePage {
         this.postLoadingState(this.postTab === 0 ? -12 : 12);
       } else if (this.profileError !== '') {
         this.postErrorState(
-          '个人资料加载失败',
+          str('mp_load_failed'),
           this.profileError,
           'profile',
           this.postTab === 0 ? -12 : 12
@@ -1844,11 +1845,11 @@ export struct MyProfilePage {
         if (this.storiesLoading) {
           this.postLoadingState(-12);
         } else if (this.storiesError !== '') {
-          this.postErrorState('动态加载失败', this.storiesError, 'stories', -12);
+          this.postErrorState(str('mp_stories_failed'), this.storiesError, 'stories', -12);
         } else if (this.stories.length === 0) {
           this.emptyPosts(
-            '暂无动态',
-            '发布的照片和视频会显示在您的个人资料页上',
+            str('mp_no_stories'),
+            str('mp_no_stories_sub'),
             false,
             -12
           );
@@ -1857,13 +1858,13 @@ export struct MyProfilePage {
         }
       } else {
         if (this.archivedStoriesError !== '') {
-          this.postErrorState('归档动态加载失败', this.archivedStoriesError, 'archive', 12);
+          this.postErrorState(str('mp_archived_failed'), this.archivedStoriesError, 'archive', 12);
         } else if (this.archivedStoriesLoading || !this.archivedStoriesLoaded) {
           this.postLoadingState(12);
         } else if (this.archivedStories.length === 0) {
           this.emptyPosts(
-            '暂无已归档动态',
-            '您归档的动态会安全保存在这里，仅自己可见',
+            str('mp_no_archived'),
+            str('mp_no_archived_sub'),
             true,
             12
           );

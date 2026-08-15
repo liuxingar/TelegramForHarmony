@@ -3,6 +3,7 @@ import markdownBlocksTest from './MarkdownBlocks.test';
 import tdClientTest from './TdClient.test';
 import authServiceTest from './AuthService.test';
 import formatTimeTest from './formatTime.test';
+import intlFormatTest from './intlFormat.test';
 import formatPreviewTest from './formatPreview.test';
 import chatEntryTest from './ChatEntry.test';
 import userStoreTest from './UserStore.test';
@@ -61,6 +62,7 @@ export default function testsuite() {
   tdClientTest();
   authServiceTest();
   formatTimeTest();
+  intlFormatTest();
   formatPreviewTest();
   chatEntryTest();
   userStoreTest();

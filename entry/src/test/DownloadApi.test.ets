@@ -167,11 +167,11 @@ export default function downloadApiTest() {
 
     it('maps_known_tdlib_errors_to_chinese_messages', 0, (): void => {
       const gone = new TdError(400, 'FILE_DOWNLOAD_ID_INVALID');
-      expect(downloadErrorMessage('暂停', gone)).assertEqual('暂停失败：该文件已不在下载列表中');
+      expect(downloadErrorMessage('暂停', gone)).assertEqual('dl_not_in_list(暂停)');
       const unknown = new TdError(500, 'Boom');
-      expect(downloadErrorMessage('移除', unknown)).assertEqual('移除失败：Boom');
+      expect(downloadErrorMessage('移除', unknown)).assertEqual('dl_failed_msg(移除,Boom)');
       const blank = new TdError(500, '');
-      expect(downloadErrorMessage('全部暂停', blank)).assertEqual('全部暂停失败，请稍后重试');
+      expect(downloadErrorMessage('全部暂停', blank)).assertEqual('dl_failed_retry(全部暂停)');
     });
 
     it('rejects_when_tdlib_returns_an_error', 0, async (): Promise<void> => {
@@ -187,7 +187,7 @@ export default function downloadApiTest() {
       } catch (e) {
         message = downloadErrorMessage('暂停', e as Object);
       }
-      expect(message).assertEqual('暂停失败：文件标识无效');
+      expect(message).assertEqual('dl_bad_id(暂停)');
     });
 
     it('resolves_void_helpers_on_plain_ok', 0, async (): Promise<void> => {

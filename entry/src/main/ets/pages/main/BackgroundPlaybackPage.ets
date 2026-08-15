@@ -5,6 +5,7 @@ import {
 import {
   COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
+import { str } from '../../util/strings';
 
 const CARD_RADIUS: number = 14;
 
@@ -43,23 +44,23 @@ struct BackgroundPlaybackPage {
         }
         .width(44).height(44).borderRadius(22).justifyContent(FlexAlign.Center)
         .onClick((): void => router.back());
-        Text('后台播放').fontSize(19).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
+        Text($r('app.string.settings_background_playback')).fontSize(19).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
       }
       .width('100%').padding({ left: 8, right: 12, top: this.topSafe + 6, bottom: 6 });
       Scroll() {
         Column({ space: 12 }) {
           Column() {
-            this.switchRow('音乐', '聊天中的音乐文件切后台继续播放', this.bgMusic,
+            this.switchRow(str('bgplay_music'), str('bgplay_music_sub'), this.bgMusic,
               (next: boolean): void => setBoolean(KEY_BG_PLAY_MUSIC, next));
-            this.switchRow('语音消息', '语音消息切后台继续播放', this.bgVoice,
+            this.switchRow(str('bgplay_voice'), str('bgplay_voice_sub'), this.bgVoice,
               (next: boolean): void => setBoolean(KEY_BG_PLAY_VOICE, next));
-            this.switchRow('视频', '视频切后台继续播放声音', this.bgVideo,
+            this.switchRow(str('bgplay_video'), str('bgplay_video_sub'), this.bgVideo,
               (next: boolean): void => setBoolean(KEY_BG_PLAY_VIDEO, next));
-            this.switchRow('直播', '直播切后台继续播放', this.bgLive,
+            this.switchRow(str('bgplay_live'), str('bgplay_live_sub'), this.bgLive,
               (next: boolean): void => setBoolean(KEY_BG_PLAY_LIVE, next));
           }
           .backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
-          Text('开启后对应内容在后台继续播放，通知栏会显示"正在后台运行"。关闭则切后台自动暂停。')
+          Text($r('app.string.bgplay_note'))
             .fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
             .width('100%').padding({ left: 14, right: 14 });
         }

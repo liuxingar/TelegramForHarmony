@@ -1,3 +1,4 @@
+import { str } from './strings';
 import { router, promptAction } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { getTdClient } from '../tdkit/Globals';
@@ -34,7 +35,7 @@ function onLinkUnresolved(context: common.UIAbilityContext, url: string, allowBr
   if (allowBrowser && !isTelegramInternalUrl(url)) {
     openWebUrl(context, url);
   } else {
-    promptAction.showToast({ message: '无法识别该 Telegram 链接', duration: 1700 });
+    promptAction.showToast({ message: str('tglink_unrecognized'), duration: 1700 });
   }
 }
 
@@ -112,14 +113,14 @@ function openMessageLink(context: common.UIAbilityContext, link: string, origina
 function openProxyLink(type: TdObject): void {
   const proxy = type['proxy'] as TdObject | undefined;
   if (proxy === undefined) {
-    promptAction.showToast({ message: '该代理类型暂不受支持', duration: 1800 });
+    promptAction.showToast({ message: str('tglink_proxy_unsupported'), duration: 1800 });
     return;
   }
   const proxyType = proxy['type'] as TdObject | undefined;
   const server = (proxy['server'] as string | undefined) ?? '';
   const port = (proxy['port'] as number | undefined) ?? 0;
   if (server === '' || port <= 0 || proxyType === undefined) {
-    promptAction.showToast({ message: '代理链接参数不完整', duration: 1800 });
+    promptAction.showToast({ message: str('tglink_proxy_incomplete'), duration: 1800 });
     return;
   }
   const params: Record<string, Object> = {
@@ -143,7 +144,7 @@ function openSelfProfile(): void {
     }
   }).catch((error: TdError): void => {
     console.error(`openTelegramLink.getMe failed: ${error.message}`);
-    promptAction.showToast({ message: '无法打开个人资料', duration: 1600 });
+    promptAction.showToast({ message: str('tglink_cannot_open_profile'), duration: 1600 });
   });
 }
 
@@ -151,7 +152,7 @@ function openSavedMessages(): void {
   getTdClient().send({ '@type': 'getMe' } as TdRequest).then((me: TdObject): void => {
     const userId = (me['id'] as number | undefined) ?? 0;
     if (userId <= 0) {
-      promptAction.showToast({ message: '无法打开收藏夹', duration: 1600 });
+      promptAction.showToast({ message: str('tglink_cannot_open_saved'), duration: 1600 });
       return;
     }
     const req: TdRequest = { '@type': 'createPrivateChat' };
@@ -164,11 +165,11 @@ function openSavedMessages(): void {
       }
     }).catch((error: TdError): void => {
       console.error(`openTelegramLink.createSavedMessages failed: ${error.message}`);
-      promptAction.showToast({ message: '无法打开收藏夹', duration: 1600 });
+      promptAction.showToast({ message: str('tglink_cannot_open_saved'), duration: 1600 });
     });
   }).catch((error: TdError): void => {
     console.error(`openTelegramLink.getMeForSaved failed: ${error.message}`);
-    promptAction.showToast({ message: '无法打开收藏夹', duration: 1600 });
+    promptAction.showToast({ message: str('tglink_cannot_open_saved'), duration: 1600 });
   });
 }
 
@@ -183,7 +184,7 @@ function openStoryOwner(context: common.UIAbilityContext, username: string, orig
   getTdClient().send(req).then((chat: TdObject): void => {
     openProfileForChat(chat, '', true);
     promptAction.showToast({
-      message: live ? '已打开发布者资料，直播动态查看暂未支持' : '已打开发布者动态',
+      message: live ? str('tglink_opened_profile_no_live') : str('tglink_opened_stories'),
       duration: live ? 2200 : 1400
     });
   }).catch((error: TdError): void => {
@@ -235,14 +236,14 @@ function openPhoneNumberUser(context: common.UIAbilityContext, type: TdObject, o
     });
   }).catch((error: TdError): void => {
     console.error(`openTelegramLink.searchUserByPhoneNumber failed: ${error.message}`);
-    promptAction.showToast({ message: '未找到该手机号对应的用户', duration: 1800 });
+    promptAction.showToast({ message: str('tglink_phone_not_found'), duration: 1800 });
   });
 }
 
 function openSettingsSection(type: TdObject): void {
   const section = type['section'] as TdObject | undefined;
   if (section === undefined) {
-    promptAction.showToast({ message: '请从底部栏进入设置', duration: 1700 });
+    promptAction.showToast({ message: str('tglink_use_bottom_bar'), duration: 1700 });
     return;
   }
   const sectionName = (section['@type'] as string | undefined) ?? '';
@@ -267,25 +268,25 @@ function openSettingsSection(type: TdObject): void {
   if (page !== '') {
     router.pushUrl({ url: page });
   } else {
-    promptAction.showToast({ message: '该设置分项暂未实现', duration: 1800 });
+    promptAction.showToast({ message: str('tglink_settings_section_missing'), duration: 1800 });
   }
 }
 
 function unsupportedLinkLabel(typeName: string): string {
-  if (typeName === 'internalLinkTypeBackground') { return '聊天背景'; }
-  if (typeName === 'internalLinkTypeTheme') { return '主题'; }
-  if (typeName === 'internalLinkTypeLanguagePack') { return '语言包'; }
-  if (typeName === 'internalLinkTypeGroupCall') { return '独立群组通话'; }
-  if (typeName === 'internalLinkTypeInvoice') { return '付款'; }
-  if (typeName === 'internalLinkTypePremiumGiftCode') { return 'Premium 礼品码'; }
-  if (typeName === 'internalLinkTypeAuthenticationCode') { return '登录验证码'; }
+  if (typeName === 'internalLinkTypeBackground') { return str('tglink_kind_background'); }
+  if (typeName === 'internalLinkTypeTheme') { return str('tglink_kind_theme'); }
+  if (typeName === 'internalLinkTypeLanguagePack') { return str('tglink_kind_language'); }
+  if (typeName === 'internalLinkTypeGroupCall') { return str('tglink_kind_group_call'); }
+  if (typeName === 'internalLinkTypeInvoice') { return str('tglink_kind_payment'); }
+  if (typeName === 'internalLinkTypePremiumGiftCode') { return str('tglink_kind_gift_code'); }
+  if (typeName === 'internalLinkTypeAuthenticationCode') { return str('tglink_kind_login_code'); }
   if (typeName === 'internalLinkTypeWebApp' || typeName === 'internalLinkTypeMainWebApp') {
     return 'Mini App';
   }
-  if (typeName === 'internalLinkTypeBotStartInGroup') { return '将 Bot 添加到群组'; }
-  if (typeName === 'internalLinkTypeBotAddToChannel') { return '将 Bot 添加到频道'; }
-  if (typeName === 'internalLinkTypeUnknownDeepLink') { return '该类型'; }
-  return '该类型';
+  if (typeName === 'internalLinkTypeBotStartInGroup') { return str('tglink_kind_bot_to_group'); }
+  if (typeName === 'internalLinkTypeBotAddToChannel') { return str('tglink_kind_bot_to_channel'); }
+  if (typeName === 'internalLinkTypeUnknownDeepLink') { return str('tglink_kind_generic'); }
+  return str('tglink_kind_generic');
 }
 
 function handleInternalLinkType(context: common.UIAbilityContext, type: TdObject, original: string,
@@ -390,7 +391,7 @@ function handleInternalLinkType(context: common.UIAbilityContext, type: TdObject
     return;
   }
   promptAction.showToast({
-    message: `当前版本暂不支持${unsupportedLinkLabel(typeName)} Telegram 链接`,
+    message: str('tglink_kind_unsupported', unsupportedLinkLabel(typeName)),
     duration: 2100
   });
 }
@@ -418,13 +419,13 @@ function openMiniAppLink(context: common.UIAbilityContext, type: TdObject, isMai
         (type['start_parameter'] as string | undefined) ?? '');
   }).then((url: string): void => {
     if (url === '') {
-      promptAction.showToast({ message: '无法打开该 Mini App', duration: 1700 });
+      promptAction.showToast({ message: str('tglink_cannot_open_miniapp'), duration: 1700 });
       return;
     }
     openWebUrl(context, url);
   }).catch((error: TdError): void => {
     console.error(`openMiniAppLink failed: ${error.message}`);
-    promptAction.showToast({ message: '无法打开该 Mini App', duration: 1700 });
+    promptAction.showToast({ message: str('tglink_cannot_open_miniapp'), duration: 1700 });
   });
 }
 
@@ -472,11 +473,11 @@ export function openInviteLink(context: common.UIAbilityContext, invite: string,
     const isChannel: boolean = ((info['is_channel'] as boolean | undefined) ?? false) ||
       inviteTypeName.indexOf('Channel') >= 0 || inviteTypeName.indexOf('channel') >= 0;
     promptAction.showDialog({
-      title: '加入群组',
-      message: count > 0 ? `「${title}」· ${count} 位成员` : `「${title}」`,
+      title: str('tglink_join_title'),
+      message: count > 0 ? str('tglink_quoted_title_members', title, count) : str('tglink_quoted_title', title),
       buttons: [
-        { text: '取消', color: '#8E8E93' },
-        { text: '加入', color: $r('app.color.primary') }
+        { text: str('tglink_cancel'), color: '#8E8E93' },
+        { text: str('tglink_join'), color: $r('app.color.primary') }
       ]
     }).then((r) => {
       if (r.index !== 1) {
@@ -491,7 +492,7 @@ export function openInviteLink(context: common.UIAbilityContext, invite: string,
         }
       }).catch((e: TdError) => {
         console.error(`openInviteLink.join failed: ${e.message}`);
-        promptAction.showToast({ message: '加入失败,链接可能已失效' });
+        promptAction.showToast({ message: str('tglink_join_failed') });
       });
     });
   }).catch((e: TdError) => {
@@ -518,21 +519,29 @@ export function openChatFolderInviteLink(invite: string): void {
     const missing = (info['missing_chat_ids'] as number[] | undefined) ?? [];
     const added = (info['added_chat_ids'] as number[] | undefined) ?? [];
     const name = folderNameOf(info);
-    const displayName = name !== '' ? `「${name}」` : '这个聊天文件夹';
+    const displayName = name !== ''
+      ? str('folder_link_quoted_name', name) : str('folder_link_this_folder');
     if (missing.length === 0) {
       promptAction.showToast({
-        message: added.length > 0 ? `${displayName}已添加` : '文件夹链接中没有可添加的聊天',
+        message: added.length > 0
+          ? str('folder_link_already_added', displayName)
+          : str('folder_link_nothing_to_add'),
         duration: 1700
       });
       return;
     }
-    const addedHint = added.length > 0 ? `，另有 ${added.length} 个已在文件夹中` : '';
+    // Two whole sentences rather than one with an appended clause: a fragment
+    // like "，另有 N 个已在文件夹中" cannot be translated on its own, because
+    // where it attaches and how it joins differ per language.
+    const message = added.length > 0
+      ? str('folder_link_add_message_with_existing', displayName, missing.length, added.length)
+      : str('folder_link_add_message', displayName, missing.length);
     promptAction.showDialog({
-      title: '添加聊天文件夹',
-      message: `${displayName}包含 ${missing.length} 个可添加的聊天${addedHint}。添加后会自动加入尚未加入的群组或频道。`,
+      title: str('folder_link_add_title'),
+      message,
       buttons: [
-        { text: '取消', color: '#8E8E93' },
-        { text: '添加', color: $r('app.color.primary') }
+        { text: str('tglink_cancel'), color: '#8E8E93' },
+        { text: str('folder_link_add'), color: $r('app.color.primary') }
       ]
     }).then((result): void => {
       if (result.index !== 1) {
@@ -542,15 +551,15 @@ export function openChatFolderInviteLink(invite: string): void {
       add['invite_link'] = invite;
       add['chat_ids'] = missing;
       getTdClient().send(add).then((): void => {
-        promptAction.showToast({ message: '聊天文件夹已添加', duration: 1600 });
+        promptAction.showToast({ message: str('folder_link_added_toast'), duration: 1600 });
       }).catch((error: TdError): void => {
         console.error(`openChatFolderInviteLink.add failed: ${error.message}`);
-        promptAction.showToast({ message: '添加文件夹失败，请稍后重试', duration: 1800 });
+        promptAction.showToast({ message: str('folder_link_add_failed'), duration: 1800 });
       });
     }).catch((): void => {});
   }).catch((error: TdError): void => {
     console.error(`openChatFolderInviteLink.check failed: ${error.message}`);
-    promptAction.showToast({ message: '文件夹链接无效或已失效', duration: 1800 });
+    promptAction.showToast({ message: str('folder_link_invalid'), duration: 1800 });
   });
 }
 
@@ -568,14 +577,17 @@ export function openStickerSetLink(link: StickerSetLink): void {
     const type = set['sticker_type'] as TdObject | undefined;
     const isCustomEmoji = link.expectCustomEmoji ||
       (type !== undefined && type['@type'] === 'stickerTypeCustomEmoji');
-    const resourceName = isCustomEmoji ? 'Emoji 包' : '贴纸包';
-    const countHint = stickers.length > 0 ? `，共 ${stickers.length} 个` : '';
+    const resourceName = isCustomEmoji ? str('sticker_kind_emoji') : str('sticker_kind_stickers');
     promptAction.showDialog({
-      title: installed ? `${resourceName}已添加` : `添加${resourceName}`,
-      message: `「${title}」${countHint}`,
+      title: installed
+        ? str('sticker_link_installed_title', resourceName)
+        : str('sticker_link_add_title', resourceName),
+      message: stickers.length > 0
+        ? str('sticker_link_message_with_count', title, stickers.length)
+        : str('sticker_link_message', title),
       buttons: [
-        { text: '关闭', color: '#8E8E93' },
-        { text: installed ? '已添加' : '添加', color: $r('app.color.primary') }
+        { text: str('tglink_close'), color: '#8E8E93' },
+        { text: installed ? str('tglink_added') : str('folder_link_add'), color: $r('app.color.primary') }
       ]
     }).then((result): void => {
       if (result.index !== 1 || installed || setId <= 0) {
@@ -586,15 +598,15 @@ export function openStickerSetLink(link: StickerSetLink): void {
       change['is_installed'] = true;
       change['is_archived'] = false;
       getTdClient().send(change).then((): void => {
-        promptAction.showToast({ message: `${resourceName}已添加`, duration: 1500 });
+        promptAction.showToast({ message: str('sticker_link_added_toast', resourceName), duration: 1500 });
       }).catch((error: TdError): void => {
         console.error(`openStickerSetLink.change failed: ${error.message}`);
-        promptAction.showToast({ message: `${resourceName}添加失败，请稍后重试`, duration: 1800 });
+        promptAction.showToast({ message: str('sticker_link_add_failed', resourceName), duration: 1800 });
       });
     }).catch((): void => {});
   }).catch((error: TdError): void => {
     console.error(`openStickerSetLink.search(${link.name}) failed: ${error.message}`);
-    promptAction.showToast({ message: '贴纸链接无效或已失效', duration: 1800 });
+    promptAction.showToast({ message: str('sticker_link_invalid'), duration: 1800 });
   });
 }
 
@@ -629,7 +641,7 @@ export function openChatLinkAction(context: common.UIAbilityContext, action: Cha
     start['parameter'] = action.startParam;
     getTdClient().send(start).catch((e: TdError) => {
       console.error(`openTelegramLink.sendBotStartMessage failed: ${e.message}`);
-      promptAction.showToast({ message: '发送 /start 失败', duration: 1500 });
+      promptAction.showToast({ message: str('tglink_start_failed'), duration: 1500 });
     });
   }).catch((e: TdError) => {
     console.error(`openTelegramLink.searchPublicChat(${action.username}) failed: ${e.message}`);

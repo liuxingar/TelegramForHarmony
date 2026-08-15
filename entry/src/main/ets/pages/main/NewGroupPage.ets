@@ -15,6 +15,7 @@ import {
   NewBasicGroupResult, maxSelectableBasicGroupMembers, newGroupCreationErrorText,
   newGroupCreationOutcomeUncertain, newGroupTitleError, parseNewBasicGroupResult
 } from '../../util/newGroupLogic';
+import { plural, str } from '../../util/strings';
 
 const PAGE_BG: ResourceColor = $r('app.color.page_bg');
 const CARD_BG: ResourceColor = $r('app.color.surface');
@@ -257,7 +258,7 @@ struct NewGroupPage {
     } else {
       if (this.selectedIds.length >= this.maxSelectableMembers) {
         promptAction.showToast({
-          message: `基础群最多可选择 ${this.maxSelectableMembers} 位成员`, duration: 1800
+          message: plural('ng_max_members', this.maxSelectableMembers, this.maxSelectableMembers), duration: 1800
         });
         return;
       }
@@ -273,7 +274,7 @@ struct NewGroupPage {
       .find((item: ContactItem): boolean => item.id === userId);
     if (contact !== undefined) { return contact; }
     return {
-      id: userId, name: '联系人', initials: '?', avatarPath: '', statusText: '',
+      id: userId, name: str('tab_contacts'), initials: '?', avatarPath: '', statusText: '',
       online: false, sortKey: 0
     };
   }
@@ -300,11 +301,11 @@ struct NewGroupPage {
   }
 
   private headerActionText(): string {
-    if (!this.naming) { return '下一步'; }
-    if (this.openingCreatedChat) { return '正在打开'; }
-    if (this.creating) { return '创建中'; }
-    if (this.createdChatId > 0) { return '打开'; }
-    return '创建';
+    if (!this.naming) { return str('next'); }
+    if (this.openingCreatedChat) { return str('opening'); }
+    if (this.creating) { return str('creating'); }
+    if (this.createdChatId > 0) { return str('open'); }
+    return str('create');
   }
 
   private createGroup(): void {
@@ -323,7 +324,7 @@ struct NewGroupPage {
       return;
     }
     if (this.selectedIds.length === 0 || this.selectedIds.length > this.maxSelectableMembers) {
-      this.createError = '请返回并重新选择群组成员';
+      this.createError = str('ng_reselect_members');
       return;
     }
     const groupTitle = this.title.trim();
@@ -344,7 +345,7 @@ struct NewGroupPage {
         // A malformed success must never turn the Create button back into a
         // second create request; the first group may already exist remotely.
         this.creationOutcomeUnknown = true;
-        this.createError = '创建结果暂时无法确认，请返回聊天列表查看，避免重复创建';
+        this.createError = str('ng_result_unknown');
         return;
       }
       this.createdChatId = parsed.chatId;
@@ -353,9 +354,9 @@ struct NewGroupPage {
           (userId: number): string => this.contactFor(userId).name
         ).join('、');
         const suffix = parsed.failedUserIds.length > 2
-          ? `${names} 等 ${parsed.failedUserIds.length} 人` : names;
+          ? str('ng_and_others', names, parsed.failedUserIds.length) : names;
         promptAction.showToast({
-          message: `群组已创建，但 ${suffix} 因权限或隐私限制未能加入`, duration: 2600
+          message: str('ng_created_partial', suffix), duration: 2600
         });
       }
       this.openCreatedGroup();
@@ -364,7 +365,7 @@ struct NewGroupPage {
       this.creating = false;
       if (newGroupCreationOutcomeUncertain(error.message)) {
         this.creationOutcomeUnknown = true;
-        this.createError = '创建请求超时，结果暂时无法确认；请返回聊天列表查看，避免重复创建';
+        this.createError = str('ng_timeout');
       } else {
         this.createError = newGroupCreationErrorText(error.message);
       }
@@ -391,7 +392,7 @@ struct NewGroupPage {
       const chatId: number = (result['id'] as number | undefined) ?? 0;
       if (chatId <= 0) {
         this.creationOutcomeUnknown = true;
-        this.createError = '创建结果暂时无法确认，请返回聊天列表查看，避免重复创建';
+        this.createError = str('ng_result_unknown');
         return;
       }
       this.createdChatId = chatId;
@@ -402,7 +403,7 @@ struct NewGroupPage {
         getTdClient().send(invite).catch((error: TdError): void => {
           console.error(`NewGroupPage.addChatMembers failed: ${error.message}`);
           promptAction.showToast({
-            message: '频道已创建，但部分成员因权限或隐私限制未能加入', duration: 2600
+            message: $r('app.string.ng_channel_created_partial'), duration: 2600
           });
         });
       }
@@ -412,7 +413,7 @@ struct NewGroupPage {
       this.creating = false;
       if (newGroupCreationOutcomeUncertain(error.message)) {
         this.creationOutcomeUnknown = true;
-        this.createError = '创建请求超时，结果暂时无法确认；请返回聊天列表查看，避免重复创建';
+        this.createError = str('ng_timeout');
       } else {
         this.createError = newGroupCreationErrorText(error.message);
       }
@@ -429,7 +430,7 @@ struct NewGroupPage {
     router.replaceUrl({ url: 'pages/chat/ChatPage', params: params }).catch((error: Error): void => {
       if (!this.active) { return; }
       this.openingCreatedChat = false;
-      this.createError = '群组已经创建，但暂时无法打开；点击“打开”重试';
+      this.createError = str('ng_created_cannot_open');
       console.error(`NewGroupPage.openCreatedGroup failed: ${error.message}`);
     });
   }
@@ -457,16 +458,16 @@ struct NewGroupPage {
       .enabled(!this.creating && !this.openingCreatedChat)
       .opacity(this.creating || this.openingCreatedChat ? 0.42 : 1)
       .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
-      .accessibilityText(this.naming ? '返回成员选择' : '返回')
+      .accessibilityText(this.naming ? $r('app.string.ng_back_to_members') : $r('app.string.back'))
       .onClick((): void => this.back());
 
       Column({ space: 1 }) {
-        Text(this.naming ? '新建群组' : '添加成员')
+        Text(this.naming ? $r('app.string.ct_new_group') : $r('app.string.ng_add_members'))
           .fontSize(21).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
-        Text(this.naming ? `${this.selectedIds.length} 位成员` :
+        Text(this.naming ? plural('ng_member_count', this.selectedIds.length, this.selectedIds.length) :
           (this.selectedIds.length > 0
-            ? `已选择 ${this.selectedIds.length}/${this.maxSelectableMembers} 人`
-            : '选择群组成员'))
+            ? str('ng_selected_of', this.selectedIds.length, this.maxSelectableMembers)
+            : $r('app.string.ng_pick_members')))
           .fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
       }
       .alignItems(HorizontalAlign.Start).layoutWeight(1);
@@ -498,7 +499,7 @@ struct NewGroupPage {
       SymbolGlyph($r('sys.symbol.magnifyingglass'))
         .fontSize(18).fontColor([this.searchFocused ? COLOR_PRIMARY : COLOR_TEXT_SECONDARY])
         .animation({ duration: this.animationDuration(150), curve: Curve.EaseOut });
-      TextInput({ text: this.query, placeholder: '搜索联系人或 @用户名' })
+      TextInput({ text: this.query, placeholder: $r('app.string.ct_search_hint') })
         .layoutWeight(1).height(38).fontSize(16)
         .backgroundColor(Color.Transparent).padding(0).borderRadius(0)
         .placeholderColor(COLOR_TEXT_SECONDARY).caretColor(COLOR_PRIMARY)
@@ -518,7 +519,7 @@ struct NewGroupPage {
         }
         .width(32).height(32).borderRadius(16).justifyContent(FlexAlign.Center)
         .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
-        .accessibilityText('清空搜索').onClick((): void => this.clearSearch());
+        .accessibilityText($r('app.string.clear_search')).onClick((): void => this.clearSearch());
       }
     }
     .width('calc(100% - 24vp)').height(46).padding({ left: 13, right: 9 })
@@ -548,7 +549,7 @@ struct NewGroupPage {
     }
     .padding({ top: 2, bottom: 2 }).borderRadius(12)
     .stateStyles({ normal: this.primaryActionNormalStyle, pressed: this.primaryActionPressedStyle })
-    .accessibilityText(`移除成员 ${contact.name}`)
+    .accessibilityText(str('ng_remove_member', contact.name))
     .onClick((): void => this.toggle(contact.id))
     .transition(TransitionEffect.OPACITY.combine(
       TransitionEffect.scale({ x: 0.78, y: 0.78 })
@@ -605,7 +606,7 @@ struct NewGroupPage {
     .width('100%').padding({ left: 12, right: 14, top: 8, bottom: 8 })
     .alignItems(VerticalAlign.Center)
     .stateStyles({ normal: this.rowNormalStyle, pressed: this.rowPressedStyle })
-    .accessibilityText(`${contact.name}，${this.selected(contact.id) ? '已选择' : '未选择'}`)
+    .accessibilityText(str('a11y_labeled_state', contact.name, this.selected(contact.id) ? str('ng_selected') : str('ng_not_selected')))
     .onClick((): void => this.toggle(contact.id));
   }
 
@@ -640,7 +641,7 @@ struct NewGroupPage {
   }
 
   @Builder
-  centeredState(icon: Resource, title: string, detail: string, retryKind: string) {
+  centeredState(icon: Resource, title: ResourceStr, detail: ResourceStr, retryKind: string) {
     Column({ space: 8 }) {
       Stack({ alignContent: Alignment.Center }) {
         Circle({ width: 58, height: 58 }).fill($r('app.color.surface_alt'));
@@ -652,7 +653,7 @@ struct NewGroupPage {
       if (retryKind !== '') {
         Row({ space: 6 }) {
           SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(14).fontColor([Color.White]);
-          Text('重新加载').fontSize(14).fontWeight(FontWeight.Medium).fontColor(Color.White);
+          Text($r('app.string.settings_reload')).fontSize(14).fontWeight(FontWeight.Medium).fontColor(Color.White);
         }
         .height(38).padding({ left: 15, right: 16 }).borderRadius(19)
         .backgroundColor(COLOR_PRIMARY)
@@ -683,15 +684,15 @@ struct NewGroupPage {
     if (this.remoteState === 'loading') {
       Row({ space: 8 }) {
         LoadingProgress().width(18).height(18).color(COLOR_PRIMARY);
-        Text('正在搜索陌生用户…').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+        Text($r('app.string.ct_searching_global')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
       }.width('100%').height(50).justifyContent(FlexAlign.Center);
     } else if (this.shouldShowRemoteError()) {
       Row({ space: 7 }) {
         SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
           .fontSize(14).fontColor([COLOR_PRIMARY]);
-        Text(this.remoteState === 'timeout' ? '搜索超时' : '陌生用户搜索失败')
+        Text(this.remoteState === 'timeout' ? $r('app.string.search_timeout') : $r('app.string.ng_global_search_failed'))
           .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
-        Text('重试').fontSize(12).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY);
+        Text($r('app.string.settings_retry')).fontSize(12).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY);
       }
       .width('100%').height(46).justifyContent(FlexAlign.Center)
       .stateStyles({ normal: this.rowNormalStyle, pressed: this.rowPressedStyle })
@@ -734,30 +735,30 @@ struct NewGroupPage {
       this.contactList();
     } else if (this.query.trim() === '' && this.loadError !== '') {
       this.centeredState(
-        $r('sys.symbol.exclamationmark_circle'), '联系人加载失败',
-        '无法读取联系人，请检查网络后重试', 'contacts'
+        $r('sys.symbol.exclamationmark_circle'), $r('app.string.contacts_load_failed'),
+        $r('app.string.ng_contacts_unreadable'), 'contacts'
       );
     } else if (this.query.trim() === '') {
       this.centeredState(
-        $r('sys.symbol.person_2'), '暂无联系人',
-        '可以在搜索框输入 @用户名查找并选择陌生用户', ''
+        $r('sys.symbol.person_2'), $r('app.string.ct_empty'),
+        $r('app.string.ng_search_by_username'), ''
       );
     } else if (this.remoteState === 'loading') {
       this.centeredState(
-        $r('sys.symbol.magnifyingglass'), '正在搜索用户',
-        '正在同时搜索本地联系人和公开用户名', ''
+        $r('sys.symbol.magnifyingglass'), $r('app.string.ng_searching'),
+        $r('app.string.ng_searching_sub'), ''
       );
     } else if (this.shouldShowRemoteError()) {
       this.centeredState(
         $r('sys.symbol.exclamationmark_circle'),
-        this.remoteState === 'timeout' ? '搜索超时' : '搜索失败',
-        '网络恢复后可以重新搜索，不会影响已选择的成员', 'search'
+        this.remoteState === 'timeout' ? $r('app.string.search_timeout') : $r('app.string.search_failed'),
+        $r('app.string.ng_search_failed_sub'), 'search'
       );
     } else {
       this.centeredState(
-        $r('sys.symbol.person_2'), this.isShortRemoteQuery() ? '继续输入' : '没有找到用户',
+        $r('sys.symbol.person_2'), this.isShortRemoteQuery() ? $r('app.string.keep_typing') : $r('app.string.ng_no_users'),
         this.isShortRemoteQuery()
-          ? '至少输入 2 个字符后会搜索公开用户名' : '请检查姓名或 @用户名是否正确', ''
+          ? $r('app.string.ng_min_chars') : $r('app.string.ct_no_results_sub'), ''
       );
     }
   }
@@ -796,7 +797,7 @@ struct NewGroupPage {
   kindSegment() {
     Row() {
       ForEach(['group', 'channel'], (value: string) => {
-        Text(value === 'group' ? '群组' : '频道')
+        Text(value === 'group' ? $r('app.string.gn_group') : $r('app.string.gn_channel'))
           .fontSize(14)
           .fontWeight(this.kind === value ? FontWeight.Medium : FontWeight.Normal)
           .fontColor(this.kind === value ? Color.White : COLOR_TEXT_PRIMARY)
@@ -828,7 +829,7 @@ struct NewGroupPage {
               .fontSize(32).fontColor([Color.White]);
           }
           Column({ space: 5 }) {
-            TextInput({ text: this.title, placeholder: this.kind === 'channel' ? '频道名称' : '群组名称' })
+            TextInput({ text: this.title, placeholder: this.kind === 'channel' ? $r('app.string.ng_channel_name') : $r('app.string.ng_group_name') })
               .id('new_group_title').width('100%').height(42).fontSize(18)
               .backgroundColor(Color.Transparent).padding(0).borderRadius(0)
               .placeholderColor(COLOR_TEXT_SECONDARY).caretColor(COLOR_PRIMARY)
@@ -857,7 +858,7 @@ struct NewGroupPage {
 
         if (this.kind === 'channel') {
           Column({ space: 4 }) {
-            TextInput({ text: this.channelDescription, placeholder: '频道简介（可选）' })
+            TextInput({ text: this.channelDescription, placeholder: $r('app.string.ng_channel_bio') })
               .width('100%').fontSize(14)
               .backgroundColor(Color.Transparent).padding({ top: 4, bottom: 4 })
               .maxLength(255)
@@ -865,7 +866,7 @@ struct NewGroupPage {
               .onChange((value: string): void => {
                 this.channelDescription = value;
               });
-            Text('订阅者可在频道资料页看到简介')
+            Text($r('app.string.ng_channel_bio_sub'))
               .fontSize(11).fontColor(COLOR_TEXT_SECONDARY).width('100%');
           }
           .width('100%').padding({ left: 14, right: 14, top: 10, bottom: 10 })
@@ -888,9 +889,9 @@ struct NewGroupPage {
 
         Column() {
           Row() {
-            Text('成员').fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY);
+            Text($r('app.string.ng_members')).fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY);
             Blank();
-            Text(`${this.selectedIds.length} 人`).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+            Text(plural('ng_people_count', this.selectedIds.length, this.selectedIds.length)).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
           }
           .width('100%').height(42).padding({ left: 14, right: 14 });
           ForEach(this.selectedIds, (userId: number, index: number) => {

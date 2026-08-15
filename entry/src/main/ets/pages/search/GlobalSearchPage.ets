@@ -25,6 +25,7 @@ import {
   downloadErrorMessage, emptyDownloadCounts, removeDownload, searchDownloads,
   setAllDownloadsPaused, setDownloadPaused
 } from '../../store/DownloadApi';
+import { plural, str } from '../../util/strings';
 
 interface FoundItem {
   chatId: number;
@@ -44,7 +45,7 @@ interface FoundItem {
 
 // Telegram global-search categories. Public post search belongs to 帖子;
 // hashtag search is a mode of that tab, not a second visible category.
-const TABS: string[] = ['聊天', '频道', '应用', '帖子', '媒体', '下载', '链接', '文件', '音乐', '语音'];
+const TABS: string[] = [str('tab_chats'), str('gn_channel'), str('gs_apps'), str('gs_posts'), str('cpp_media'), str('gs_downloads'), str('cpp_links'), str('storage_file'), str('storage_audio'), str('storage_voice')];
 const TAB_CHATS: number = 0;
 const TAB_CHANNELS: number = 1;
 const TAB_APPS: number = 2;
@@ -471,24 +472,24 @@ struct GlobalSearchPage {
 
   private searchPlaceholder(): string {
     if (this.tab === TAB_DOWNLOADS) {
-      return '搜索下载内容';
+      return str('gs_search_downloads');
     }
     if (this.tab === TAB_MEDIA) {
-      return '搜索照片和视频';
+      return str('gs_search_media');
     }
     if (this.tab === TAB_LINKS) {
-      return '搜索链接消息';
+      return str('gs_search_links');
     }
     if (this.tab === TAB_FILES) {
-      return '搜索文件消息';
+      return str('gs_search_files');
     }
     if (this.tab === TAB_AUDIO || this.tab === TAB_VOICE) {
-      return '搜索音乐和语音';
+      return str('gs_search_audio');
     }
     if (this.tab === TAB_POSTS) {
-      return '搜索公开贴文';
+      return str('gs_search_posts');
     }
-    return '搜索聊天和消息';
+    return str('gs_search_chats');
   }
 
   private searchBusy(): boolean {
@@ -546,8 +547,8 @@ struct GlobalSearchPage {
         });
       }
     }).catch((e: Object) => {
-      console.error(`GlobalSearchPage.searchFileDownloads failed: ${downloadErrorMessage('加载下载列表', e)}`);
-      promptAction.showToast({ message: downloadErrorMessage('加载下载列表', e), duration: 1800 });
+      console.error(`GlobalSearchPage.searchFileDownloads failed: ${downloadErrorMessage(str('gs_action_load_downloads'), e)}`);
+      promptAction.showToast({ message: downloadErrorMessage(str('gs_action_load_downloads'), e), duration: 1800 });
     });
   }
 
@@ -556,7 +557,7 @@ struct GlobalSearchPage {
     if (entry.fileName !== '') {
       return entry.fileName;
     }
-    return entry.preview !== '' ? entry.preview : '媒体文件';
+    return entry.preview !== '' ? entry.preview : str('gs_media_file');
   }
 
   // 所有进行中的条目都已暂停时，顶部按钮切换成"全部继续"。
@@ -577,7 +578,7 @@ struct GlobalSearchPage {
         it.fileId === item.fileId ? this.withPaused(it, next) : it);
       this.reloadDownloadState();
     } catch (e) {
-      promptAction.showToast({ message: downloadErrorMessage(next ? '暂停' : '继续', e), duration: 1800 });
+      promptAction.showToast({ message: downloadErrorMessage(next ? str('gs_action_pause') : str('gs_action_resume'), e), duration: 1800 });
     }
     this.downloadActionBusy = false;
   }
@@ -602,7 +603,7 @@ struct GlobalSearchPage {
       this.reloadDownloadState();
     } catch (e) {
       promptAction.showToast({
-        message: downloadErrorMessage(pauseAll ? '全部暂停' : '全部继续', e), duration: 1800
+        message: downloadErrorMessage(pauseAll ? str('gs_action_pause_all') : str('gs_action_resume_all'), e), duration: 1800
       });
     }
     this.downloadActionBusy = false;
@@ -622,7 +623,7 @@ struct GlobalSearchPage {
       }
       this.reloadDownloadState();
     } catch (e) {
-      promptAction.showToast({ message: downloadErrorMessage('移除', e), duration: 1800 });
+      promptAction.showToast({ message: downloadErrorMessage(str('gs_action_remove'), e), duration: 1800 });
     }
   }
 
@@ -653,7 +654,7 @@ struct GlobalSearchPage {
       ? {
         path: done ? path : it.path, name: it.name, kind: it.kind,
         sizeLabel: total > 0 ? formatFileSize(total) : it.sizeLabel,
-        mtime: it.mtime, dateLabel: done ? '刚刚' : it.dateLabel,
+        mtime: it.mtime, dateLabel: done ? str('gs_just_now') : it.dateLabel,
         fileId: it.fileId, progress, isPaused: it.isPaused, preview: it.preview,
         chatId: it.chatId, messageId: it.messageId
       } : it);
@@ -719,7 +720,7 @@ struct GlobalSearchPage {
     const params: Record<string, Object> = { 'chatId': it.chatId, 'jumpTo': it.messageId };
     router.pushUrl({ url: 'pages/chat/ChatPage', params: params }).catch((e: Error): void => {
       console.error(`GlobalSearchPage.locateDownloadMessage failed: ${e.message}`);
-      promptAction.showToast({ message: '无法打开来源消息', duration: 1500 });
+      promptAction.showToast({ message: $r('app.string.gs_cannot_open_source'), duration: 1500 });
     });
   }
 
@@ -874,7 +875,7 @@ struct GlobalSearchPage {
       const remaining = (res['remaining_free_query_count'] as number | undefined)
         ?? ((res['remaining_count'] as number | undefined)
           ?? ((res['free_query_count'] as number | undefined) ?? -1));
-      this.postsQuota = remaining >= 0 ? `今日剩余 ${remaining} 次免费搜索` : '';
+      this.postsQuota = remaining >= 0 ? plural('gs_free_left', remaining, remaining) : '';
     }).catch((e: TdError) => {
       console.error(`GlobalSearchPage.getPublicPostSearchLimits failed: ${e.message}`);
     });
@@ -987,7 +988,7 @@ struct GlobalSearchPage {
       this.loading = false;
       this.searchedOnce = true;
       if (offset === '') {
-        this.messageError = '搜索失败，请检查网络后重试';
+        this.messageError = str('gs_search_failed_network');
         this.nextOffset = '';
       } else {
         this.pagingError = true;
@@ -1314,11 +1315,11 @@ struct GlobalSearchPage {
     }
     this.clearRecentDialogOpen = true;
     promptAction.showDialog({
-      title: '清空最近访问',
-      message: '确定清空搜索页的最近访问记录吗？聊天和消息不会被删除。',
+      title: $r('app.string.gs_clear_recent'),
+      message: $r('app.string.gs_clear_recent_confirm'),
       buttons: [
-        { text: '取消', color: COLOR_TEXT_SECONDARY as string },
-        { text: '清空', color: '#E64646' }
+        { text: $r('app.string.cancel'), color: COLOR_TEXT_SECONDARY as string },
+        { text: $r('app.string.clear_all'), color: '#E64646' }
       ]
     }).then((result: promptAction.ShowDialogSuccessResponse): void => {
       this.clearRecentDialogOpen = false;
@@ -1339,7 +1340,7 @@ struct GlobalSearchPage {
       this.clearingRecent = false;
     }).catch((): void => {
       this.clearingRecent = false;
-      promptAction.showToast({ message: '清空失败，请稍后重试', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.gs_clear_failed'), duration: 1800 });
     });
   }
 
@@ -1411,7 +1412,7 @@ struct GlobalSearchPage {
             duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 110),
             curve: Curve.EaseOut
           })
-          .accessibilityText('清空搜索')
+          .accessibilityText($r('app.string.clear_search'))
           .onTouch((event: TouchEvent): void => {
             if (event.type === TouchType.Down) {
               this.clearPressed = true;
@@ -1452,7 +1453,7 @@ struct GlobalSearchPage {
         curve: Curve.EaseOut
       });
 
-      Text(this.closingSearch ? '关闭中' : '取消')
+      Text(this.closingSearch ? $r('app.string.gs_closing') : $r('app.string.cancel'))
         .width(50)
         .height(44)
         .fontSize(15)
@@ -1469,7 +1470,7 @@ struct GlobalSearchPage {
           curve: Curve.EaseOut
         })
         .enabled(!this.closingSearch)
-        .accessibilityText('关闭全局搜索')
+        .accessibilityText($r('app.string.gs_close_search'))
         .onTouch((event: TouchEvent): void => {
           if (event.type === TouchType.Down && !this.closingSearch) {
             this.cancelPressed = true;
@@ -1516,7 +1517,7 @@ struct GlobalSearchPage {
         this.moveIndicatorTo(index);
       }
     })
-    .accessibilityText(this.tab === index ? `${title}，已选择` : title)
+    .accessibilityText(this.tab === index ? str('gs_selected_a11y', title) : title)
     .onClick((): void => {
       if (index !== this.tab) {
         this.controller.changeIndex(index);
@@ -1603,7 +1604,7 @@ struct GlobalSearchPage {
   frequentSection() {
     Column() {
       Row() {
-        Text('常用联系人')
+        Text($r('app.string.gs_frequent_contacts'))
           .fontSize(14)
           .fontWeight(FontWeight.Medium)
           .fontColor(COLOR_TEXT_PRIMARY);
@@ -1643,7 +1644,7 @@ struct GlobalSearchPage {
               normal: this.landingActionNormalStyle,
               pressed: this.landingActionPressedStyle
             })
-            .accessibilityText(`常用联系人，${row.title}`)
+            .accessibilityText(str('gs_frequent_a11y', row.title))
             .onClick((): void => { this.openChat(row.chatId); });
           }, (row: SearchRow) => `top_${row.chatId}_${row.title}_${row.avatarPath}`);
         }
@@ -1674,7 +1675,7 @@ struct GlobalSearchPage {
           SymbolGlyph($r('sys.symbol.clock'))
             .fontSize(16)
             .fontColor([COLOR_TEXT_SECONDARY]);
-          Text('最近访问')
+          Text($r('app.string.gs_recent'))
             .fontSize(14)
             .fontWeight(FontWeight.Medium)
             .fontColor(COLOR_TEXT_PRIMARY);
@@ -1685,7 +1686,7 @@ struct GlobalSearchPage {
           if (this.clearingRecent) {
             LoadingProgress().width(16).height(16).color(COLOR_PRIMARY);
           } else {
-            Text('清空')
+            Text($r('app.string.clear_all'))
               .fontSize(14)
               .fontWeight(FontWeight.Medium)
               .fontColor(COLOR_PRIMARY);
@@ -1700,7 +1701,7 @@ struct GlobalSearchPage {
           pressed: this.landingActionPressedStyle
         })
         .enabled(!this.clearingRecent)
-        .accessibilityText('清空最近访问')
+        .accessibilityText($r('app.string.gs_clear_recent'))
         .onClick((): void => { this.confirmClearRecent(); });
       }
       .width('100%')
@@ -1740,7 +1741,7 @@ struct GlobalSearchPage {
         SymbolGlyph($r('sys.symbol.clock'))
           .fontSize(16)
           .fontColor([COLOR_TEXT_SECONDARY]);
-        Text('最近聊天')
+        Text($r('app.string.gs_recent_chats'))
           .fontSize(14)
           .fontWeight(FontWeight.Medium)
           .fontColor(COLOR_TEXT_PRIMARY);
@@ -1779,7 +1780,7 @@ struct GlobalSearchPage {
   landingLoadingState() {
     Row({ space: 10 }) {
       LoadingProgress().width(22).height(22).color(COLOR_PRIMARY);
-      Text('正在加载最近访问')
+      Text($r('app.string.gs_loading_recent'))
         .fontSize(14)
         .fontColor(COLOR_TEXT_SECONDARY);
     }
@@ -1797,11 +1798,11 @@ struct GlobalSearchPage {
           .fontSize(28)
           .fontColor([COLOR_TEXT_SECONDARY]);
       }
-      Text('搜索聊天和消息')
+      Text($r('app.string.gs_search_chats'))
         .fontSize(17)
         .fontWeight(FontWeight.Medium)
         .fontColor(COLOR_TEXT_PRIMARY);
-      Text('在上方输入关键词，查找聊天、频道、消息和文件')
+      Text($r('app.string.gs_empty_hint'))
         .fontSize(13)
         .lineHeight(19)
         .fontColor(COLOR_TEXT_SECONDARY)
@@ -1831,18 +1832,18 @@ struct GlobalSearchPage {
           .fontSize(28)
           .fontColor(['#E64646']);
       }
-      Text('最近访问加载失败')
+      Text($r('app.string.gs_recent_failed'))
         .fontSize(17)
         .fontWeight(FontWeight.Medium)
         .fontColor(COLOR_TEXT_PRIMARY);
-      Text('网络或服务暂时不可用')
+      Text($r('app.string.ct_service_unavailable'))
         .fontSize(13)
         .fontColor(COLOR_TEXT_SECONDARY);
       Row({ space: 6 }) {
         SymbolGlyph($r('sys.symbol.arrow_clockwise'))
           .fontSize(15)
           .fontColor([COLOR_PRIMARY]);
-        Text('重新加载')
+        Text($r('app.string.settings_reload'))
           .fontSize(14)
           .fontWeight(FontWeight.Medium)
           .fontColor(COLOR_PRIMARY);
@@ -1855,7 +1856,7 @@ struct GlobalSearchPage {
         normal: this.retryActionNormalStyle,
         pressed: this.retryActionPressedStyle
       })
-      .accessibilityText('重新加载最近访问')
+      .accessibilityText($r('app.string.gs_reload_recent'))
       .onClick((): void => { this.retryLanding(); });
     }
     .width('calc(100% - 24vp)')
@@ -1944,14 +1945,14 @@ struct GlobalSearchPage {
         .fontSize(17)
         .fontWeight(FontWeight.Medium)
         .fontColor(COLOR_TEXT_PRIMARY);
-      Text('网络或服务暂时不可用')
+      Text($r('app.string.ct_service_unavailable'))
         .fontSize(13)
         .fontColor(COLOR_TEXT_SECONDARY);
       Row({ space: 6 }) {
         SymbolGlyph($r('sys.symbol.arrow_clockwise'))
           .fontSize(15)
           .fontColor([COLOR_PRIMARY]);
-        Text('重新加载')
+        Text($r('app.string.settings_reload'))
           .fontSize(14)
           .fontWeight(FontWeight.Medium)
           .fontColor(COLOR_PRIMARY);
@@ -2025,7 +2026,7 @@ struct GlobalSearchPage {
     Scroll() {
       Column() {
         if (this.joinedChannels.length > 0) {
-          this.sectionHeader('已加入的频道');
+          this.sectionHeader(str('gs_joined_channels'));
           Column() {
             ForEach(this.joinedChannels, (r: SearchRow, idx: number) => {
               this.chatRow(r, idx > 0);
@@ -2033,7 +2034,7 @@ struct GlobalSearchPage {
           }.width('100%').backgroundColor($r('app.color.surface'));
         }
         if (this.similarChannels.length > 0) {
-          this.sectionHeader('相似频道');
+          this.sectionHeader(str('gs_similar_channels'));
           Column() {
             ForEach(this.similarChannels, (r: SearchRow, idx: number) => {
               this.chatRow(r, idx > 0);
@@ -2042,13 +2043,13 @@ struct GlobalSearchPage {
         }
         if (this.joinedChannels.length === 0 && this.similarChannels.length === 0) {
           if (!this.joinedLoaded || !this.similarLoaded) {
-            this.catalogLoadingState('正在加载频道');
+            this.catalogLoadingState(str('gs_loading_channels'));
           } else if (this.joinedFailed || this.similarFailed) {
-            this.catalogErrorState('频道加载失败', TAB_CHANNELS);
+            this.catalogErrorState(str('gs_channels_failed'), TAB_CHANNELS);
           } else {
             this.catalogEmptyState(
-              '暂无推荐频道',
-              '加入频道后会在这里显示',
+              str('gs_no_suggested'),
+              str('gs_join_to_see'),
               $r('sys.symbol.message')
             );
           }
@@ -2083,7 +2084,7 @@ struct GlobalSearchPage {
           if (this.resultOpeningKey === `app:${r.userId}`) {
             LoadingProgress().width(16).height(16).color(Color.White);
           } else {
-            Text('打开').fontSize(14).fontWeight(FontWeight.Medium).fontColor(Color.White);
+            Text($r('app.string.open')).fontSize(14).fontWeight(FontWeight.Medium).fontColor(Color.White);
           }
         }
         .width(58).height(30)
@@ -2099,7 +2100,7 @@ struct GlobalSearchPage {
         normal: this.resultRowNormalStyle,
         pressed: this.resultRowPressedStyle
       })
-      .accessibilityText(`${r.title}${r.subtitle !== '' ? '，' + r.subtitle : ''}，打开`)
+      .accessibilityText(str('gs_open_a11y', r.title, r.subtitle !== '' ? str('gs_comma') + r.subtitle : ''))
       .onClick(() => { this.openApp(r.userId); });
     }
   }
@@ -2109,7 +2110,7 @@ struct GlobalSearchPage {
   appsList() {
     Scroll() {
       Column() {
-        this.sectionHeader('热门应用');
+        this.sectionHeader(str('gs_popular_apps'));
         Column() {
           ForEach(this.filteredAppResults(),
             (r: SearchRow, idx: number) => {
@@ -2118,13 +2119,13 @@ struct GlobalSearchPage {
         }.width('100%').backgroundColor($r('app.color.surface'));
         if (this.filteredAppResults().length === 0 && this.query.trim() === '') {
           if (!this.appsLoaded || this.apps.some((row: SearchRow) => row.title === '')) {
-            this.catalogLoadingState('正在加载热门应用');
+            this.catalogLoadingState(str('gs_loading_apps'));
           } else if (this.appsFailed) {
-            this.catalogErrorState('应用加载失败', TAB_APPS);
+            this.catalogErrorState(str('gs_apps_failed'), TAB_APPS);
           } else {
             this.catalogEmptyState(
-              '暂无热门应用',
-              '可稍后再来看看',
+              str('gs_no_apps'),
+              str('gs_check_back'),
               $r('sys.symbol.dot_grid_1x2')
             );
           }
@@ -2162,7 +2163,7 @@ struct GlobalSearchPage {
           if (it.progress < 100) {
             Progress({ value: it.progress, total: 100, type: ProgressType.Linear })
               .width('92%').height(4).color(it.isPaused ? COLOR_TEXT_SECONDARY : COLOR_PRIMARY);
-            Text(`${it.sizeLabel !== '' ? it.sizeLabel + ' · ' : ''}${it.isPaused ? '已暂停' : '下载中'} ${it.progress}%`)
+            Text(str('gs_download_state', it.sizeLabel !== '' ? it.sizeLabel + ' · ' : '', it.isPaused ? str('gs_paused') : str('gs_downloading'), it.progress))
               .fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
           } else {
             Text(`${it.sizeLabel}${it.dateLabel !== '' ? ' · ' + it.dateLabel : ''}`)
@@ -2182,14 +2183,14 @@ struct GlobalSearchPage {
             }
             .width(34).height(34).backgroundColor(Color.Transparent)
             .enabled(!this.downloadActionBusy)
-            .accessibilityText(it.isPaused ? '继续下载' : '暂停下载')
+            .accessibilityText(it.isPaused ? $r('app.string.gs_resume_download') : $r('app.string.gs_pause_download'))
             .onClick(() => { this.toggleOneDownload(it); });
           }
           Button({ type: ButtonType.Circle }) {
             SymbolGlyph($r('sys.symbol.trash')).fontSize(18).fontColor([COLOR_TEXT_SECONDARY]);
           }
           .width(34).height(34).backgroundColor(Color.Transparent)
-          .accessibilityText('从下载列表移除')
+          .accessibilityText($r('app.string.gs_remove_download'))
           .onClick(() => {
             this.removeAlsoDeletesFile = false;
             this.pendingRemoval = it;
@@ -2203,7 +2204,7 @@ struct GlobalSearchPage {
         normal: this.resultRowNormalStyle,
         pressed: this.resultRowPressedStyle
       })
-      .accessibilityText(`${it.name}，${it.progress < 100 ? '下载中' : it.sizeLabel}`)
+      .accessibilityText(str('gs_download_a11y', it.name, it.progress < 100 ? str('gs_downloading') : it.sizeLabel))
       .onClick((event: ClickEvent) => {
         this.previewTapX = event.windowX;
         this.previewTapY = event.windowY;
@@ -2217,17 +2218,17 @@ struct GlobalSearchPage {
   downloadRowMenu(it: DownloadItem) {
     Menu() {
       if (this.canLocateDownload(it)) {
-        MenuItem({ startIcon: $r('sys.symbol.arrow_up_left_and_arrow_down_right'), content: '定位到消息' })
+        MenuItem({ startIcon: $r('sys.symbol.arrow_up_left_and_arrow_down_right'), content: $r('app.string.gs_jump_to_message') })
           .onClick((): void => { this.locateDownloadMessage(it); });
       }
       if (it.progress >= 100 && it.path !== '') {
-        MenuItem({ startIcon: $r('sys.symbol.arrow_right_and_square'), content: '用其他应用打开' })
+        MenuItem({ startIcon: $r('sys.symbol.arrow_right_and_square'), content: $r('app.string.gs_open_with') })
           .onClick((): void => {
             openLocalFile(getContext(this) as common.UIAbilityContext, it.path, '');
           });
       }
       if (it.fileId !== 0) {
-        MenuItem({ startIcon: $r('sys.symbol.trash'), content: '从下载列表移除' })
+        MenuItem({ startIcon: $r('sys.symbol.trash'), content: $r('app.string.gs_remove_download') })
           .onClick((): void => {
             this.removeAlsoDeletesFile = false;
             this.pendingRemoval = it;
@@ -2271,12 +2272,12 @@ struct GlobalSearchPage {
   downloadCountsBar() {
     Row({ space: 10 }) {
       Column({ space: 2 }) {
-        Text(`进行中 ${this.downloadCounts.activeCount}`).fontSize(13).fontColor(COLOR_TEXT_PRIMARY);
-        Text(`已暂停 ${this.downloadCounts.pausedCount} · 已完成 ${this.downloadCounts.completedCount}`)
+        Text(str('gs_active_n', this.downloadCounts.activeCount)).fontSize(13).fontColor(COLOR_TEXT_PRIMARY);
+        Text(str('gs_paused_completed', this.downloadCounts.pausedCount, this.downloadCounts.completedCount))
           .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
       }.alignItems(HorizontalAlign.Start).layoutWeight(1);
       if (this.downloadCounts.activeCount + this.downloadCounts.pausedCount > 0) {
-        Button(this.allDownloadsPaused() ? '全部继续' : '全部暂停')
+        Button(this.allDownloadsPaused() ? $r('app.string.gs_action_resume_all') : $r('app.string.gs_action_pause_all'))
           .fontSize(14).fontColor(COLOR_PRIMARY)
           .backgroundColor(COLOR_TAB_PILL_BG)
           .height(32).padding({ left: 14, right: 14 })
@@ -2291,20 +2292,20 @@ struct GlobalSearchPage {
   @Builder
   removeDownloadSheet() {
     Column({ space: 14 }) {
-      Text('从下载列表移除').fontSize(17).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+      Text($r('app.string.gs_remove_download')).fontSize(17).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
       Text(this.pendingRemoval !== null ? this.pendingRemoval.name : '')
         .fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
         .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis });
       Row({ space: 10 }) {
         Checkbox().select(this.removeAlsoDeletesFile)
           .onChange((checked: boolean) => { this.removeAlsoDeletesFile = checked; });
-        Text('同时删除本地文件').fontSize(14).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
+        Text($r('app.string.gs_delete_local')).fontSize(14).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
       }.width('100%').alignItems(VerticalAlign.Center);
       Row({ space: 12 }) {
-        Button('取消').fontSize(15).fontColor(COLOR_TEXT_SECONDARY)
+        Button($r('app.string.cancel')).fontSize(15).fontColor(COLOR_TEXT_SECONDARY)
           .backgroundColor(COLOR_TAB_PILL_BG).layoutWeight(1).height(42)
           .onClick(() => { this.removeSheetShown = false; });
-        Button('移除').fontSize(15).fontColor(Color.White)
+        Button($r('app.string.gs_action_remove')).fontSize(15).fontColor(Color.White)
           .backgroundColor(COLOR_PRIMARY).layoutWeight(1).height(42)
           .onClick(() => {
             const target = this.pendingRemoval;
@@ -2334,13 +2335,13 @@ struct GlobalSearchPage {
           ListItem() {
             Column({ space: 10 }) {
               LoadingProgress().width(32).height(32).color(COLOR_PRIMARY);
-              Text('正在扫描本地文件').fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
+              Text($r('app.string.gs_scanning')).fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
             }
             .width('100%').padding({ top: 48 });
           }
         } else if (this.downloads.length === 0 && this.activeDownloads.length === 0) {
           ListItem() {
-            Text('暂无下载记录').fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
+            Text($r('app.string.gs_no_downloads')).fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
               .width('100%').textAlign(TextAlign.Center).padding({ top: 48 });
           }
         }
@@ -2369,12 +2370,12 @@ struct GlobalSearchPage {
         .width(compact ? 28 : 36)
         .height(compact ? 28 : 36)
         .color(COLOR_PRIMARY);
-      Text('正在搜索')
+      Text($r('app.string.searching'))
         .fontSize(compact ? 13 : 15)
         .fontWeight(FontWeight.Medium)
         .fontColor(COLOR_TEXT_PRIMARY);
       if (!compact) {
-        Text('正在查找相关消息，请稍候')
+        Text($r('app.string.gs_finding_messages'))
           .fontSize(13)
           .fontColor(COLOR_TEXT_SECONDARY);
       }
@@ -2408,18 +2409,18 @@ struct GlobalSearchPage {
           .fontSize(compact ? 23 : 28)
           .fontColor(['#E64646']);
       }
-      Text(compact ? '消息搜索失败' : '搜索失败')
+      Text(compact ? $r('app.string.gs_message_search_failed') : $r('app.string.search_failed'))
         .fontSize(compact ? 15 : 17)
         .fontWeight(FontWeight.Medium)
         .fontColor(COLOR_TEXT_PRIMARY);
-      Text(this.messageError !== '' ? this.messageError : '网络或服务暂时不可用')
+      Text(this.messageError !== '' ? this.messageError : $r('app.string.ct_service_unavailable'))
         .fontSize(13)
         .fontColor(COLOR_TEXT_SECONDARY);
       Row({ space: 6 }) {
         SymbolGlyph($r('sys.symbol.arrow_clockwise'))
           .fontSize(15)
           .fontColor([COLOR_PRIMARY]);
-        Text('重新搜索')
+        Text($r('app.string.gs_search_again'))
           .fontSize(14)
           .fontWeight(FontWeight.Medium)
           .fontColor(COLOR_PRIMARY);
@@ -2432,7 +2433,7 @@ struct GlobalSearchPage {
         normal: this.retryActionNormalStyle,
         pressed: this.retryActionPressedStyle
       })
-      .accessibilityText('重新搜索')
+      .accessibilityText($r('app.string.gs_search_again'))
       .onClick((): void => { this.retryMessageSearch(); });
     }
     .layoutWeight(compact ? 0 : 1)
@@ -2460,14 +2461,14 @@ struct GlobalSearchPage {
     if (this.pagingBusy) {
       Row({ space: 8 }) {
         LoadingProgress().width(20).height(20).color(COLOR_PRIMARY);
-        Text('正在加载更多')
+        Text($r('app.string.cpp_loading_more'))
           .fontSize(13)
           .fontColor(COLOR_TEXT_SECONDARY);
       }
       .width('100%')
       .height(54)
       .justifyContent(FlexAlign.Center)
-      .accessibilityText('正在加载更多结果')
+      .accessibilityText($r('app.string.gs_loading_more_results'))
       .transition(TransitionEffect.OPACITY
         .combine(TransitionEffect.translate({ y: 4 }))
         .animation({
@@ -2479,14 +2480,14 @@ struct GlobalSearchPage {
         SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
           .fontSize(17)
           .fontColor(['#E64646']);
-        Text('加载更多失败')
+        Text($r('app.string.gs_load_more_failed'))
           .fontSize(13)
           .fontColor(COLOR_TEXT_SECONDARY);
         Row({ space: 4 }) {
           SymbolGlyph($r('sys.symbol.arrow_clockwise'))
             .fontSize(13)
             .fontColor([COLOR_PRIMARY]);
-          Text('重试')
+          Text($r('app.string.settings_retry'))
             .fontSize(13)
             .fontWeight(FontWeight.Medium)
             .fontColor(COLOR_PRIMARY);
@@ -2498,7 +2499,7 @@ struct GlobalSearchPage {
           normal: this.retryActionNormalStyle,
           pressed: this.retryActionPressedStyle
         })
-        .accessibilityText('重试加载更多结果')
+        .accessibilityText($r('app.string.gs_retry_more'))
         .onClick((): void => { this.retryPaging(); });
       }
       .width('100%')
@@ -2511,7 +2512,7 @@ struct GlobalSearchPage {
           curve: Curve.EaseOut
         }));
     } else if (this.loadedPageCount > 1 && this.nextOffset === '') {
-      Text('已显示全部结果')
+      Text($r('app.string.gs_all_results'))
         .width('100%')
         .height(48)
         .fontSize(12)
@@ -2529,7 +2530,7 @@ struct GlobalSearchPage {
     if (this.chatSearching) {
       Row({ space: 8 }) {
         LoadingProgress().width(19).height(19).color(COLOR_PRIMARY);
-        Text(this.tab === TAB_CHANNELS ? '正在搜索频道' : '正在搜索聊天')
+        Text(this.tab === TAB_CHANNELS ? $r('app.string.gs_searching_channels') : $r('app.string.gs_searching_chats'))
           .fontSize(13)
           .fontColor(COLOR_TEXT_SECONDARY);
       }
@@ -2541,11 +2542,11 @@ struct GlobalSearchPage {
         SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
           .fontSize(17)
           .fontColor(['#E64646']);
-        Text(this.tab === TAB_CHANNELS ? '频道搜索失败' : '聊天搜索失败')
+        Text(this.tab === TAB_CHANNELS ? $r('app.string.gs_channel_search_failed') : $r('app.string.gs_chat_search_failed'))
           .fontSize(13)
           .fontColor(COLOR_TEXT_SECONDARY);
         Row() {
-          Text('重试')
+          Text($r('app.string.settings_retry'))
             .fontSize(13)
             .fontWeight(FontWeight.Medium)
             .fontColor(COLOR_PRIMARY);
@@ -2570,7 +2571,7 @@ struct GlobalSearchPage {
     if (!this.appsLoaded || this.apps.some((row: SearchRow) => row.title === '')) {
       Row({ space: 8 }) {
         LoadingProgress().width(19).height(19).color(COLOR_PRIMARY);
-        Text('正在搜索应用')
+        Text($r('app.string.gs_searching_apps'))
           .fontSize(13)
           .fontColor(COLOR_TEXT_SECONDARY);
       }
@@ -2582,11 +2583,11 @@ struct GlobalSearchPage {
         SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
           .fontSize(17)
           .fontColor(['#E64646']);
-        Text('应用加载失败')
+        Text($r('app.string.gs_apps_failed'))
           .fontSize(13)
           .fontColor(COLOR_TEXT_SECONDARY);
         Row() {
-          Text('重试')
+          Text($r('app.string.settings_retry'))
             .fontSize(13)
             .fontWeight(FontWeight.Medium)
             .fontColor(COLOR_PRIMARY);
@@ -2615,7 +2616,7 @@ struct GlobalSearchPage {
       }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
     } else if (this.filteredChatResults().length === 0) {
       Column() {
-        Text(this.tab === TAB_CHANNELS ? '未找到相关频道' : '未找到相关聊天')
+        Text(this.tab === TAB_CHANNELS ? $r('app.string.gs_no_channels') : $r('app.string.gs_no_chats'))
           .fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
       }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
     } else {
@@ -2645,7 +2646,7 @@ struct GlobalSearchPage {
       this.messageLoadingState(false);
     } else if (this.visibleItems().length === 0 && this.searchedOnce && this.searchExhausted()) {
       Column() {
-        Text('没有媒体消息').fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
+        Text($r('app.string.gs_no_media')).fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
       }
       .layoutWeight(1)
       .width('calc(100% - 24vp)')
@@ -2680,7 +2681,7 @@ struct GlobalSearchPage {
               normal: this.mediaResultNormalStyle,
               pressed: this.mediaResultPressedStyle
             })
-            .accessibilityText(`${it.isVideo ? '视频' : '图片'}，${it.chatTitle}`)
+            .accessibilityText(str('gs_media_a11y', it.isVideo ? str('storage_video') : str('storage_photo'), it.chatTitle))
             .onClick(() => { this.openResult(it); });
           }
         }, (it: FoundItem) => `m_${it.chatId}_${it.messageId}_${it.chatTitle}_${it.thumbPath}`);
@@ -2752,9 +2753,9 @@ struct GlobalSearchPage {
       Column() {
         if (this.visibleHashtagPosts().length > 0) {
           Row() {
-            Text('公开贴文').fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_SECONDARY)
+            Text($r('app.string.gs_public_posts')).fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_SECONDARY)
               .layoutWeight(1);
-            Text('显示更多 ›').fontSize(14).fontColor(COLOR_PRIMARY)
+            Text($r('app.string.gs_show_more')).fontSize(14).fontColor(COLOR_PRIMARY)
               .onClick(() => {
                 // Hashtag results expand into the official 帖子 category.
                 this.controller.changeIndex(TAB_POSTS);
@@ -2773,7 +2774,7 @@ struct GlobalSearchPage {
         }
         if (this.tab === TAB_APPS) {
           if (this.filteredAppResults().length > 0) {
-            this.sectionHeader('应用');
+            this.sectionHeader(str('gs_apps'));
           }
           Column() {
             ForEach(this.filteredAppResults(),
@@ -2788,7 +2789,7 @@ struct GlobalSearchPage {
           }
         } else {
           if (this.filteredChatResults().length > 0) {
-            this.sectionHeader(this.tab === TAB_CHANNELS ? '频道' : '聊天与联系人');
+            this.sectionHeader(this.tab === TAB_CHANNELS ? str('gn_channel') : str('gs_chats_and_contacts'));
           }
           Column() {
             ForEach(this.filteredChatResults(),
@@ -2801,7 +2802,7 @@ struct GlobalSearchPage {
             this.chatSearchInlineState();
           }
         }
-        this.sectionHeader('消息');
+        this.sectionHeader(str('cps_messages'));
         if (this.messageError !== '') {
           this.messageErrorState(true);
         } else if ((this.loading || this.resolvingMessageRows()) && this.visibleItems().length === 0) {
@@ -2818,7 +2819,7 @@ struct GlobalSearchPage {
               `cm_${it.chatId}_${it.messageId}_${it.chatTitle}_${it.avatarPath}`);
           }.width('100%');
           if (this.visibleItems().length === 0 && this.searchedOnce && this.searchExhausted()) {
-            Text('未找到相关消息').fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
+            Text($r('app.string.cp_no_messages_found')).fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
               .width('100%').textAlign(TextAlign.Center).padding(16);
           }
           if (this.pagingBusy || this.pagingError ||
@@ -2848,13 +2849,13 @@ struct GlobalSearchPage {
   @Builder
   postsPrompt() {
     Column({ space: 10 }) {
-      Text('全局搜索').fontSize(17).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
-      Text('输入关键词搜索公开频道的帖子')
+      Text($r('app.string.cl_global_search')).fontSize(17).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
+      Text($r('app.string.gs_search_public_hint'))
         .fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
       if (this.query.trim() !== '') {
         Row({ space: 6 }) {
           SymbolGlyph($r('sys.symbol.magnifyingglass')).fontSize(16).fontColor([Color.White]);
-          Text(`搜索 ${this.query.trim()}`)
+          Text(str('gs_search_for', this.query.trim()))
             .fontSize(16).fontWeight(FontWeight.Medium).fontColor(Color.White)
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
             .constraintSize({ maxWidth: 200 });
@@ -2880,10 +2881,10 @@ struct GlobalSearchPage {
       this.messageLoadingState(false);
     } else if (this.visibleItems().length === 0 && this.searchedOnce && this.searchExhausted()) {
       Column() {
-        Text(this.tab === TAB_LINKS ? '没有链接消息'
-          : (this.tab === TAB_FILES ? '没有文件消息'
-            : (this.tab === TAB_AUDIO ? '没有音乐消息'
-              : (this.tab === TAB_VOICE ? '没有语音消息' : '未找到相关消息'))))
+        Text(this.tab === TAB_LINKS ? $r('app.string.gs_no_links')
+          : (this.tab === TAB_FILES ? $r('app.string.gs_no_files')
+            : (this.tab === TAB_AUDIO ? $r('app.string.gs_no_music')
+              : (this.tab === TAB_VOICE ? $r('app.string.gs_no_voice') : $r('app.string.cp_no_messages_found')))))
           .fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
       }
       .layoutWeight(1)

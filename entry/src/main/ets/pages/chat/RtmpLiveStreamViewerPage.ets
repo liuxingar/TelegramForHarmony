@@ -25,6 +25,7 @@ import {
   KEY_POWER_CALL_ANIMATIONS, powerAnimationDuration, powerFeatureEnabled
 } from '../../store/AppSettings';
 import {
+  LIVE_PHASE_AUDIO, LIVE_PHASE_NONE, LIVE_PHASE_RECOVERING, LIVE_PHASE_WAITING,
   LiveViewerHeaderPresentation, liveViewerHeaderPresentation
 } from '../../util/liveViewerHeaderPresentation';
 import {
@@ -36,6 +37,7 @@ import {
   sameLiveInteraction
 } from '../../util/liveInteractionPresentation';
 import { LiveInteractionBubble } from './LiveInteractionBubble';
+import { plural, str } from '../../util/strings';
 
 const LIVE_BACKGROUND: string = '#0A1117';
 const LIVE_PANEL: string = '#101A23';
@@ -98,9 +100,9 @@ function chatInteraction(
   message: MessageEntry, chatId: number, arrivalOrder: number
 ): LiveInteractionEntry | null {
   if (!isSupportedLiveChannelMessage(message.contentType, message.isAnimation)) { return null; }
-  const name = message.senderName !== '' ? message.senderName : (message.isOutgoing ? '我' : '频道');
+  const name = message.senderName !== '' ? message.senderName : (message.isOutgoing ? str('lv_me') : str('gn_channel'));
   let text = message.text.trim() !== '' ? message.text : message.placeholderLabel;
-  if (text === '' && message.contentType === 'sticker') { text = '贴纸'; }
+  if (text === '' && message.contentType === 'sticker') { text = str('sticker_tab'); }
   if (text === '' && message.contentType === 'video' && message.isAnimation) { text = 'GIF'; }
   const emojiOnly = isQuickReaction(text) || liveInteractionLooksLikeEmojiOnly(text);
   let photoPath = emojiOnly ? '' : message.photoPath;
@@ -299,7 +301,7 @@ struct RtmpVideoStage {
             }
             .width(40).height(40).backgroundColor('#A617222B')
             .border({ width: 1, color: '#42FFFFFF' })
-            .stateEffect(true).accessibilityText('进入全屏')
+            .stateEffect(true).accessibilityText($r('app.string.lv_enter_fullscreen'))
             .onClick((): void => this.onFullscreenToggle());
           }.width('100%');
         }
@@ -326,7 +328,8 @@ struct RtmpLiveStreamViewerPage {
   @StorageProp('cutoutRightSafeWidth') cutoutRightSafe: number = 0;
   @StorageProp('appForegroundEpoch') @Watch('onAppForegroundEpoch') appForegroundEpoch: number = 0;
   @State state: LiveStreamState = emptyLiveStreamState();
-  @State mediaStatus: string = '正在加入直播…';
+  @State mediaStatus: string = str('lv_joining');
+  @State mediaPhase: string = LIVE_PHASE_NONE;
   @State recovering: boolean = false;
   @State hasVideo: boolean = false;
   @State messages: LiveInteractionEntry[] = [];
@@ -423,7 +426,7 @@ struct RtmpLiveStreamViewerPage {
     this.initialParticipantCount = params !== undefined
       ? ((params['initialParticipantCount'] as number | undefined) ?? 0) : 0;
     if (this.groupCallId <= 0) {
-      this.mediaStatus = '无效的直播间';
+      this.setMediaStatus(str('lv_invalid_room'));
       return;
     }
     const client = getTdClient();
@@ -455,8 +458,8 @@ struct RtmpLiveStreamViewerPage {
     const handoff = floatingLiveWindow.takeSeamlessSession(this.groupCallId, true);
     if (handoff !== null) { this.adoptSeamlessSession(handoff); }
     liveStreamBackgroundTask.start(getContext(this) as common.UIAbilityContext, false);
-    if (handoff === null) { this.replaceSession('首次加入'); }
-    this.refreshGroupCall('首次查询');
+    if (handoff === null) { this.replaceSession('首次加入'); } // i18n-exempt: diagnostic trace tag, console only
+    this.refreshGroupCall('首次查询'); // i18n-exempt: diagnostic trace tag, console only
   }
 
   private adoptSeamlessSession(handoff: FloatingLiveSessionHandoff): void {
@@ -500,9 +503,13 @@ struct RtmpLiveStreamViewerPage {
       session.setVideoChannel('unified', 0, `SIM=${this.streamSignature}`);
     }
     session.resumeMedia();
-    this.mediaStatus = this.recovering
-      ? '网络波动，正在尝试续播…'
-      : (this.hasVideo ? '直播播放中' : '直播音频播放中');
+    if (this.recovering) {
+      this.setMediaStatus(str('lv_resuming'), LIVE_PHASE_RECOVERING);
+    } else if (this.hasVideo) {
+      this.setMediaStatus(str('lfw_playing'));
+    } else {
+      this.setMediaStatus(str('lfw_audio_playing'), LIVE_PHASE_AUDIO);
+    }
   }
 
   onPageShow(): void {
@@ -528,13 +535,13 @@ struct RtmpLiveStreamViewerPage {
     }
     if (next.needRejoin) {
       this.recovering = true;
-      this.scheduleRecovery(0, 'TDLib 要求重新加入');
+      this.scheduleRecovery(0, 'TDLib 要求重新加入'); // i18n-exempt: diagnostic trace tag, console only
     } else if (this.hasJoinedOnce && next.isActive && !next.isJoined) {
       this.recovering = true;
-      this.scheduleRecovery(500, '直播成员状态已断开');
+      this.scheduleRecovery(500, '直播成员状态已断开'); // i18n-exempt: diagnostic trace tag, console only
     }
     if (this.hasJoinedOnce && !next.isActive) {
-      this.mediaStatus = '直播已结束';
+      this.setMediaStatus(str('lfw_ended'));
       this.recovering = false;
       this.clearRecoveryTimer();
       this.clearRecoveryUi();
@@ -730,7 +737,11 @@ struct RtmpLiveStreamViewerPage {
     this.recovering = this.hasJoinedOnce;
     this.connectionError = '';
     if (this.hasJoinedOnce) { this.showRecoveryUi(0); }
-    this.mediaStatus = this.hasJoinedOnce ? '正在恢复直播…' : '正在加入直播…';
+    if (this.hasJoinedOnce) {
+      this.setMediaStatus(str('lv_recovering'), LIVE_PHASE_RECOVERING);
+    } else {
+      this.setMediaStatus(str('lv_joining'));
+    }
     const sequence = ++this.sessionSequence;
     if (this.session !== null) {
       this.session.clearVideo();
@@ -764,10 +775,10 @@ struct RtmpLiveStreamViewerPage {
     session.join(client, this.groupCallId, true).then((result: TgcallsJoinResult): void => {
       if (!this.isCurrent(session, sequence)) { return; }
       if (!result.isBroadcast || !result.isUnifiedBroadcast) {
-        this.mediaStatus = '直播模式已经变化，请返回后重新进入';
+        this.setMediaStatus(str('lv_mode_changed'));
         this.recovering = false;
         this.terminalError = true;
-        this.connectionError = '直播类型已经变化';
+        this.connectionError = str('lv_type_changed');
         this.clearRecoveryTimer();
         this.clearRecoveryUi();
         this.state = {
@@ -776,7 +787,7 @@ struct RtmpLiveStreamViewerPage {
           needRejoin: false, canSendMessages: this.state.canSendMessages,
           areMessagesAllowed: this.state.areMessagesAllowed,
           participantCount: this.state.participantCount, streams: this.state.streams,
-          error: '直播类型已经变化'
+          error: str('lv_type_changed')
         };
         session.stop();
         this.session = null;
@@ -807,14 +818,18 @@ struct RtmpLiveStreamViewerPage {
       session.resumeMedia();
       this.recovering = false;
       this.clearRecoveryUi();
-      this.mediaStatus = result.streams.length > 0 ? '直播播放中' : '等待主播开始推流…';
-      this.refreshGroupCall('加入完成');
+      if (result.streams.length > 0) {
+        this.setMediaStatus(str('lfw_playing'));
+      } else {
+        this.setMediaStatus(str('lv_waiting_host_stream'), LIVE_PHASE_WAITING);
+      }
+      this.refreshGroupCall('加入完成'); // i18n-exempt: diagnostic trace tag, console only
     }).catch((caught: Error): void => {
       if (!this.isCurrent(session, sequence)) { return; }
       session.stop();
       this.session = null;
       this.recovering = true;
-      this.mediaStatus = '直播连接中断，正在重试…';
+      this.setMediaStatus(str('lv_reconnecting'), LIVE_PHASE_RECOVERING);
       this.connectionError = caught.message;
       this.state = {
         title: this.state.title, isActive: this.state.isActive,
@@ -827,7 +842,7 @@ struct RtmpLiveStreamViewerPage {
       this.showRecoveryUi(0);
       this.reconnectAttempt += 1;
       const delay = Math.min(30000, 1000 * Math.pow(2, Math.min(this.reconnectAttempt - 1, 5)));
-      this.scheduleRecovery(delay, `加入失败：${caught.message}`);
+      this.scheduleRecovery(delay, str('lv_join_failed', caught.message));
     }).finally((): void => {
       if (sequence === this.sessionSequence) { this.recoveryInFlight = false; }
     });
@@ -858,7 +873,7 @@ struct RtmpLiveStreamViewerPage {
     if (!this.hasVideo) {
       this.streamSignature = '';
       this.visualMediaReady = false;
-      if (!this.recovering) { this.mediaStatus = '等待主播开始推流…'; }
+      if (!this.recovering) { this.setMediaStatus(str('lv_waiting_host_stream'), LIVE_PHASE_WAITING); }
       return;
     }
     const signature = videoChannelIds.join(',');
@@ -867,7 +882,11 @@ struct RtmpLiveStreamViewerPage {
     this.visualMediaReady = false;
     const groups = `SIM=${videoChannelIds.join(',')}`;
     session.setVideoChannel('unified', 0, groups);
-    this.mediaStatus = this.recovering ? '正在恢复直播…' : '直播播放中';
+    if (this.recovering) {
+      this.setMediaStatus(str('lv_recovering'), LIVE_PHASE_RECOVERING);
+    } else {
+      this.setMediaStatus(str('lfw_playing'));
+    }
   }
 
   private onBroadcastActivity(received: boolean): void {
@@ -883,12 +902,16 @@ struct RtmpLiveStreamViewerPage {
         this.clearRecoveryUi();
         this.connectionError = '';
       }
-      this.mediaStatus = this.hasVideo ? '直播播放中' : '直播音频播放中';
+      if (this.hasVideo) {
+        this.setMediaStatus(str('lfw_playing'));
+      } else {
+        this.setMediaStatus(str('lfw_audio_playing'), LIVE_PHASE_AUDIO);
+      }
       return;
     }
     if (this.state.streams.length > 0 && Date.now() - this.lastPartAt >= STREAM_STALL_MS) {
       this.recovering = true;
-      this.mediaStatus = '直播缓冲中，正在续播…';
+      this.setMediaStatus(str('lv_buffering'), LIVE_PHASE_RECOVERING);
       this.showRecoveryUi(0);
     }
   }
@@ -903,9 +926,9 @@ struct RtmpLiveStreamViewerPage {
     }
     if (this.hasJoinedOnce) {
       this.recovering = true;
-      this.mediaStatus = '网络波动，正在尝试续播…';
+      this.setMediaStatus(str('lv_resuming'), LIVE_PHASE_RECOVERING);
       this.showRecoveryUi(700);
-      this.scheduleRecovery(STREAM_RECONNECT_GRACE_MS, '媒体网络断开');
+      this.scheduleRecovery(STREAM_RECONNECT_GRACE_MS, '媒体网络断开'); // i18n-exempt: diagnostic trace tag, console only
     }
   }
 
@@ -1026,17 +1049,17 @@ struct RtmpLiveStreamViewerPage {
   private startHealthMonitor(): void {
     if (this.healthTimer !== -1) { return; }
     this.healthTimer = setInterval((): void => {
-      this.refreshGroupCall('定时健康检查');
+      this.refreshGroupCall('定时健康检查'); // i18n-exempt: diagnostic trace tag, console only
       if (!this.hasJoinedOnce || this.state.streams.length === 0) { return; }
       const reference = this.lastPartAt > 0 ? this.lastPartAt : this.joinedAt;
       if (reference > 0 && Date.now() - reference >= STREAM_STALL_MS) {
         this.recovering = true;
-        this.mediaStatus = '直播流中断，正在重新同步…';
+        this.setMediaStatus(str('lv_resyncing'), LIVE_PHASE_RECOVERING);
         this.showRecoveryUi(0);
         this.session?.resumeMedia();
         this.restoreSurface();
         this.applyCurrentVideoChannel(true);
-        this.scheduleRecovery(3000, '直播分片长时间无数据');
+        this.scheduleRecovery(3000, '直播分片长时间无数据'); // i18n-exempt: diagnostic trace tag, console only
       }
     }, HEALTH_INTERVAL_MS);
   }
@@ -1090,12 +1113,12 @@ struct RtmpLiveStreamViewerPage {
     this.session?.resumeMedia();
     this.restoreSurface();
     this.applyCurrentVideoChannel(true);
-    this.refreshGroupCall('回到前台');
+    this.refreshGroupCall('回到前台'); // i18n-exempt: diagnostic trace tag, console only
     if (this.hasJoinedOnce && this.state.streams.length > 0 &&
       Date.now() - this.lastPartAt >= STREAM_STALL_MS) {
       this.recovering = true;
       this.showRecoveryUi(0);
-      this.scheduleRecovery(2500, '前台恢复后直播流未恢复');
+      this.scheduleRecovery(2500, '前台恢复后直播流未恢复'); // i18n-exempt: diagnostic trace tag, console only
     }
   }
 
@@ -1119,7 +1142,7 @@ struct RtmpLiveStreamViewerPage {
     this.sendInteractionMessage(value).then((): void => {
       if (text === undefined) { this.draft = ''; }
     }).catch((caught: Error): void => {
-      this.interactionSendError = `发送失败：${caught.message}`;
+      this.interactionSendError = str('lv_send_failed', caught.message);
     }).finally((): void => {
       this.sending = false;
     });
@@ -1141,7 +1164,7 @@ struct RtmpLiveStreamViewerPage {
     if (this.channelCanSendMessages && channelStore !== null) {
       return channelStore.sendAsync(value);
     }
-    return Promise.reject(new Error('当前没有可用的消息通道'));
+    return Promise.reject(new Error(str('lv_no_message_channel')));
   }
 
   private retryInteractionSend(): void {
@@ -1173,13 +1196,13 @@ struct RtmpLiveStreamViewerPage {
   private endLiveForEveryone(): void {
     if (this.endingLive || this.groupCallId <= 0) { return; }
     this.endingLive = true;
-    this.mediaStatus = '正在结束直播…';
+    this.setMediaStatus(str('lv_ending'));
     endGroupCall(getTdClient(), this.groupCallId).then((): void => {
-      this.mediaStatus = '直播已结束';
+      this.setMediaStatus(str('lfw_ended'));
       this.leaveNow();
     }).catch((error: Error): void => {
       this.endingLive = false;
-      this.mediaStatus = `结束直播失败：${error.message}`;
+      this.setMediaStatus(str('lv_end_failed', error.message));
     });
   }
 
@@ -1195,7 +1218,7 @@ struct RtmpLiveStreamViewerPage {
   private minimizeToFloating(): void {
     const session = this.session;
     if (session === null) {
-      this.mediaStatus = '直播连接尚未就绪，请稍后再试';
+      this.setMediaStatus(str('lv_not_ready'));
       return;
     }
     if (this.minimizeInProgress || this.leaveDialogOpen || this.endingLive ||
@@ -1230,7 +1253,7 @@ struct RtmpLiveStreamViewerPage {
     );
     if (!shown) {
       this.minimizeInProgress = false;
-      this.mediaStatus = '无法创建悬浮窗，直播仍在当前页面';
+      this.setMediaStatus(str('lv_no_floating_window'));
       return;
     }
     this.session = null;
@@ -1258,7 +1281,7 @@ struct RtmpLiveStreamViewerPage {
     this.fullscreenPanelOpen = false;
     this.fullscreenMessagePreview = '';
     this.fullscreenTransitioning = true;
-    this.fullscreenTransitionLabel = next ? '正在进入全屏…' : '正在退出全屏…';
+    this.fullscreenTransitionLabel = next ? str('lv_entering_fullscreen') : str('lv_exiting_fullscreen');
     this.isFullscreen = next;
     setLiveStreamFullscreen(
       getContext(this) as common.UIAbilityContext, next,
@@ -1287,7 +1310,16 @@ struct RtmpLiveStreamViewerPage {
   private displayTitle(): string {
     if (this.state.title !== '') { return this.state.title; }
     if (this.initialTitle !== '') { return this.initialTitle; }
-    return this.groupCallId > 0 ? '频道直播' : '无法打开直播';
+    return this.groupCallId > 0 ? str('lv_channel_stream') : str('lv_cannot_open');
+  }
+
+  // Text and phase are set together and only here, so the two cannot drift
+  // apart. The header classifies state from the phase; before this it matched
+  // substrings of the sentence, which both misfired and would have broken
+  // silently once this page was translated.
+  private setMediaStatus(text: string, phase: string = LIVE_PHASE_NONE): void {
+    this.mediaStatus = text;
+    this.mediaPhase = phase;
   }
 
   private displayParticipantCount(): number {
@@ -1311,7 +1343,7 @@ struct RtmpLiveStreamViewerPage {
       retrySeconds: this.retrySeconds,
       canMinimize: this.session !== null && !this.terminalError,
       participantCount: this.displayParticipantCount(),
-      mediaStatus: this.mediaStatus
+      mediaPhase: this.mediaPhase
     });
   }
 
@@ -1332,7 +1364,7 @@ struct RtmpLiveStreamViewerPage {
       hasVideo: this.displayHasVideo(),
       visualReady: this.visualMediaReady || (this.recovering && this.hadVisualMedia),
       participantCount: this.displayParticipantCount(),
-      mediaStatus: this.mediaStatus,
+      mediaPhase: this.mediaPhase,
       error: this.connectionError !== '' ? this.connectionError : this.state.error
     });
   }
@@ -1394,21 +1426,21 @@ struct RtmpLiveStreamViewerPage {
       this.connectionError === '' && !this.recoveryUiVisible;
     this.headerQueryFailed = false;
     this.connectionError = '';
-    this.refreshGroupCall('顶部状态手动重试');
+    this.refreshGroupCall('顶部状态手动重试'); // i18n-exempt: diagnostic trace tag, console only
     if (queryOnly || this.recoveryInFlight || this.terminalError) { return; }
     this.clearRecoveryTimer();
     this.recovering = this.hasJoinedOnce;
     this.showRecoveryUi(this.hasJoinedOnce ? 0 : 700);
-    this.replaceSession('用户手动重试');
+    this.replaceSession('用户手动重试'); // i18n-exempt: diagnostic trace tag, console only
   }
 
   @Builder
   headerMoreMenu() {
     Menu() {
-      MenuItem({ content: '最小化到悬浮窗' })
+      MenuItem({ content: $r('app.string.lv_minimise') })
         .enabled(this.headerPresentation().actionsEnabled && !this.minimizeInProgress)
         .onClick((): void => this.minimizeToFloating());
-      MenuItem({ content: this.canManageLive ? '管理或退出直播' : '退出直播' })
+      MenuItem({ content: this.canManageLive ? $r('app.string.lv_manage_or_leave') : $r('app.string.lv_leave') })
         .enabled(!this.leaveDialogOpen && !this.endingLive)
         .onClick((): void => this.leave());
     }
@@ -1488,7 +1520,7 @@ struct RtmpLiveStreamViewerPage {
       .animation({
         duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 110), curve: Curve.EaseOut
       })
-      .accessibilityText('退出直播')
+      .accessibilityText($r('app.string.lv_leave'))
       .onClick((): void => this.leave());
       Column({ space: 2 }) {
         Text(this.displayTitle())
@@ -1507,7 +1539,7 @@ struct RtmpLiveStreamViewerPage {
             )
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
           if (this.canManageLive) {
-            Text('管理员')
+            Text($r('app.string.ga_admin'))
               .fontSize(10).fontWeight(FontWeight.Medium).fontColor(LIVE_GREEN)
               .padding({ left: 7, right: 7, top: 2, bottom: 2 })
               .backgroundColor('#2639D98A').borderRadius(8);
@@ -1526,7 +1558,7 @@ struct RtmpLiveStreamViewerPage {
       })
       .enabled(this.headerPresentation().actionsEnabled && !this.minimizeInProgress &&
         !this.leaveDialogOpen)
-      .accessibilityText(this.minimizeInProgress ? '正在最小化直播' : '最小化到悬浮窗')
+      .accessibilityText(this.minimizeInProgress ? $r('app.string.lv_minimising') : $r('app.string.lv_minimise'))
       .onClick((): void => this.minimizeToFloating());
       Row() {
         SymbolGlyph($r('sys.symbol.more')).fontSize(22).fontColor([LIVE_TEXT]);
@@ -1538,7 +1570,7 @@ struct RtmpLiveStreamViewerPage {
         duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 110), curve: Curve.EaseOut
       })
       .enabled(this.groupCallId > 0 && !this.minimizeInProgress)
-      .accessibilityText('直播更多操作')
+      .accessibilityText($r('app.string.lv_more_actions'))
       .bindMenu(this.headerMoreMenu());
     }
     .width('100%').height(64).padding({ left: 8, right: 10 })
@@ -1549,7 +1581,7 @@ struct RtmpLiveStreamViewerPage {
   interactionHeader() {
     Row() {
       Column({ space: 2 }) {
-        Text('直播互动').fontSize(15).fontWeight(FontWeight.Bold).fontColor(LIVE_TEXT);
+        Text($r('app.string.lv_interactions')).fontSize(15).fontWeight(FontWeight.Bold).fontColor(LIVE_TEXT);
         Text(this.interactionPresentation().subtitle)
           .fontSize(11).fontColor(LIVE_SUBTEXT).maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
@@ -1588,7 +1620,7 @@ struct RtmpLiveStreamViewerPage {
           if (this.interactionPresentation().showHistoryRetry) {
             Row({ space: 5 }) {
               SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(13).fontColor([LIVE_ACCENT]);
-              Text('重试频道历史').fontSize(11).fontColor(LIVE_ACCENT);
+              Text($r('app.string.lv_retry_history')).fontSize(11).fontColor(LIVE_ACCENT);
             }
             .height(32).padding({ left: 10, right: 10 }).borderRadius(16)
             .backgroundColor('#1F3390EC')
@@ -1603,9 +1635,9 @@ struct RtmpLiveStreamViewerPage {
           ListItem() {
             Row({ space: 6 }) {
               SymbolGlyph($r('sys.symbol.exclamationmark_circle')).fontSize(13).fontColor(['#FFB56B']);
-              Text('频道历史加载失败，实时互动仍可用')
+              Text($r('app.string.lv_history_failed'))
                 .fontSize(10).fontColor('#D7A56E').layoutWeight(1);
-              Text('重试').fontSize(10).fontWeight(FontWeight.Medium).fontColor(LIVE_ACCENT);
+              Text($r('app.string.settings_retry')).fontSize(10).fontWeight(FontWeight.Medium).fontColor(LIVE_ACCENT);
             }
             .width('100%').height(34).padding({ left: 10, right: 10 })
             .backgroundColor('#1F8D692D').borderRadius(10)
@@ -1637,7 +1669,7 @@ struct RtmpLiveStreamViewerPage {
       if (this.interactionUnreadCount > 0) {
         Row({ space: 6 }) {
           SymbolGlyph($r('sys.symbol.arrow_down')).fontSize(13).fontColor([Color.White]);
-          Text(`${this.interactionUnreadCount} 条新互动`)
+          Text(plural('lv_new_interactions', this.interactionUnreadCount, this.interactionUnreadCount))
             .fontSize(11).fontWeight(FontWeight.Medium).fontColor(Color.White);
         }
         .height(32).padding({ left: 11, right: 12 }).margin({ bottom: 10 })
@@ -1673,7 +1705,7 @@ struct RtmpLiveStreamViewerPage {
         }
         .width('100%').padding({ left: 2 });
         Row({ space: 9 }) {
-          TextInput({ text: this.draft, placeholder: '说点什么…' })
+          TextInput({ text: this.draft, placeholder: $r('app.string.lv_say_something') })
             .layoutWeight(1).height(42)
             .fontSize(15).fontColor(LIVE_TEXT).placeholderColor(LIVE_SUBTEXT)
             .backgroundColor(LIVE_PANEL_ALT).borderRadius(21)
@@ -1700,7 +1732,7 @@ struct RtmpLiveStreamViewerPage {
             SymbolGlyph($r('sys.symbol.exclamationmark_circle')).fontSize(13).fontColor(['#FF8190']);
             Text(this.interactionSendError).fontSize(10).fontColor('#FF9AA6')
               .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1);
-            Text('重试').fontSize(11).fontWeight(FontWeight.Medium).fontColor(LIVE_ACCENT)
+            Text($r('app.string.settings_retry')).fontSize(11).fontWeight(FontWeight.Medium).fontColor(LIVE_ACCENT)
               .height(28).padding({ left: 7, right: 7 })
               .onClick((): void => this.retryInteractionSend());
           }.width('100%');
@@ -1737,8 +1769,8 @@ struct RtmpLiveStreamViewerPage {
       Column() {
         Row({ space: 10 }) {
           Column({ space: 2 }) {
-            Text('直播互动').fontSize(17).fontWeight(FontWeight.Bold).fontColor(LIVE_TEXT);
-            Text(`最近 ${this.messages.length} 条 · ${this.interactionPresentation().statusText}`)
+            Text($r('app.string.lv_interactions')).fontSize(17).fontWeight(FontWeight.Bold).fontColor(LIVE_TEXT);
+            Text(str('lv_recent_and_status', this.messages.length, this.interactionPresentation().statusText))
               .fontSize(11).fontColor(LIVE_SUBTEXT);
           }.alignItems(HorizontalAlign.Start).layoutWeight(1);
           Button({ type: ButtonType.Circle }) {
@@ -1795,7 +1827,7 @@ struct RtmpLiveStreamViewerPage {
           .stateEffect(true)
           .enabled(!this.fullscreenTransitioning)
           .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
-          .accessibilityText('退出全屏')
+          .accessibilityText($r('app.string.lv_exit_fullscreen'))
           .onClick((): void => this.toggleFullscreen());
           Button({ type: ButtonType.Circle }) {
             SymbolGlyph($r('sys.symbol.plus_square_on_square')).fontSize(18).fontColor([Color.White]);
@@ -1804,7 +1836,7 @@ struct RtmpLiveStreamViewerPage {
           .enabled(this.headerPresentation().actionsEnabled && !this.minimizeInProgress &&
             !this.leaveDialogOpen && !this.fullscreenTransitioning)
           .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
-          .accessibilityText(this.minimizeInProgress ? '正在最小化直播' : '最小化到悬浮窗')
+          .accessibilityText(this.minimizeInProgress ? $r('app.string.lv_minimising') : $r('app.string.lv_minimise'))
           .onClick((): void => this.minimizeToFloating());
           Row({ space: 6 }) {
             Circle({ width: 7, height: 7 }).fill(this.headerDotColor())
@@ -1818,13 +1850,13 @@ struct RtmpLiveStreamViewerPage {
           Button() {
             Row({ space: 6 }) {
               SymbolGlyph($r('sys.symbol.message')).fontSize(17).fontColor([Color.White]);
-              Text(`互动 ${this.messages.length}`).fontSize(13).fontColor(Color.White);
+              Text(str('lv_interactions_n', this.messages.length)).fontSize(13).fontColor(Color.White);
             }
           }
           .height(40).padding({ left: 12, right: 12 })
           .backgroundColor('#A617222B').borderRadius(20)
           .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
-          .accessibilityText(`打开直播互动，共 ${this.messages.length} 条`)
+          .accessibilityText(str('lv_open_interactions', this.messages.length))
           .onClick((): void => {
             this.fullscreenMessagePreview = '';
             this.fullscreenPanelOpen = true;

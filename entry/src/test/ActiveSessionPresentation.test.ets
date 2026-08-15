@@ -23,8 +23,8 @@ export default function activeSessionPresentationTest() {
     it('calculates_fresh_session_protection_and_wait_text', 0, () => {
       expect(freshSessionSeconds(100, 100)).assertEqual(86400);
       expect(freshSessionSeconds(100, 86500)).assertEqual(0);
-      expect(sessionWaitText(3660)).assertEqual('1 小时 1 分钟后');
-      expect(sessionWaitText(60)).assertEqual('1 分钟后');
+      expect(sessionWaitText(3660)).assertEqual('session_wait_in_two(session_unit_hours(1,1),session_unit_minutes(1,1))');
+      expect(sessionWaitText(60)).assertEqual('session_wait_in(session_unit_minutes(1,1))');
     });
 
     it('maps_server_errors_without_leaking_raw_text', 0, () => {
@@ -32,14 +32,14 @@ export default function activeSessionPresentationTest() {
         .assertEqual('fresh');
       expect(activeSessionError('SESSION_NOT_FOUND').shouldRefresh).assertTrue();
       expect(activeSessionError('FLOOD_WAIT_65').text)
-        .assertEqual('操作过于频繁，请在 2 分钟后重试');
+        .assertEqual('session_error_flood_minutes(2)');
       expect(activeSessionError('AUTH_TOKEN_EXPIRED').kind).assertEqual('qr');
     });
 
     it('keeps_nonstandard_server_ttl_visible', 0, () => {
-      expect(inactiveSessionTtlLabel(30)).assertEqual('1 个月');
-      expect(inactiveSessionTtlLabel(60)).assertEqual('60 天');
-      expect(inactiveSessionTtlLabel(366)).assertEqual('1 年');
+      expect(inactiveSessionTtlLabel(30)).assertEqual('session_ttl_1_month');
+      expect(inactiveSessionTtlLabel(60)).assertEqual('session_unit_days(60,60)');
+      expect(inactiveSessionTtlLabel(366)).assertEqual('session_ttl_1_year');
     });
   });
 }

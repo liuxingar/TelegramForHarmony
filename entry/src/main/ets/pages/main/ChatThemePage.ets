@@ -71,14 +71,14 @@ struct ChatThemePage {
       if (!this.active) { return; }
       this.applyingName = '';
       promptAction.showToast({
-        message: themeName === '' ? '已恢复默认主题' : '会话主题已设置（双方可见）',
+        message: themeName === '' ? $r('app.string.chat_theme_reset_done') : $r('app.string.chat_theme_set_done'),
         duration: 1700
       });
     }).catch((error: TdError): void => {
       if (!this.active) { return; }
       this.applyingName = '';
       console.error(`ChatThemePage.apply failed: ${error.message}`);
-      promptAction.showToast({ message: '设置主题失败，请稍后重试', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.chat_theme_failed'), duration: 1800 });
     });
   }
 
@@ -89,7 +89,7 @@ struct ChatThemePage {
         SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(24).fontColor([COLOR_TEXT_PRIMARY]);
       }.width(40).height(40).borderRadius(20).backgroundColor(Color.Transparent)
       .onClick((): void => { router.back(); });
-      Text('会话主题').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
+      Text($r('app.string.chat_theme_title')).fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
         .layoutWeight(1);
       if (this.applyingName !== '') {
         LoadingProgress().width(20).height(20).color(COLOR_PRIMARY);
@@ -143,15 +143,15 @@ struct ChatThemePage {
       if (this.previews.length === 0) {
         Column({ space: 9 }) {
           LoadingProgress().width(34).height(34).color(COLOR_PRIMARY);
-          Text('正在等待主题列表…').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
-          Text('主题由 Telegram 服务器在登录后下发').fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.chat_theme_waiting')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.chat_theme_from_server')).fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else {
         Scroll() {
           Column({ space: 12 }) {
             Row({ space: 10 }) {
               SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(17).fontColor([COLOR_PRIMARY]);
-              Text('恢复默认主题').fontSize(15).fontColor(COLOR_PRIMARY).layoutWeight(1);
+              Text($r('app.string.chat_theme_reset')).fontSize(15).fontColor(COLOR_PRIMARY).layoutWeight(1);
             }
             .width('100%').height(48).padding({ left: 14, right: 14 })
             .backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS)
@@ -161,7 +161,7 @@ struct ChatThemePage {
                 GridCol({ span: 1 }) { this.tile(preview); }
               }, (preview: ChatThemePreview): string => `theme_${preview.name}`);
             }
-            Text('会话主题对双方可见，包含配套的背景和气泡配色；当前版本先应用主题背景，气泡配色会在后续版本跟进。')
+            Text($r('app.string.chat_theme_note'))
               .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).lineHeight(18).width('100%');
           }.width('100%').padding({ left: 12, right: 12, bottom: this.bottomSafe + 24 });
         }.layoutWeight(1).width('100%').scrollBar(BarState.Off);

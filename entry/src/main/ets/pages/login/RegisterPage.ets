@@ -4,6 +4,7 @@ import {
 import { TdError } from '../../tdkit/TdTypes';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
 import { LoginHero } from './LoginHero';
+import { str } from '../../util/strings';
 
 // 号码尚未注册 Telegram 时走到这里（authorizationStateWaitRegistration）。
 // 此前没有这个页面，该状态映射不到任何 stage，界面会停在验证码页毫无反应 ——
@@ -46,8 +47,8 @@ export struct RegisterPage {
 
   private agreementLabel(): string {
     return this.minUserAge > 0
-      ? `我已阅读并同意服务条款，且已年满 ${this.minUserAge} 周岁`
-      : '我已阅读并同意服务条款';
+      ? str('lg_terms_with_age', this.minUserAge)
+      : str('lg_terms');
   }
 
   @Builder
@@ -77,16 +78,16 @@ export struct RegisterPage {
       Column({ space: 14 }) {
         LoginHero({ mode: 'phone', active: this.firstName !== '' });
 
-        Text('创建账号')
+        Text($r('app.string.lg_create_account'))
           .fontSize(27).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
-        Text('这个号码还没有 Telegram 账号。填写姓名即可创建。')
+        Text($r('app.string.lg_no_account_yet'))
           .fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
           .textAlign(TextAlign.Center).lineHeight(21)
           .padding({ left: 18, right: 18 });
 
-        this.nameField('名字（必填）', this.firstName, true,
+        this.nameField(str('ct_first_name'), this.firstName, true,
           (v: string): void => { this.firstName = v; });
-        this.nameField('姓氏（可选）', this.lastName, false,
+        this.nameField(str('lg_last_name_optional'), this.lastName, false,
           (v: string): void => { this.lastName = v; });
 
         if (this.termsText !== '') {
@@ -121,7 +122,7 @@ export struct RegisterPage {
             .padding({ left: 4, right: 4 });
         }
 
-        Button(this.busy ? '正在创建…' : '创建账号')
+        Button(this.busy ? $r('app.string.lg_creating') : $r('app.string.lg_create_account'))
           .width('100%').height(50)
           .fontSize(16).fontWeight(FontWeight.Medium)
           .backgroundColor(COLOR_PRIMARY).borderRadius(14)
@@ -129,7 +130,7 @@ export struct RegisterPage {
           .onClick((): void => this.submit());
 
         if (canReturnToPreviousTdAccount()) {
-          Button('返回原账号')
+          Button($r('app.string.lg_back_to_account'))
             .width('100%').height(45)
             .fontColor(COLOR_TEXT_SECONDARY)
             .backgroundColor(Color.Transparent)

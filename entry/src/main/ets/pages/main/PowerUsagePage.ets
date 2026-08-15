@@ -29,6 +29,7 @@ import {
   setNumber
 } from '../../store/AppSettings';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import { str } from '../../util/strings';
 
 const CARD_BG: ResourceColor = $r('app.color.surface');
 const CARD_RADIUS: number = 14;
@@ -135,22 +136,22 @@ struct PowerUsagePage {
 
   private thresholdTitle(): string {
     if (this.threshold === 0) {
-      return '关闭';
+      return str('power_off');
     }
     if (this.threshold === 101) {
-      return '始终开启';
+      return str('night_always_on');
     }
-    return `低于 ${this.threshold}%`;
+    return str('power_below_pct', this.threshold);
   }
 
   private thresholdDescription(): string {
     if (this.threshold === 0) {
-      return '自动省电已关闭。你仍可以在下方手动关闭高耗电效果。';
+      return str('power_auto_off_note');
     }
     if (this.threshold === 101) {
-      return '省电模式始终开启，高耗电动画与自动播放会保持暂停。';
+      return str('power_always_on_note');
     }
-    return `电池电量达到 ${this.threshold}% 或更低时，自动暂停下方高耗电功能；电量恢复后自动还原。`;
+    return str('power_threshold_note', this.threshold);
   }
 
   private featureValue(key: string): boolean {
@@ -228,9 +229,9 @@ struct PowerUsagePage {
         pressed: this.actionPressedStyle
       })
       .enabled(!this.leavingPage)
-      .accessibilityText('返回设置')
+      .accessibilityText($r('app.string.back_to_settings'))
       .onClick((): void => { this.leavePage(); });
-      Text('省电').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
+      Text($r('app.string.settings_power')).fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
         .layoutWeight(1);
     }
     .width('100%').height(56).padding({ left: 8, right: 16 })
@@ -241,19 +242,19 @@ struct PowerUsagePage {
   modeCard() {
     Column({ space: 12 }) {
       Row({ space: 8 }) {
-        Text('省电模式').fontSize(17).fontWeight(FontWeight.Bold).fontColor(COLOR_PRIMARY);
+        Text($r('app.string.power_mode')).fontSize(17).fontWeight(FontWeight.Bold).fontColor(COLOR_PRIMARY);
         Text(this.active ? 'ON' : 'OFF')
           .fontSize(13).fontWeight(FontWeight.Bold)
           .fontColor(this.active ? Color.White : COLOR_PRIMARY)
           .backgroundColor(this.active ? COLOR_PRIMARY : '#DCEEFF')
           .borderRadius(5).padding({ left: 7, right: 7, top: 3, bottom: 3 });
         Blank();
-        Text(`当前 ${this.batteryPercent}%`)
+        Text(str('power_current_pct', this.batteryPercent))
           .fontSize(13).fontColor(this.active ? COLOR_PRIMARY : COLOR_TEXT_SECONDARY);
       }.width('100%');
 
       Row() {
-        Text('关闭').fontSize(14)
+        Text(str('power_off')).fontSize(14)
           .fontColor(this.threshold === 0 ? COLOR_PRIMARY : COLOR_TEXT_SECONDARY);
         Blank();
         Row({ space: 5 }) {
@@ -261,7 +262,7 @@ struct PowerUsagePage {
           SymbolGlyph($r('sys.symbol.battery_100percent')).fontSize(17).fontColor([COLOR_PRIMARY]);
         }
         Blank();
-        Text('开启').fontSize(14)
+        Text($r('app.string.power_on')).fontSize(14)
           .fontColor(this.threshold === 101 ? COLOR_PRIMARY : COLOR_TEXT_SECONDARY);
       }.width('100%');
 
@@ -297,7 +298,7 @@ struct PowerUsagePage {
         normal: this.rowNormalStyle,
         pressed: this.rowPressedStyle
       })
-      .accessibilityText(`${title}，${this.featureValue(key) ? '已开启' : '已关闭'}`)
+      .accessibilityText(str('a11y_toggle_state', title, this.featureValue(key) ? str('state_on') : str('state_off')))
       .onClick((): void => {
         const next = !this.featureValue(key);
         if (total > 0) {
@@ -325,7 +326,7 @@ struct PowerUsagePage {
           normal: this.rowNormalStyle,
           pressed: this.rowPressedStyle
         })
-        .accessibilityText(`${this.expandedKey === key ? '收起' : '展开'}${title}详细选项`)
+        .accessibilityText(str('a11y_expand_details', this.expandedKey === key ? str('collapse') : str('expand'), title))
         .onClick((): void => {
           this.expandedKey = this.expandedKey === key ? '' : key;
         });
@@ -334,7 +335,7 @@ struct PowerUsagePage {
       }
       Toggle({ type: ToggleType.Switch, isOn: this.featureValue(key) })
         .selectedColor(COLOR_PRIMARY)
-        .accessibilityText(`${title}开关`)
+        .accessibilityText(str('a11y_switch_for', title))
         .onChange((value: boolean): void => {
           if (total > 0) {
             this.setGroup(key, value);
@@ -361,13 +362,13 @@ struct PowerUsagePage {
           normal: this.rowNormalStyle,
           pressed: this.rowPressedStyle
         })
-        .accessibilityText(`${title}，${this.subFeatureValue(key) ? '已开启' : '已关闭'}`)
+        .accessibilityText(str('a11y_toggle_state', title, this.subFeatureValue(key) ? str('state_on') : str('state_off')))
         .onClick((): void => {
           this.setSubFeature(groupKey, key, !this.subFeatureValue(key));
         });
       Toggle({ type: ToggleType.Switch, isOn: this.subFeatureValue(key) })
         .selectedColor(COLOR_PRIMARY)
-        .accessibilityText(`${title}开关`)
+        .accessibilityText(str('a11y_switch_for', title))
         .onChange((value: boolean): void => {
           this.setSubFeature(groupKey, key, value);
         });
@@ -386,47 +387,47 @@ struct PowerUsagePage {
   @Builder
   featuresCard() {
     Column() {
-      Text('省电选项')
+      Text($r('app.string.power_options'))
         .width('100%').fontSize(15).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
         .padding({ left: 16, right: 16, top: 13, bottom: 5 });
-      this.featureRow('sys.symbol.face_smiling', '动态贴纸', KEY_POWER_STICKERS, 2);
+      this.featureRow('sys.symbol.face_smiling', str('power_animated_stickers'), KEY_POWER_STICKERS, 2);
       if (this.expandedKey === KEY_POWER_STICKERS) {
-        this.subFeatureRow(KEY_POWER_STICKERS, KEY_POWER_STICKER_AUTOPLAY, '在聊天和贴纸面板中自动播放');
+        this.subFeatureRow(KEY_POWER_STICKERS, KEY_POWER_STICKER_AUTOPLAY, str('power_animated_stickers_sub'));
         Divider().strokeWidth(0.5).color($r('app.color.divider')).margin({ left: 62 });
-        this.subFeatureRow(KEY_POWER_STICKERS, KEY_POWER_STICKER_LOOP, '循环播放动态贴纸');
+        this.subFeatureRow(KEY_POWER_STICKERS, KEY_POWER_STICKER_LOOP, str('power_loop_stickers'));
       }
       Divider().strokeWidth(0.7).color($r('app.color.divider')).margin({ left: 58 });
-      this.featureRow('sys.symbol.face_smiling_fill', '动态表情', KEY_POWER_EMOJI, 3);
+      this.featureRow('sys.symbol.face_smiling_fill', str('power_animated_emoji'), KEY_POWER_EMOJI, 3);
       if (this.expandedKey === KEY_POWER_EMOJI) {
-        this.subFeatureRow(KEY_POWER_EMOJI, KEY_POWER_EMOJI_CHAT, '聊天消息中的动态表情');
+        this.subFeatureRow(KEY_POWER_EMOJI, KEY_POWER_EMOJI_CHAT, str('power_emoji_messages'));
         Divider().strokeWidth(0.5).color($r('app.color.divider')).margin({ left: 62 });
-        this.subFeatureRow(KEY_POWER_EMOJI, KEY_POWER_EMOJI_REACTIONS, '消息回应中的动态表情');
+        this.subFeatureRow(KEY_POWER_EMOJI, KEY_POWER_EMOJI_REACTIONS, str('power_emoji_reactions'));
         Divider().strokeWidth(0.5).color($r('app.color.divider')).margin({ left: 62 });
-        this.subFeatureRow(KEY_POWER_EMOJI, KEY_POWER_EMOJI_STATUS, '个人资料和标题栏状态表情');
+        this.subFeatureRow(KEY_POWER_EMOJI, KEY_POWER_EMOJI_STATUS, str('power_emoji_status'));
       }
       Divider().strokeWidth(0.7).color($r('app.color.divider')).margin({ left: 58 });
-      this.featureRow('sys.symbol.message', '聊天中的特效', KEY_POWER_CHAT_EFFECTS, 6);
+      this.featureRow('sys.symbol.message', str('power_chat_effects'), KEY_POWER_CHAT_EFFECTS, 6);
       if (this.expandedKey === KEY_POWER_CHAT_EFFECTS) {
-        this.subFeatureRow(KEY_POWER_CHAT_EFFECTS, KEY_POWER_EFFECT_MESSAGE, '新消息出现动画');
+        this.subFeatureRow(KEY_POWER_CHAT_EFFECTS, KEY_POWER_EFFECT_MESSAGE, str('power_new_message_anim'));
         Divider().strokeWidth(0.5).color($r('app.color.divider')).margin({ left: 62 });
-        this.subFeatureRow(KEY_POWER_CHAT_EFFECTS, KEY_POWER_EFFECT_REACTION, '消息回应动画');
+        this.subFeatureRow(KEY_POWER_CHAT_EFFECTS, KEY_POWER_EFFECT_REACTION, str('power_reaction_anim'));
         Divider().strokeWidth(0.5).color($r('app.color.divider')).margin({ left: 62 });
-        this.subFeatureRow(KEY_POWER_CHAT_EFFECTS, KEY_POWER_EFFECT_REPLY, '回复与转发动效');
+        this.subFeatureRow(KEY_POWER_CHAT_EFFECTS, KEY_POWER_EFFECT_REPLY, str('power_reply_anim'));
         Divider().strokeWidth(0.5).color($r('app.color.divider')).margin({ left: 62 });
-        this.subFeatureRow(KEY_POWER_CHAT_EFFECTS, KEY_POWER_EFFECT_MENU, '菜单和面板动效');
+        this.subFeatureRow(KEY_POWER_CHAT_EFFECTS, KEY_POWER_EFFECT_MENU, str('power_menu_anim'));
         Divider().strokeWidth(0.5).color($r('app.color.divider')).margin({ left: 62 });
-        this.subFeatureRow(KEY_POWER_CHAT_EFFECTS, KEY_POWER_EFFECT_BLUR, '模糊与缩放效果');
+        this.subFeatureRow(KEY_POWER_CHAT_EFFECTS, KEY_POWER_EFFECT_BLUR, str('power_blur_scale'));
         Divider().strokeWidth(0.5).color($r('app.color.divider')).margin({ left: 62 });
-        this.subFeatureRow(KEY_POWER_CHAT_EFFECTS, KEY_POWER_EFFECT_BACKGROUND, '聊天背景动态效果');
+        this.subFeatureRow(KEY_POWER_CHAT_EFFECTS, KEY_POWER_EFFECT_BACKGROUND, str('power_background_anim'));
       }
       Divider().strokeWidth(0.7).color($r('app.color.divider')).margin({ left: 58 });
-      this.featureRow('sys.symbol.phone', '通话中的动画', KEY_POWER_CALL_ANIMATIONS, 0);
+      this.featureRow('sys.symbol.phone', str('power_call_anim'), KEY_POWER_CALL_ANIMATIONS, 0);
       Divider().strokeWidth(0.7).color($r('app.color.divider')).margin({ left: 58 });
-      this.featureRow('sys.symbol.play_fill', '自动播放视频', KEY_POWER_AUTOPLAY_VIDEO, 0);
+      this.featureRow('sys.symbol.play_fill', str('power_autoplay_video'), KEY_POWER_AUTOPLAY_VIDEO, 0);
       Divider().strokeWidth(0.7).color($r('app.color.divider')).margin({ left: 58 });
-      this.featureRow('sys.symbol.video', '自动播放 GIF', KEY_POWER_AUTOPLAY_GIF, 0);
+      this.featureRow('sys.symbol.video', str('power_autoplay_gif'), KEY_POWER_AUTOPLAY_GIF, 0);
       Divider().strokeWidth(0.7).color($r('app.color.divider')).margin({ left: 58 });
-      this.featureRow('sys.symbol.gift', '粒子效果', KEY_POWER_PARTICLES, 0);
+      this.featureRow('sys.symbol.gift', str('power_particles'), KEY_POWER_PARTICLES, 0);
     }
     .width('100%').backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
     .padding({ bottom: 4 });
@@ -435,7 +436,7 @@ struct PowerUsagePage {
   @Builder
   smoothCard() {
     Row({ space: 12 }) {
-      Text('启用平滑过渡')
+      Text($r('app.string.power_smooth'))
         .fontSize(16)
         .fontColor(COLOR_TEXT_PRIMARY)
         .height(48)
@@ -445,13 +446,13 @@ struct PowerUsagePage {
           normal: this.rowNormalStyle,
           pressed: this.rowPressedStyle
         })
-        .accessibilityText(`启用平滑过渡，${this.smoothTransitions ? '已开启' : '已关闭'}`)
+        .accessibilityText(str('a11y_toggle_state', str('power_smooth'), this.smoothTransitions ? str('state_on') : str('state_off')))
         .onClick((): void => {
           setBoolean(KEY_POWER_SMOOTH_TRANSITIONS, !this.smoothTransitions);
         });
       Toggle({ type: ToggleType.Switch, isOn: this.smoothTransitions })
         .selectedColor(COLOR_PRIMARY)
-        .accessibilityText('平滑过渡开关')
+        .accessibilityText($r('app.string.power_smooth_switch'))
         .onChange((value: boolean): void => {
           setBoolean(KEY_POWER_SMOOTH_TRANSITIONS, value);
         });
@@ -471,7 +472,7 @@ struct PowerUsagePage {
             .padding({ left: 15, right: 15 });
           this.featuresCard();
           this.smoothCard();
-          Text('关闭后，应用不同页面和区域之间将不再使用平滑动画。')
+          Text($r('app.string.power_smooth_note'))
             .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).width('100%')
             .padding({ left: 15, right: 15 });
         }

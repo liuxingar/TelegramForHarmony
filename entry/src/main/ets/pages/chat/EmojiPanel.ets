@@ -5,6 +5,7 @@ import {
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
 import { StickerPicker, StickerItem, ClassicPack } from './StickerPicker';
 import { GifPicker, GifItem } from './GifPicker';
+import { str } from '../../util/strings';
 
 interface EmojiSection {
   title: string;
@@ -13,7 +14,7 @@ interface EmojiSection {
 
 const SECTIONS: EmojiSection[] = [
   {
-    title: '表情与人物',
+    title: str('emoji_group_smileys'),
     emoji: [
       '😀', '😃', '😄', '😁', '😆', '😅', '🤣', '😂', '🙂', '🙃', '😉', '😊',
       '😇', '🥰', '😍', '🤩', '😘', '😗', '☺️', '😚', '😙', '🥲', '😋', '😛',
@@ -27,7 +28,7 @@ const SECTIONS: EmojiSection[] = [
     ]
   },
   {
-    title: '手势与身体',
+    title: str('emoji_group_gestures'),
     emoji: [
       '👋', '🤚', '🖐️', '✋', '🖖', '👌', '🤌', '🤏', '✌️', '🤞', '🤟', '🤘',
       '🤙', '👈', '👉', '👆', '🖕', '👇', '☝️', '👍', '👎', '✊', '👊', '🤛',
@@ -36,7 +37,7 @@ const SECTIONS: EmojiSection[] = [
     ]
   },
   {
-    title: '心与符号',
+    title: str('emoji_group_symbols'),
     emoji: [
       '❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '💔', '❣️', '💕',
       '💞', '💓', '💗', '💖', '💘', '💝', '💟', '💯', '💢', '💥', '💫', '💦',
@@ -44,7 +45,7 @@ const SECTIONS: EmojiSection[] = [
     ]
   },
   {
-    title: '动物与自然',
+    title: str('emoji_group_nature'),
     emoji: [
       '🐶', '🐱', '🐭', '🐹', '🐰', '🦊', '🐻', '🐼', '🐨', '🐯', '🦁', '🐮',
       '🐷', '🐸', '🐵', '🙈', '🙉', '🙊', '🐔', '🐧', '🐦', '🐤', '🦆', '🦅',
@@ -53,7 +54,7 @@ const SECTIONS: EmojiSection[] = [
     ]
   },
   {
-    title: '食物与活动',
+    title: str('emoji_group_food'),
     emoji: [
       '🍎', '🍊', '🍋', '🍉', '🍇', '🍓', '🍑', '🍍', '🥭', '🥑', '🍅', '🌽',
       '🍔', '🍟', '🍕', '🌭', '🥪', '🌮', '🍜', '🍣', '🍦', '🍰', '🎂', '🍫',
@@ -129,7 +130,7 @@ export struct EmojiPanel {
     .borderRadius(12)
     .backgroundColor(this.tab === idx ? $r('app.color.selected_pill') : Color.Transparent)
     .animation({ duration: this.panelDuration(140), curve: Curve.EaseOut })
-    .accessibilityText(`${label}${this.tab === idx ? '，已选中' : ''}`)
+    .accessibilityText(str('a11y_option_state', label, this.tab === idx ? str('a11y_selected') : ''))
     .onClick(() => { this.switchTab(idx); });
   }
 
@@ -172,8 +173,8 @@ export struct EmojiPanel {
       // overlay consume the whole chat page after switching tabs.
       .width('100%').height(241);
       Row({ space: 5 }) {
-        this.bottomTab($r('sys.symbol.face_smiling'), '表情', 0);
-        this.bottomTab($r('sys.symbol.gift'), '贴纸', 1);
+        this.bottomTab($r('sys.symbol.face_smiling'), str('emoji_tab'), 0);
+        this.bottomTab($r('sys.symbol.gift'), str('sticker_tab'), 1);
         this.bottomTab($r('sys.symbol.video'), 'GIF', 2);
       }
       .width('100%').height(59)
@@ -183,6 +184,6 @@ export struct EmojiPanel {
     .width('100%').height(300)
     .constraintSize({ minHeight: 300, maxHeight: 300 })
     .backgroundColor($r('app.color.surface'))
-    .accessibilityText('表情、贴纸和 GIF 面板');
+    .accessibilityText($r('app.string.emoji_panel_a11y'));
   }
 }

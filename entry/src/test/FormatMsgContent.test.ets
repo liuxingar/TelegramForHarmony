@@ -646,15 +646,15 @@ export default function formatMsgContentTest() {
       const r = formatMsgContent(giftedStarsMsg());
       expect(r.contentType).assertEqual('gift');
       expect(r.giftKind).assertEqual('stars');
-      expect(r.giftValue).assertEqual('500 颗星星');
-      expect(r.giftStatus).assertEqual('已到账');
+      expect(r.giftValue).assertEqual('gift_stars_count(500,500)');
+      expect(r.giftStatus).assertEqual('gift_status_credited');
     });
     it('refunded_regular_gift_is_not_presented_as_available', 0, () => {
       const r = formatMsgContent(refundedGiftMsg());
       expect(r.contentType).assertEqual('gift');
-      expect(r.giftTitle).assertEqual('生日礼物');
+      expect(r.giftTitle).assertEqual('gift_birthday_title');
       expect(r.giftRefunded).assertTrue();
-      expect(r.giftStatus).assertEqual('已退款，不再可用');
+      expect(r.giftStatus).assertEqual('gift_status_refunded');
       expect(r.text).assertEqual('生日快乐');
     });
     it('giveaway_maps_prize_schedule_and_eligibility', 0, () => {
@@ -662,7 +662,7 @@ export default function formatMsgContentTest() {
       expect(r.contentType).assertEqual('giveaway');
       expect(r.giveawayState).assertEqual('active');
       expect(r.giveawayWinnerCount).assertEqual(5);
-      expect(r.giveawayPrize).assertEqual('1000 颗 Telegram 星星');
+      expect(r.giveawayPrize).assertEqual('prize_stars(1000,1000)');
       expect(r.giveawayDescription).assertEqual('周年特别奖');
       expect(r.giveawaySelectionDate).assertEqual(2000000000);
       expect(r.giveawayOnlyNewMembers).assertTrue();

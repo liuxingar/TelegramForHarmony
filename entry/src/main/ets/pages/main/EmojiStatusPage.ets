@@ -128,7 +128,7 @@ struct EmojiStatusPage {
       if (!this.active) { return; }
       this.busy = false;
       promptAction.showToast({
-        message: customEmojiId === '' ? '已清除状态' : '状态已更新', duration: 1500
+        message: customEmojiId === '' ? $r('app.string.emoji_status_cleared') : $r('app.string.emoji_status_updated'), duration: 1500
       });
     }).catch((error: TdError): void => {
       if (!this.active) { return; }
@@ -136,7 +136,7 @@ struct EmojiStatusPage {
       console.error(`EmojiStatusPage.apply failed: ${error.message}`);
       promptAction.showToast({
         message: error.message.indexOf('PREMIUM') >= 0 || error.message.indexOf('premium') >= 0
-          ? '表情状态需要 Telegram Premium' : '设置失败，请稍后重试',
+          ? $r('app.string.emoji_status_needs_premium') : $r('app.string.apply_failed_retry'),
         duration: 1900
       });
     });
@@ -162,7 +162,7 @@ struct EmojiStatusPage {
   }
 
   @Builder
-  section(title: string, rows: StatusEmoji[]) {
+  section(title: ResourceStr, rows: StatusEmoji[]) {
     Column({ space: 8 }) {
       Text(title).fontSize(12).fontColor(COLOR_TEXT_SECONDARY).width('100%');
       Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
@@ -181,46 +181,46 @@ struct EmojiStatusPage {
           SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(24).fontColor([COLOR_TEXT_PRIMARY]);
         }.width(40).height(40).borderRadius(20).backgroundColor(Color.Transparent)
         .onClick((): void => { router.back(); });
-        Text('表情状态').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
+        Text($r('app.string.settings_emoji_status')).fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
           .layoutWeight(1);
         if (this.busy) { LoadingProgress().width(20).height(20).color(COLOR_PRIMARY); }
       }.width('100%').height(52).padding({ left: 8, right: 16 }).alignItems(VerticalAlign.Center);
       if (this.loadState === 'loading') {
         Column({ space: 9 }) {
           LoadingProgress().width(32).height(32).color(COLOR_PRIMARY);
-          Text('正在加载表情状态…').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.emoji_status_loading')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else if (this.loadState === 'error') {
         Column({ space: 10 }) {
-          Text('加载失败').fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
-          Button('重新加载').onClick((): void => this.load());
+          Text($r('app.string.load_failed')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
+          Button($r('app.string.settings_reload')).onClick((): void => this.load());
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else {
         Scroll() {
           Column({ space: 12 }) {
             Row({ space: 10 }) {
               SymbolGlyph($r('sys.symbol.xmark_circle')).fontSize(18).fontColor([COLOR_PRIMARY]);
-              Text('清除当前状态').fontSize(15).fontColor(COLOR_PRIMARY).layoutWeight(1);
+              Text($r('app.string.emoji_status_clear')).fontSize(15).fontColor(COLOR_PRIMARY).layoutWeight(1);
             }
             .width('100%').height(48).padding({ left: 14, right: 14 })
             .backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS)
             .onClick((): void => this.apply(''));
             if (this.recent.length > 0) {
-              this.section('最近使用', this.recent);
+              this.section($r('app.string.emoji_status_recent'), this.recent);
             }
             if (this.suggested.length > 0) {
-              this.section('推荐', this.suggested);
+              this.section($r('app.string.emoji_status_suggested'), this.suggested);
             }
             if (this.recent.length > 0) {
-              Text('清空最近使用').fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
+              Text($r('app.string.emoji_status_clear_recent')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
                 .onClick((): void => {
                   clearRecentEmojiStatuses().then((): void => {
                     this.recent = [];
-                    promptAction.showToast({ message: '已清空', duration: 1300 });
+                    promptAction.showToast({ message: $r('app.string.cleared'), duration: 1300 });
                   }).catch((): void => {});
                 });
             }
-            Text('表情状态显示在你的名字旁边，需要 Telegram Premium。')
+            Text($r('app.string.emoji_status_note'))
               .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).lineHeight(18).width('100%');
           }.width('100%').padding({ left: 12, right: 12, bottom: this.bottomSafe + 24 });
         }.layoutWeight(1).width('100%').scrollBar(BarState.Off);

@@ -1,0 +1,199 @@
+import { common, Want } from '@kit.AbilityKit';
+import { promptAction, router } from '@kit.ArkUI';
+import { KEY_APP_LANGUAGE, setString } from '../../store/AppSettings';
+import {
+  AppLanguage, LANGUAGE_SYSTEM, appLanguages, applyAppLanguage, labelForTag, requiresRestart,
+  systemMatchedLanguage
+} from '../../util/appLanguage';
+import { str } from '../../util/strings';
+import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+
+const CARD_BG: ResourceColor = $r('app.color.surface');
+const CARD_RADIUS: number = 14;
+
+// 语言. Picking a concrete language takes effect immediately — resources
+// reload and every page re-renders. Going back to 跟随系统 does not: the
+// platform documents that clearing the app preferred language only applies
+// after a restart, so that path offers the restart instead of leaving the user
+// staring at an unchanged screen wondering what broke.
+@Entry
+@Component
+struct LanguagePage {
+  @StorageProp('topSafeHeight') topSafe: number = 0;
+  @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
+  @StorageLink(KEY_APP_LANGUAGE) selected: string = LANGUAGE_SYSTEM;
+  @State leavingPage: boolean = false;
+  private leaveTimer: number = -1;
+
+  aboutToDisappear(): void {
+    if (this.leaveTimer !== -1) {
+      clearTimeout(this.leaveTimer);
+      this.leaveTimer = -1;
+    }
+    this.leavingPage = false;
+  }
+
+  private leavePage(): void {
+    if (this.leavingPage) {
+      return;
+    }
+    this.leavingPage = true;
+    this.leaveTimer = setTimeout((): void => {
+      this.leaveTimer = -1;
+      this.leavingPage = false;
+    }, 500);
+    router.back();
+  }
+
+  @Styles
+  optionNormalStyle() {
+    .backgroundColor(Color.Transparent)
+    .opacity(1)
+  }
+
+  @Styles
+  optionPressedStyle() {
+    .backgroundColor($r('app.color.surface_alt'))
+    .opacity(0.75)
+  }
+
+  @Styles
+  actionNormalStyle() {
+    .backgroundColor(Color.Transparent)
+    .opacity(1)
+  }
+
+  @Styles
+  actionPressedStyle() {
+    .backgroundColor($r('app.color.surface_alt'))
+    .opacity(0.75)
+  }
+
+  private restartApp(): void {
+    try {
+      const context = getContext(this) as common.UIAbilityContext;
+      const want: Want = {
+        bundleName: context.abilityInfo.bundleName,
+        abilityName: context.abilityInfo.name
+      };
+      context.getApplicationContext().restartApp(want);
+    } catch (e) {
+      // 16000053 (not on top) and 16000064 (too frequent) are both recoverable
+      // by the user restarting by hand, so say so rather than failing silently.
+      console.error(`LanguagePage.restartApp failed: ${e}`);
+      promptAction.showToast({ message: str('language_restart_manual'), duration: 3000 });
+    }
+  }
+
+  private confirmRestart(): void {
+    AlertDialog.show({
+      title: str('language_restart_title'),
+      message: str('language_restart_body'),
+      autoCancel: true,
+      primaryButton: {
+        value: str('language_restart_later'),
+        action: (): void => {}
+      },
+      secondaryButton: {
+        value: str('language_restart_now'),
+        action: (): void => { this.restartApp(); }
+      }
+    });
+  }
+
+  private choose(tag: string): void {
+    if (this.selected === tag) {
+      return;
+    }
+    if (!applyAppLanguage(tag)) {
+      promptAction.showToast({ message: str('language_apply_failed'), duration: 2000 });
+      return;
+    }
+    setString(KEY_APP_LANGUAGE, tag);
+    if (requiresRestart(tag)) {
+      this.confirmRestart();
+    }
+  }
+
+  @Builder
+  header() {
+    Row({ space: 8 }) {
+      Row() {
+        SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(25).fontColor([COLOR_TEXT_PRIMARY]);
+      }
+      .width(44).height(44).borderRadius(22)
+      .justifyContent(FlexAlign.Center)
+      .stateStyles({
+        normal: this.actionNormalStyle,
+        pressed: this.actionPressedStyle
+      })
+      .enabled(!this.leavingPage)
+      .accessibilityText($r('app.string.back_to_settings'))
+      .onClick((): void => { this.leavePage(); });
+      Text($r('app.string.language_title')).fontSize(22).fontWeight(FontWeight.Bold)
+        .fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
+    }
+    .width('100%').height(56).padding({ left: 8, right: 16 })
+    .alignItems(VerticalAlign.Center);
+  }
+
+  // Only the 跟随系统 row gets a subtitle, and only when the system language
+  // actually resolves to one of ours: "follow the system" is meaningless to the
+  // user unless they can see what it currently means.
+  @Builder
+  optionRow(opt: AppLanguage, matched: string) {
+    Row() {
+      Column({ space: 2 }) {
+        Text(opt.label).fontSize(16).fontColor(COLOR_TEXT_PRIMARY).width('100%');
+        if (opt.tag === LANGUAGE_SYSTEM && matched !== '') {
+          Text(str('language_system_hint', labelForTag(matched)))
+            .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).width('100%');
+        }
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+      if (this.selected === opt.tag) {
+        SymbolGlyph($r('sys.symbol.checkmark')).fontSize(18).fontColor([COLOR_PRIMARY]);
+      }
+    }
+    .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 12 })
+    .stateStyles({
+      normal: this.optionNormalStyle,
+      pressed: this.optionPressedStyle
+    })
+    .accessibilityText(this.selected === opt.tag
+      ? `${opt.label}${str('a11y_selected')}` : opt.label)
+    .onClick((): void => { this.choose(opt.tag); });
+  }
+
+  build() {
+    Column() {
+      this.header();
+      Scroll() {
+        Column({ space: 14 }) {
+          Column() {
+            ForEach(appLanguages(), (opt: AppLanguage, idx: number) => {
+              if (idx > 0) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 16 });
+              }
+              this.optionRow(opt, systemMatchedLanguage());
+            }, (opt: AppLanguage) => opt.tag);
+          }
+          .width('100%').backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
+          .padding({ top: 4, bottom: 4 });
+
+          Text($r('app.string.language_coverage_note'))
+            .fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
+            .width('100%').padding({ left: 16, right: 16 });
+        }
+        .width('100%')
+        .padding({ left: 12, right: 12, top: 8, bottom: this.bottomSafe + 24 });
+      }
+      .layoutWeight(1).width('100%')
+      .align(Alignment.Top)
+      .scrollBar(BarState.Off);
+    }
+    .width('100%').height('100%')
+    .backgroundColor($r('app.color.page_bg'))
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .padding({ top: this.topSafe });
+  }
+}

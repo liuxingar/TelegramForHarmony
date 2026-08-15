@@ -1,6 +1,7 @@
 import {
   COLOR_PRIMARY, COLOR_SURFACE, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
+import { str } from '../../util/strings';
 
 const MAX_OPTIONS: number = 10;
 
@@ -28,18 +29,18 @@ export struct PollComposeSheet {
     const question: string = this.question.trim();
     const options: string[] = this.validOptions();
     if (question === '') {
-      this.errorText = '请输入问题';
+      this.errorText = str('poll_need_question');
       return;
     }
     if (options.length < 2) {
-      this.errorText = '至少需要两个选项';
+      this.errorText = str('poll_need_two');
       return;
     }
     if (this.isQuiz) {
       const correctText: string = this.correctIdx >= 0 && this.correctIdx < this.options.length
         ? this.options[this.correctIdx].trim() : '';
       if (correctText === '') {
-        this.errorText = '测验模式需要选择正确答案';
+        this.errorText = str('poll_need_answer');
         return;
       }
       this.onSubmit(question, options, this.isAnonymous, true, options.indexOf(correctText));
@@ -65,7 +66,7 @@ export struct PollComposeSheet {
           this.correctIdx = index;
         });
       }
-      TextInput({ placeholder: `选项 ${index + 1}`, text: this.options[index] })
+      TextInput({ placeholder: str('poll_option_n', index + 1), text: this.options[index] })
         .fontSize(15).layoutWeight(1).height(40)
         .onChange((value: string): void => {
           const next = [...this.options];
@@ -102,8 +103,8 @@ export struct PollComposeSheet {
       Column().layoutWeight(1).onClick((): void => this.onClose());
       Column({ space: 10 }) {
         Row().width(40).height(4).borderRadius(2).backgroundColor('#D0D0D0');
-        Text('新建投票').fontSize(17).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-        TextInput({ placeholder: '问题', text: this.question })
+        Text($r('app.string.poll_new')).fontSize(17).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+        TextInput({ placeholder: $r('app.string.poll_question'), text: this.question })
           .fontSize(15).height(44)
           .onChange((value: string): void => {
             this.question = value;
@@ -116,7 +117,7 @@ export struct PollComposeSheet {
             if (this.options.length < MAX_OPTIONS) {
               Row({ space: 6 }) {
                 SymbolGlyph($r('sys.symbol.plus')).fontSize(16).fontColor([COLOR_PRIMARY]);
-                Text('添加选项').fontSize(14).fontColor(COLOR_PRIMARY);
+                Text($r('app.string.poll_add_option')).fontSize(14).fontColor(COLOR_PRIMARY);
               }
               .onClick((): void => {
                 this.options = [...this.options, ''];
@@ -126,11 +127,11 @@ export struct PollComposeSheet {
           .width('100%');
         }
         .constraintSize({ maxHeight: 240 }).align(Alignment.Top);
-        this.toggleRow('匿名投票', this.isAnonymous,
+        this.toggleRow(str('poll_anonymous'), this.isAnonymous,
           (next: boolean): void => {
             this.isAnonymous = next;
           });
-        this.toggleRow('测验模式', this.isQuiz,
+        this.toggleRow(str('poll_quiz'), this.isQuiz,
           (next: boolean): void => {
             this.isQuiz = next;
             if (!next) {
@@ -141,9 +142,9 @@ export struct PollComposeSheet {
           Text(this.errorText).fontSize(13).fontColor('#E5484D').width('100%');
         }
         Row({ space: 12 }) {
-          Button('取消').buttonStyle(ButtonStyleMode.NORMAL).layoutWeight(1)
+          Button($r('app.string.cancel')).buttonStyle(ButtonStyleMode.NORMAL).layoutWeight(1)
             .onClick((): void => this.onClose());
-          Button('发送').backgroundColor(COLOR_PRIMARY).layoutWeight(1)
+          Button($r('app.string.send')).backgroundColor(COLOR_PRIMARY).layoutWeight(1)
             .onClick((): void => this.submit());
         }
         .width('100%');

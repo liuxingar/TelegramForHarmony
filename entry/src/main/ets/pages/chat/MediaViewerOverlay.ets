@@ -8,6 +8,7 @@ import { setMediaViewerOrientation } from './LiveViewerUi';
 import {
   KEY_POWER_EFFECT_BLUR, KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration
 } from '../../store/AppSettings';
+import { str } from '../../util/strings';
 
 const VIEWER_CHROME_BG: string = '#6e3e3e40';
 const VIEWER_MIN_SCALE: number = 1;
@@ -487,7 +488,7 @@ export struct MediaViewerOverlay {
       } else {
         LoadingProgress().width(38).height(38).color(Color.White);
       }
-      Text('正在加载图片').fontSize(13).fontColor('#D9FFFFFF');
+      Text($r('app.string.mv_loading')).fontSize(13).fontColor('#D9FFFFFF');
     }
     .padding({ left: 18, right: 18, top: 16, bottom: 16 })
     .backgroundColor(VIEWER_CHROME_BG).borderRadius(16)
@@ -501,8 +502,8 @@ export struct MediaViewerOverlay {
     Column({ space: 10 }) {
       SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
         .fontSize(30).fontColor([Color.White]);
-      Text('图片加载失败').fontSize(14).fontColor(Color.White).fontWeight(FontWeight.Medium);
-      Text('点击重试').fontSize(12).fontColor('#D9FFFFFF');
+      Text($r('app.string.mv_load_failed')).fontSize(14).fontColor(Color.White).fontWeight(FontWeight.Medium);
+      Text($r('app.string.tap_to_retry')).fontSize(12).fontColor('#D9FFFFFF');
     }
     .padding({ left: 22, right: 22, top: 16, bottom: 16 })
     .backgroundColor(VIEWER_CHROME_BG).borderRadius(16)
@@ -630,7 +631,7 @@ export struct MediaViewerOverlay {
       Row({ space: 7 }) {
         LoadingProgress().width(15).height(15).color(Color.White);
         Text(this.photoProgress() > 0
-          ? `正在加载原图 ${this.photoProgress()}%` : '正在加载原图')
+          ? str('mv_loading_full_pct', this.photoProgress()) : $r('app.string.mv_loading_full'))
           .fontSize(12).fontColor(Color.White);
       }
       .padding({ left: 11, right: 11, top: 7, bottom: 7 })
@@ -643,7 +644,7 @@ export struct MediaViewerOverlay {
     } else if (!this.isVideo() && this.photoFailed() && this.chromeVisible) {
       Row({ space: 6 }) {
         SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(14).fontColor([Color.White]);
-        Text('原图加载失败，点击重试').fontSize(12).fontColor(Color.White);
+        Text($r('app.string.mv_full_failed')).fontSize(12).fontColor(Color.White);
       }
       .padding({ left: 11, right: 11, top: 7, bottom: 7 })
       .backgroundColor(VIEWER_CHROME_BG).borderRadius(16)
@@ -739,7 +740,7 @@ export struct MediaViewerOverlay {
         curve: Curve.EaseOut
       })
       .bindMenu([{
-        value: '保存到相册',
+        value: $r('app.string.ms_save_to_gallery'),
         action: (): void => { this.onSaveMedia(); }
       } as MenuElement]);
     }

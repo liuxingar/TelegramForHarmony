@@ -20,6 +20,7 @@ import {
   COLOR_DIVIDER, COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE,
   COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
+import { str } from '../../util/strings';
 
 const CARD_RADIUS: number = 14;
 const LIMITS: number[] = [512 * 1024, 2 * 1024 * 1024, 10 * 1024 * 1024,
@@ -32,8 +33,8 @@ interface NetworkOption {
 
 const NETWORKS: NetworkOption[] = [
   { key: 'wifi', label: 'Wi‑Fi' },
-  { key: 'mobile', label: '移动网络' },
-  { key: 'roaming', label: '漫游' }
+  { key: 'mobile', label: str('network_mobile') },
+  { key: 'roaming', label: str('network_roaming') }
 ];
 
 @Entry
@@ -81,7 +82,7 @@ struct MediaStorageSettingsPage {
       this.autosavePrepared = true;
     }).catch((error: TdError): void => {
       console.warn(`MediaStorageSettingsPage.prepareAutosave failed: ${error.message}`);
-      if (this.active) { this.warning = '相册策略暂时无法同步到云端，本机设置仍然有效'; }
+      if (this.active) { this.warning = str('ms_album_sync_failed'); }
     });
   }
 
@@ -190,7 +191,7 @@ struct MediaStorageSettingsPage {
     }).catch((error: TdError): void => {
       if (!this.active || current !== this.syncSequence) { return; }
       this.syncing = false;
-      this.warning = '下载策略同步失败，本机设置已保留，将在下次修改时重试';
+      this.warning = str('ms_download_sync_failed');
       console.error(`MediaStorageSettingsPage.syncAutoDownload failed: ${error.message}`);
     });
   }
@@ -210,7 +211,7 @@ struct MediaStorageSettingsPage {
     }).catch((error: TdError): void => {
       if (!this.active || current !== this.syncSequence) { return; }
       this.syncing = false;
-      this.warning = '相册策略云端同步失败，本机自动保存仍然有效';
+      this.warning = str('ms_album_cloud_sync_failed');
       console.error(`MediaStorageSettingsPage.syncAutosave failed: ${error.message}`);
     });
   }
@@ -223,8 +224,8 @@ struct MediaStorageSettingsPage {
       .stateStyles({ normal: this.actionNormalStyle, pressed: this.actionPressedStyle })
       .onClick((): void => router.back());
       Column({ space: 1 }) {
-        Text('媒体与相册').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
-        Text('自动下载与保存策略').fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
+        Text($r('app.string.ms_title')).fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
+        Text($r('app.string.ms_subtitle')).fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
       if (this.syncing) { LoadingProgress().width(18).height(18).color(COLOR_PRIMARY).margin({ right: 13 }); }
     }.width('100%').height(56).padding({ left: 8, right: 8 }).alignItems(VerticalAlign.Center);
@@ -286,32 +287,32 @@ struct MediaStorageSettingsPage {
   @Builder
   autoDownloadCard() {
     Column() {
-      this.toggleRow('图片', '自动下载收到的原图', this.photos,
+      this.toggleRow(str('storage_photo'), str('ms_photo_sub'), this.photos,
         (next: boolean): void => this.setMediaBoolean('photo', next));
       Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
-      this.toggleRow('视频与 GIF', `不超过 ${formatBytes(this.videoLimit)}`, this.videos,
+      this.toggleRow(str('ms_video_gif'), str('ms_up_to', formatBytes(this.videoLimit)), this.videos,
         (next: boolean): void => this.setMediaBoolean('video', next));
-      if (this.videos) { this.limitRow('视频大小上限', this.videoLimit, 'video'); }
+      if (this.videos) { this.limitRow(str('ms_video_limit'), this.videoLimit, 'video'); }
       Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
-      this.toggleRow('文件与音乐', `不超过 ${formatBytes(this.fileLimit)}`, this.files,
+      this.toggleRow(str('ms_file_music'), str('ms_up_to', formatBytes(this.fileLimit)), this.files,
         (next: boolean): void => this.setMediaBoolean('file', next));
-      if (this.files) { this.limitRow('文件大小上限', this.fileLimit, 'file'); }
+      if (this.files) { this.limitRow(str('ms_file_limit'), this.fileLimit, 'file'); }
     }.width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS).clip(true);
   }
 
   @Builder
   preloadCard() {
     Column() {
-      this.toggleRow('预加载大视频', '先加载开头以便更快开始播放', this.preloadVideo,
+      this.toggleRow(str('ms_preload_video'), str('ms_preload_video_sub'), this.preloadVideo,
         (next: boolean): void => this.setMediaBoolean('preload', next));
       Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
-      this.toggleRow('预加载下一首音乐', '播放音乐时准备下一首', this.nextAudio,
+      this.toggleRow(str('ms_preload_music'), str('ms_preload_music_sub'), this.nextAudio,
         (next: boolean): void => this.setMediaBoolean('audio', next));
       Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
-      this.toggleRow('预加载动态', '为当前网络提前加载动态内容', this.stories,
+      this.toggleRow(str('ms_preload_stories'), str('ms_preload_stories_sub'), this.stories,
         (next: boolean): void => this.setMediaBoolean('stories', next));
       Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
-      this.toggleRow('通话节省流量', '降低通话网络用量，可能影响音质', this.lessDataCalls,
+      this.toggleRow(str('ms_call_data_saving'), str('ms_call_data_saving_sub'), this.lessDataCalls,
         (next: boolean): void => {
           this.lessDataCalls = next;
           setBoolean(KEY_AUTO_LESS_DATA_CALLS, next);
@@ -323,13 +324,13 @@ struct MediaStorageSettingsPage {
   @Builder
   autosaveCard() {
     Column() {
-      this.toggleRow('私聊', '自动保存新收到的图片和视频', this.autosavePrivate,
+      this.toggleRow(str('ns_private'), str('ms_save_private_sub'), this.autosavePrivate,
         (next: boolean): void => this.setAutosave('private', next));
       Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
-      this.toggleRow('群组', '自动保存群组中的新媒体', this.autosaveGroup,
+      this.toggleRow(str('gn_group'), str('ms_save_group_sub'), this.autosaveGroup,
         (next: boolean): void => this.setAutosave('group', next));
       Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
-      this.toggleRow('频道', '自动保存频道中的新媒体', this.autosaveChannel,
+      this.toggleRow(str('gn_channel'), str('ms_save_channel_sub'), this.autosaveChannel,
         (next: boolean): void => this.setAutosave('channel', next));
     }.width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS).clip(true);
   }
@@ -343,15 +344,15 @@ struct MediaStorageSettingsPage {
             Text(this.warning).fontSize(12).fontColor('#FF9500').width('100%')
               .padding(10).backgroundColor('#12FF9500').borderRadius(10);
           }
-          Text('自动下载').fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
+          Text($r('app.string.ms_auto_download')).fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
             .width('100%').padding({ left: 4 });
           this.tabs();
           this.autoDownloadCard();
           this.preloadCard();
-          Text('保存到相册').fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
+          Text($r('app.string.ms_save_to_gallery')).fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
             .width('100%').padding({ left: 4, top: 4 });
           this.autosaveCard();
-          Text('自动保存只处理设置开启后新收到、且已按当前网络策略下载完成的媒体。HarmonyOS 可能显示系统写入确认。')
+          Text($r('app.string.ms_note'))
             .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).width('100%')
             .padding({ left: 4, right: 4 });
         }.width('100%').padding({ left: 12, right: 12, top: 6, bottom: this.bottomSafe + 24 });

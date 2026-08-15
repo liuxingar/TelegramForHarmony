@@ -28,14 +28,14 @@ export struct PasswordPage {
       Column({ space: 14 }) {
         LoginHero({ mode: 'password', active: this.password !== '' });
 
-        Text('两步验证')
+        Text($r('app.string.ps_two_step'))
           .fontSize(27).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
-        Text('此账号启用了额外密码保护，请输入两步验证密码。')
+        Text($r('app.string.lg_password_hint'))
           .fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
           .textAlign(TextAlign.Center).lineHeight(21)
           .padding({ left: 18, right: 18 });
 
-        TextInput({ text: this.password, placeholder: '密码' })
+        TextInput({ text: this.password, placeholder: $r('app.string.lg_password') })
           .type(InputType.Password)
           .showPasswordIcon(true)
           .fontSize(17).fontColor(COLOR_TEXT_PRIMARY)
@@ -59,7 +59,7 @@ export struct PasswordPage {
             .padding({ left: 4, right: 4 });
         }
 
-        Button(this.busy ? '正在验证…' : '继续')
+        Button(this.busy ? $r('app.string.lg_verifying') : $r('app.string.lg_continue'))
           .width('100%').height(50)
           .fontSize(16).fontWeight(FontWeight.Medium)
           .backgroundColor(COLOR_PRIMARY).borderRadius(14)
@@ -67,7 +67,7 @@ export struct PasswordPage {
           .onClick((): void => this.submitPassword());
 
         if (canReturnToPreviousTdAccount()) {
-          Button('返回原账号')
+          Button($r('app.string.lg_back_to_account'))
             .width('100%').height(45)
             .fontColor(COLOR_TEXT_SECONDARY)
             .backgroundColor(Color.Transparent)

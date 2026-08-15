@@ -30,6 +30,7 @@ import { packAlbumRows, AlbumCell } from '../../util/packAlbumRows';
 import { linkPreviewPresentation, LinkPreviewPresentation } from '../../util/linkPreview';
 import { reactionKeyFrom } from '../../util/reactions';
 import { COLOR_PRIMARY, COLOR_TEXT_SECONDARY, COLOR_BUBBLE_OUT, COLOR_BUBBLE_IN, COLOR_BUBBLE_TEXT, AVATAR_PALETTE, botButtonBg } from '../../util/theme';
+import { plural, str } from '../../util/strings';
 
 // 圆形视频气泡直径。和 Telegram 的观感接近，同时不至于挤占整行宽度。
 const VIDEO_NOTE_SIDE: number = 180;
@@ -419,33 +420,33 @@ export struct MessageBubble {
   private videoAccessibilityText(): string {
     if (this.msg.isAnimation) {
       if (this.videoFileUnavailable()) {
-        return 'GIF 文件暂不可用';
+        return str('mb_gif_unavailable');
       }
       if (this.msg.videoFailed || this.animationPlaybackFailed) {
-        return 'GIF 加载失败，点击重试';
+        return str('mb_gif_failed');
       }
       if (this.videoDownloadActive() || this.animationDownloadExpected()) {
         return this.msg.videoProgress > 0
-          ? `GIF 已下载 ${this.msg.videoProgress}%`
-          : 'GIF 正在加载';
+          ? str('mb_gif_downloaded_pct', this.msg.videoProgress)
+          : str('mb_gif_loading');
       }
-      return this.autoplayInlineVideo() ? 'GIF 正在播放，点击暂停' : 'GIF 已暂停，点击播放';
+      return this.autoplayInlineVideo() ? str('mb_gif_playing') : str('mb_gif_paused');
     }
     if (this.videoFileUnavailable()) {
-      return '视频文件暂不可用';
+      return str('mb_video_unavailable');
     }
     if (this.msg.videoFailed) {
-      return '视频加载失败，点击重试播放';
+      return str('mb_video_failed');
     }
     if (this.videoDownloadActive()) {
-      return `视频已下载 ${this.msg.videoProgress}%，点击播放`;
+      return str('mb_video_downloaded_pct', this.msg.videoProgress);
     }
     if (this.msg.photoFailed) {
-      return '视频封面加载失败，点击仍可播放';
+      return str('mb_video_cover_failed');
     }
     return this.msg.videoDuration > 0
-      ? `视频，时长 ${this.formatDuration(this.msg.videoDuration)}，点击播放`
-      : '点击播放视频';
+      ? str('mb_video_duration', this.formatDuration(this.msg.videoDuration))
+      : str('mb_tap_play_video');
   }
 
   private mediaBox(): MediaBox {
@@ -505,9 +506,9 @@ export struct MessageBubble {
 
   private linkPreviewActionLabel(): string {
     if (this.msg.linkPhotoFailed) {
-      return '重新加载预览图';
+      return str('mb_reload_preview');
     }
-    return this.linkPreviewOpening ? '正在打开…' : this.linkPresentation().actionLabel;
+    return this.linkPreviewOpening ? str('opening_dots') : this.linkPresentation().actionLabel;
   }
 
   private albumW(): number {
@@ -575,7 +576,7 @@ export struct MessageBubble {
 
   private fallbackLabel(): string {
     const label = this.msg.placeholderLabel.trim();
-    return label !== '' ? label : '暂不支持此消息';
+    return label !== '' ? label : str('mb_unsupported');
   }
 
   private richRunDecoration(run: RichRun): TextDecorationType {
@@ -736,12 +737,12 @@ export struct MessageBubble {
         if (seg.kind === 'pre') {
           Column() {
             Row({ space: 8 }) {
-              Text(seg.language !== '' ? seg.language : '代码')
+              Text(seg.language !== '' ? seg.language : $r('app.string.mb_code'))
                 .fontSize(11).fontColor(COLOR_TEXT_SECONDARY).fontWeight(FontWeight.Medium)
                 .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
                 .layoutWeight(1);
               Row() {
-                Text('复制')
+                Text($r('app.string.copy'))
                   .fontSize(11).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium);
               }
                 .height(26)
@@ -793,7 +794,7 @@ export struct MessageBubble {
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .constraintSize({ maxWidth: maxWidth - 20 }).wordBreak(WordBreak.BREAK_WORD);
             if (seg.expandable) {
-              Text(this.quoteExpanded(seg) ? '收起引用' : '展开引用')
+              Text(this.quoteExpanded(seg) ? $r('app.string.mb_collapse_quote') : $r('app.string.mb_expand_quote'))
                 .fontSize(11).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
                 .margin({ top: 4 })
                 .stateStyles({
@@ -832,7 +833,7 @@ export struct MessageBubble {
           }, (uid: number, idx: number) => `replier_${idx}_${uid}`);
         }
       }
-      Text(`${this.msg.commentCount} 条评论`).fontSize(13).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium);
+      Text(plural('mb_comments_n', this.msg.commentCount, this.msg.commentCount)).fontSize(13).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium);
       SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(13).fontColor([COLOR_PRIMARY]);
     }
     .constraintSize({ maxWidth: this.inlineMaxW() })
@@ -916,7 +917,7 @@ export struct MessageBubble {
       Column({ space: 3 }) {
         SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(Math.max(17, size * 0.5))
           .fontColor([Color.White]);
-        Text('重试').fontSize(11).fontColor(Color.White).fontWeight(FontWeight.Medium);
+        Text($r('app.string.settings_retry')).fontSize(11).fontColor(Color.White).fontWeight(FontWeight.Medium);
       }
       .padding({ left: 10, right: 10, top: 7, bottom: 7 })
       .backgroundColor('#80000000').borderRadius(18);
@@ -940,7 +941,7 @@ export struct MessageBubble {
       }
     }
     .width(30).height(30)
-    .accessibilityText(failed ? '贴纸加载失败，点击重试' : '正在加载贴纸');
+    .accessibilityText(failed ? $r('app.string.mb_sticker_failed') : $r('app.string.mb_sticker_loading'));
   }
 
   @Builder
@@ -948,7 +949,7 @@ export struct MessageBubble {
     Column({ space: 6 }) {
       SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
         .fontSize(24).fontColor([COLOR_TEXT_SECONDARY]);
-      Text('贴纸不可用')
+      Text($r('app.string.mb_sticker_unavailable'))
         .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).fontWeight(FontWeight.Medium);
     }
     .width(this.stickerW()).height(this.stickerH())
@@ -967,7 +968,7 @@ export struct MessageBubble {
     } else {
       Column({ space: 5 }) {
         SymbolGlyph($r('sys.symbol.pause')).fontSize(21).fontColor([COLOR_TEXT_SECONDARY]);
-        Text('动画已暂停').fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
+        Text($r('app.string.mb_animation_paused')).fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
       }
       .width(this.stickerW()).height(this.stickerH())
       .justifyContent(FlexAlign.Center);
@@ -1060,9 +1061,9 @@ export struct MessageBubble {
             }
             .width(cell.width).height(cell.height)
             .accessibilityText(this.albumIsVideo[cell.idx]
-              ? `相册第 ${cell.idx + 1} 项，视频，点击播放`
+              ? str('mb_album_item_video', cell.idx + 1)
               : ((this.albumFailed[cell.idx] ?? false)
-                ? '图片加载失败，点击重试' : `相册第 ${cell.idx + 1} 项`))
+                ? str('mb_photo_failed') : str('mb_album_item', cell.idx + 1)))
             .onClick((e: ClickEvent) => { this.onMediaTap(this.albumMemberIds[cell.idx], e.windowX, e.windowY); });
           }, (cell: AlbumCell) => `cell_${cell.idx}`);
         }
@@ -1090,7 +1091,7 @@ export struct MessageBubble {
           .maxLines(compact ? 3 : 4).textOverflow({ overflow: TextOverflow.Ellipsis })
           .margin({ top: 2 });
       } else if (this.msg.linkTitle === '') {
-        Text(this.linkPresentation().isTelegram ? 'Telegram 链接' : '网页链接')
+        Text(this.linkPresentation().isTelegram ? $r('app.string.mb_telegram_link') : $r('app.string.mb_web_link'))
           .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).margin({ top: 2 });
       }
     }
@@ -1114,7 +1115,7 @@ export struct MessageBubble {
             SymbolGlyph($r('sys.symbol.arrow_clockwise'))
               .fontSize(compact ? 20 : 24).fontColor([COLOR_PRIMARY]);
             if (!compact) {
-              Text('图片加载失败').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+              Text($r('app.string.mb_photo_load_failed')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
             }
           } else {
             LoadingProgress()
@@ -1299,7 +1300,7 @@ export struct MessageBubble {
       .width('100%').padding({ left: 12, right: 10, top: 8, bottom: 8 })
       .alignItems(VerticalAlign.Center);
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
-      this.menuRow('sys.symbol.arrowshape_turn_up_left', '回复', false, () => { this.onReplyTo(this.msg.id); });
+      this.menuRow('sys.symbol.arrowshape_turn_up_left', str('mb_reply'), false, () => { this.onReplyTo(this.msg.id); });
       // TDLib 1.8.65 has no can_be_edited on message (it moved to
       // getMessageProperties); gate locally on Telegram's 48h edit window and
       // let the server be the final judge. Media types edit their caption.
@@ -1307,32 +1308,32 @@ export struct MessageBubble {
         (this.msg.contentType === 'text' ||
           EDITABLE_CAPTION_TYPES.indexOf(this.msg.contentType) >= 0)) {
         this.menuRow('sys.symbol.square_and_pencil',
-          this.msg.contentType === 'text' ? '编辑' : '编辑说明文字',
+          this.msg.contentType === 'text' ? str('edit') : str('mb_edit_caption'),
           false, () => { this.onEditMsg(this.msg.id); });
       }
-      this.menuRow('sys.symbol.plus_square_on_square', '复制文本', false, () => { this.onCopyText(this.msg.id); });
+      this.menuRow('sys.symbol.plus_square_on_square', str('mb_copy_text'), false, () => { this.onCopyText(this.msg.id); });
       if (this.msg.text !== '') {
-        this.menuRow('sys.symbol.translate', '翻译', false, () => { this.onTranslateMsg(this.msg.id); });
+        this.menuRow('sys.symbol.translate', str('mb_translate'), false, () => { this.onTranslateMsg(this.msg.id); });
       }
-      this.menuRow('sys.symbol.link', '拷贝消息链接', false, () => { this.onCopyLink(this.msg.id); });
-      this.menuRow('sys.symbol.arrowshape_turn_up_right', '转发', false, () => { this.onForwardMsg(this.msg.id); });
-      this.menuRow('sys.symbol.pin', this.isPinnedMsg ? '取消置顶' : '置顶', false,
+      this.menuRow('sys.symbol.link', str('mb_copy_link'), false, () => { this.onCopyLink(this.msg.id); });
+      this.menuRow('sys.symbol.arrowshape_turn_up_right', str('mb_forward'), false, () => { this.onForwardMsg(this.msg.id); });
+      this.menuRow('sys.symbol.pin', this.isPinnedMsg ? str('ft_unpin') : str('ft_pin'), false,
         () => { this.onPinMsg(this.msg.id, this.isPinnedMsg); });
       if (this.msg.isOutgoing && this.nowSec - this.msg.date < 172800 &&
         (this.msg.contentType === 'photo' || this.msg.contentType === 'video')) {
-        this.menuRow('sys.symbol.picture', '替换图片/视频', false,
+        this.menuRow('sys.symbol.picture', str('mb_replace_media'), false,
           () => { this.onReplaceMedia(this.msg.id); });
       }
       if (this.msg.contentType === 'poll' && this.msg.isOutgoing && !this.msg.pollIsClosed) {
-        this.menuRow('sys.symbol.checkmark_circle', '结束投票', false,
+        this.menuRow('sys.symbol.checkmark_circle', str('mb_stop_poll'), false,
           () => { this.onStopPoll(this.msg.id); });
       }
       if (this.msg.contentType === 'poll' && !this.msg.pollIsAnonymous) {
-        this.menuRow('sys.symbol.person_2', '查看投票人', false,
+        this.menuRow('sys.symbol.person_2', str('mb_view_voters'), false,
           () => { this.onPollVoters(this.msg.id); });
       }
-      this.menuRow('sys.symbol.exclamationmark_circle', '举报', true, () => { this.onReportMsg(this.msg.id); });
-      this.menuRow('sys.symbol.checkmark_circle', '选择', false, () => { this.onSelectMsg(this.msg.id); });
+      this.menuRow('sys.symbol.exclamationmark_circle', str('mb_report'), true, () => { this.onReportMsg(this.msg.id); });
+      this.menuRow('sys.symbol.checkmark_circle', str('mb_select'), false, () => { this.onSelectMsg(this.msg.id); });
     }
     .width(262)
     .padding({ top: 6, bottom: 6 });
@@ -1375,7 +1376,7 @@ export struct MessageBubble {
     } else if (this.msg.contentType === 'text') {
       if (this.msg.text.trim() === '') {
         Text() {
-          Span('消息内容为空').fontColor(COLOR_TEXT_SECONDARY);
+          Span($r('app.string.mb_empty')).fontColor(COLOR_TEXT_SECONDARY);
           if (this.timeReserveInText()) {
             Span(this.timeReserve()).fontSize(14).fontColor(Color.Transparent);
           }
@@ -1451,7 +1452,7 @@ export struct MessageBubble {
       .width(this.mediaBox().width).height(this.mediaBox().height)
       .accessibilityText(this.msg.contentType === 'video'
         ? this.videoAccessibilityText()
-        : (this.msg.photoFailed ? '图片加载失败，点击重试' : '打开图片'))
+        : (this.msg.photoFailed ? str('mb_photo_failed') : str('mb_open_photo')))
       .onVisibleAreaChange([0.0, 0.08], (visible: boolean, ratio: number): void => {
         const nextVisible = visible && ratio > 0.02;
         if (this.mediaVisible !== nextVisible) {
@@ -1522,7 +1523,7 @@ export struct MessageBubble {
       .borderRadius(VIDEO_NOTE_SIDE / 2)
       .clip(true)
       .accessibilityText(this.videoNotePlaying
-        ? '圆形视频播放中，点击停止' : `圆形视频，${this.videoNoteDuration()}，点击播放`)
+        ? str('mb_video_note_playing') : str('mb_video_note', this.videoNoteDuration()))
       .onClick((): void => { this.toggleVideoNote(); });
     } else if (this.msg.contentType === 'voice') {
       // Voice note with live playback progress — VoiceBubble subscribes to the
@@ -1756,7 +1757,7 @@ export struct MessageBubble {
             .fontSize(this.msg.contentType === 'customEmoji' ? 52 : 56)
             .textAlign(TextAlign.Center);
         } else {
-          Text('表情不可用')
+          Text($r('app.string.mb_emoji_unavailable'))
             .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).fontWeight(FontWeight.Medium);
         }
         if (this.msg.contentType === 'customEmoji') {
@@ -1782,7 +1783,7 @@ export struct MessageBubble {
         }
       })
       .accessibilityText(this.msg.contentType === 'customEmoji'
-        ? (this.msg.photoFailed ? '自定义表情加载失败，点击重试' : '正在加载自定义表情')
+        ? (this.msg.photoFailed ? str('mb_custom_emoji_failed') : str('mb_custom_emoji_loading'))
         : this.msg.text);
     } else if (this.msg.contentType === 'sticker') {
       Stack() {
@@ -1859,7 +1860,7 @@ export struct MessageBubble {
         }
       })
       .accessibilityText(this.msg.stickerFailed || this.msg.photoFailed || this.stickerPlaybackFailed
-        ? '贴纸加载失败，点击重试' : '贴纸');
+        ? $r('app.string.mb_sticker_failed') : $r('app.string.sticker_tab'));
     } else if (this.msg.isUnsupportedMessage) {
       Row({ space: 8 }) {
         SymbolGlyph($r('sys.symbol.info_circle'))
@@ -1869,14 +1870,14 @@ export struct MessageBubble {
             .fontSize(13).fontColor(COLOR_BUBBLE_TEXT).fontWeight(FontWeight.Medium)
             .maxLines(3).textOverflow({ overflow: TextOverflow.Ellipsis });
           Text() {
-            Span('当前版本暂无法展示完整内容').fontColor(COLOR_TEXT_SECONDARY);
+            Span($r('app.string.mb_partial_content')).fontColor(COLOR_TEXT_SECONDARY);
             Span(this.timeReserve()).fontSize(12).fontColor(Color.Transparent);
           }.fontSize(11);
         }.alignItems(HorizontalAlign.Start);
       }
       .constraintSize({ maxWidth: this.inlineMaxW() })
       .padding({ top: 2, bottom: 2 })
-      .accessibilityText(`${this.fallbackLabel()}，当前版本暂无法展示完整内容`);
+      .accessibilityText(str('mb_fallback_partial', this.fallbackLabel()));
     } else {
       Text() {
         Span(this.fallbackLabel()).fontColor(COLOR_TEXT_SECONDARY);
@@ -1978,7 +1979,7 @@ export struct MessageBubble {
   timeOverlay() {
     Row({ space: 4 }) {
       if (this.msg.editDate > 0) {
-        Text('已编辑').fontSize(10.5)
+        Text($r('app.string.mb_edited')).fontSize(10.5)
           .fontColor(this.timeOnMedia() ? Color.White : COLOR_TEXT_SECONDARY);
       }
       if (this.messageTimeText() !== '') {
@@ -2066,7 +2067,7 @@ export struct MessageBubble {
       }
     })
     .accessibilityText(this.liveVideoChatTappable()
-      ? `${this.fallbackLabel()}，双击进入` : this.fallbackLabel());
+      ? str('mb_fallback_open', this.fallbackLabel()) : this.fallbackLabel());
   }
 
   build() {
@@ -2096,7 +2097,7 @@ export struct MessageBubble {
         }.width('100%').justifyContent(FlexAlign.Center).padding({ top: 5, bottom: 3 });
       }
       if (this.showUnreadDivider) {
-        Text('未读消息')
+        Text($r('app.string.mb_unread'))
           .fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
           .width('100%').textAlign(TextAlign.Center)
           .backgroundColor($r('app.color.system_pill'))
@@ -2133,7 +2134,7 @@ export struct MessageBubble {
         if (this.msg.forwardFrom !== '') {
           // Tappable when the origin is known — opens the original post, or the
           // author's chat. A hidden-origin forward carries no ids and stays inert.
-          Text(`转发自 ${this.msg.forwardFrom}`).fontSize(13).fontColor(COLOR_PRIMARY)
+          Text(str('mb_forwarded_from', this.msg.forwardFrom)).fontSize(13).fontColor(COLOR_PRIMARY)
             .fontWeight(FontWeight.Medium).margin({ bottom: 2 })
             .constraintSize({ maxWidth: this.inlineMaxW() })
             .onClick(() => {

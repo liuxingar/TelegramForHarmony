@@ -125,26 +125,26 @@ export default function messageEntryTest() {
       joinContent['member_user_ids'] = [7];
       const join = buildMessageEntry(serviceMsg(30, 7, joinContent), usersOf());
       expect(join.contentType).assertEqual('system');
-      expect(join.placeholderLabel).assertEqual('Ann 加入了群组');
+      expect(join.placeholderLabel).assertEqual('sm_joined_group(Ann)');
       expect(join.systemKind).assertEqual('people');
 
       const leaveContent: TdObject = { '@type': 'messageChatDeleteMember' };
       leaveContent['user_id'] = 7;
       const leave = buildMessageEntry(serviceMsg(31, 7, leaveContent), usersOf());
-      expect(leave.placeholderLabel).assertEqual('Ann 退出了群组');
+      expect(leave.placeholderLabel).assertEqual('sm_left_group(Ann)');
     });
     it('own_join_notice_uses_client_copy', 0, () => {
       const content: TdObject = { '@type': 'messageChatJoinByLink' };
       const join = buildMessageEntry(serviceMsg(311, 7, content, true), usersOf());
       expect(join.contentType).assertEqual('system');
-      expect(join.placeholderLabel).assertEqual('您已加入此群组');
+      expect(join.placeholderLabel).assertEqual('cp_joined_group');
       expect(join.systemType).assertEqual('messageChatJoinByLink');
     });
     it('member_invite_includes_resolved_names', 0, () => {
       const content: TdObject = { '@type': 'messageChatAddMembers' };
       content['member_user_ids'] = [8];
       const entry = buildMessageEntry(serviceMsg(32, 7, content), usersOf());
-      expect(entry.placeholderLabel).assertEqual('Ann 邀请了 Bob');
+      expect(entry.placeholderLabel).assertEqual('sm_invited_names(Ann,Bob)');
     });
     it('video_chat_end_includes_real_duration', 0, () => {
       const content: TdObject = { '@type': 'messageVideoChatEnded' };
@@ -152,7 +152,7 @@ export default function messageEntryTest() {
       const entry = buildMessageEntry(serviceMsg(33, 7, content), usersOf());
       expect(entry.contentType).assertEqual('system');
       expect(entry.systemKind).assertEqual('call');
-      expect(entry.placeholderLabel).assertEqual('视频通话已结束 · 2 分钟');
+      expect(entry.placeholderLabel).assertEqual('sm_call_ended_after(unit_minutes(2,2))');
     });
     it('custom_service_text_is_preserved', 0, () => {
       const content: TdObject = { '@type': 'messageCustomServiceAction' };
@@ -166,7 +166,7 @@ export default function messageEntryTest() {
       const entry = buildMessageEntry(serviceMsg(35, 7, content), usersOf());
       expect(entry.contentType).assertEqual('other');
       expect(entry.isUnsupportedMessage).assertTrue();
-      expect(entry.placeholderLabel).assertEqual('暂不支持的消息');
+      expect(entry.placeholderLabel).assertEqual('preview_unsupported');
     });
     it('content_protection_rejection_is_not_reported_as_a_change', 0, () => {
       const content: TdObject = { '@type': 'messageChatHasProtectedContentToggled' };
@@ -174,7 +174,7 @@ export default function messageEntryTest() {
       content['old_has_protected_content'] = true;
       content['new_has_protected_content'] = true;
       const entry = buildMessageEntry(serviceMsg(36, 7, content), usersOf());
-      expect(entry.placeholderLabel).assertEqual('关闭内容保护的请求未获批准');
+      expect(entry.placeholderLabel).assertEqual('sm_protection_request_denied');
       expect(entry.systemKind).assertEqual('security');
     });
   });

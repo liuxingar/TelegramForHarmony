@@ -10,6 +10,7 @@ import { syncAccentPrimary } from '../../util/accentTheme';
 import {
   COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
+import { str } from '../../util/strings';
 
 const CARD_RADIUS: number = 14;
 const SWATCH: number = 44;
@@ -115,7 +116,7 @@ struct AccentColorPage {
 
   private errorText(error: TdError): string {
     return error.message.indexOf('PREMIUM') >= 0 || error.message.indexOf('premium') >= 0
-      ? '该颜色需要 Telegram Premium' : '设置失败，请稍后重试';
+      ? str('accent_needs_premium') : str('apply_failed_retry');
   }
 
   private applyName(id: number): void {
@@ -125,7 +126,7 @@ struct AccentColorPage {
       if (!this.active) { return; }
       this.busy = false;
       this.currentNameId = id;
-      promptAction.showToast({ message: '名字颜色已更新', duration: 1500 });
+      promptAction.showToast({ message: $r('app.string.accent_name_updated'), duration: 1500 });
     }).catch((error: TdError): void => {
       if (!this.active) { return; }
       this.busy = false;
@@ -142,7 +143,7 @@ struct AccentColorPage {
       this.currentProfileId = id;
       syncAccentPrimary(getContext(this) as common.UIAbilityContext);
       promptAction.showToast({
-        message: '资料页颜色已更新，App 主色已联动（已打开的页面重进后生效）', duration: 2200
+        message: $r('app.string.accent_profile_updated'), duration: 2200
       });
     }).catch((error: TdError): void => {
       if (!this.active) { return; }
@@ -158,7 +159,7 @@ struct AccentColorPage {
         SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(24).fontColor([COLOR_TEXT_PRIMARY]);
       }.width(40).height(40).borderRadius(20).backgroundColor(Color.Transparent)
       .onClick((): void => { router.back(); });
-      Text('强调色').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
+      Text($r('app.string.settings_accent')).fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
         .layoutWeight(1);
       if (this.busy) { LoadingProgress().width(20).height(20).color(COLOR_PRIMARY); }
     }.width('100%').height(52).padding({ left: 8, right: 16 }).alignItems(VerticalAlign.Center);
@@ -199,7 +200,7 @@ struct AccentColorPage {
   }
 
   @Builder
-  section(title: string, subtitle: string) {
+  section(title: ResourceStr, subtitle: ResourceStr) {
     Column({ space: 3 }) {
       Text(title).fontSize(15).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY)
         .width('100%');
@@ -213,19 +214,19 @@ struct AccentColorPage {
       if (this.namePreviews.length === 0 && this.profilePreviews.length === 0) {
         Column({ space: 9 }) {
           LoadingProgress().width(34).height(34).color(COLOR_PRIMARY);
-          Text('正在等待色板…').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
-          Text('色板由 Telegram 服务器在登录后下发').fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.accent_waiting_palette')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.accent_palette_from_server')).fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else {
         Scroll() {
           Column({ space: 14 }) {
             Column({ space: 12 }) {
-              this.section('名字颜色', '影响他人看到的你的名字、回复条与链接预览颜色');
+              this.section($r('app.string.accent_name_colour'), $r('app.string.accent_name_colour_sub'));
               Column({ space: 4 }) {
-                Text(this.myName !== '' ? this.myName : '你的名字')
+                Text(this.myName !== '' ? this.myName : $r('app.string.accent_your_name'))
                   .fontSize(14).fontWeight(FontWeight.Medium)
                   .fontColor(this.previewNameColor());
-                Text('群聊中你的消息在他人设备上的名字效果')
+                Text($r('app.string.accent_preview_note'))
                   .fontSize(12).fontColor(COLOR_TEXT_PRIMARY);
               }
               .width('100%').alignItems(HorizontalAlign.Start)
@@ -241,7 +242,7 @@ struct AccentColorPage {
             .width('100%').padding(14).backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
 
             Column({ space: 12 }) {
-              this.section('资料页颜色', '影响你个人资料页顶部的配色');
+              this.section($r('app.string.accent_profile_colour'), $r('app.string.accent_profile_colour_sub'));
               Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
                 ForEach(this.profilePreviews, (preview: AccentPreview) => {
                   Column() {
@@ -252,7 +253,7 @@ struct AccentColorPage {
             }
             .width('100%').padding(14).backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
 
-            Text('多彩渐变色为 Telegram Premium 专属，非会员选择时服务器会拒绝。设置会同步到你的所有设备。')
+            Text($r('app.string.accent_premium_note'))
               .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).lineHeight(18).width('100%');
           }.width('100%').padding({ left: 12, right: 12, bottom: this.bottomSafe + 24 });
         }.layoutWeight(1).width('100%').scrollBar(BarState.Off);

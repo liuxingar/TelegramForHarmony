@@ -5,6 +5,7 @@ import {
   CallTone, ParsedCallContent, callStatus, formatCallTime as fullCallTime,
   parseCallContent
 } from '../util/CallHistoryPresentation';
+import { str } from '../util/strings';
 
 const DOWNLOAD_PRIORITY: number = 1;
 const PAGE_LIMIT: number = 50;
@@ -363,10 +364,10 @@ export class CallsStore {
       if (reset) {
         if (cache.loaded) {
           this.loadState = cache.items.length > 0 ? 'ready' : 'empty';
-          this.syncError = '同步失败，点击重试';
+          this.syncError = str('cs_sync_failed_tap');
         } else {
           this.loadState = 'error';
-          this.syncError = '通话记录加载失败';
+          this.syncError = str('calls_load_failed');
         }
       } else {
         this.pageState = 'error';
@@ -418,7 +419,7 @@ export class CallsStore {
       this.resolvingChats.delete(chatId);
       if (!this.active) { return; }
       const rawTitle = (chat['title'] as string | undefined) ?? '';
-      const title = rawTitle !== '' ? rawTitle : '已删除账户';
+      const title = rawTitle !== '' ? rawTitle : str('deleted_account');
       const photo = chat['photo'] as TdObject | undefined;
       const small = photo?.['small'] as TdObject | undefined;
       const local = small?.['local'] as TdObject | undefined;
@@ -432,7 +433,7 @@ export class CallsStore {
     }).catch((error: TdError): void => {
       this.resolvingChats.delete(chatId);
       if (!this.active) { return; }
-      const fallback: PeerInfo = { title: '未知聊天', initials: '?', avatarPath: '' };
+      const fallback: PeerInfo = { title: str('cs_unknown_chat'), initials: '?', avatarPath: '' };
       this.peers.set(chatId, fallback);
       this.patchChat(chatId, fallback);
       console.error(`CallsStore.getChat(${chatId}) failed: ${error.message}`);
@@ -466,7 +467,7 @@ export class CallsStore {
     if (!completed || path === '') { return; }
     this.fileChats.delete(id);
     for (const chatId of chatIds) {
-      const current = this.peers.get(chatId) ?? { title: '未知聊天', initials: '?', avatarPath: '' };
+      const current = this.peers.get(chatId) ?? { title: str('cs_unknown_chat'), initials: '?', avatarPath: '' };
       const peer: PeerInfo = { title: current.title, initials: current.initials, avatarPath: path };
       this.peers.set(chatId, peer);
       this.patchChat(chatId, peer);
@@ -570,7 +571,7 @@ export class CallsStore {
     const local = small?.['local'] as TdObject | undefined;
     const completed = (local?.['is_downloading_completed'] as boolean | undefined) ?? false;
     const path = completed ? ((local?.['path'] as string | undefined) ?? '') : '';
-    const current = this.peers.get(chatId) ?? { title: '未知聊天', initials: '?', avatarPath: '' };
+    const current = this.peers.get(chatId) ?? { title: str('cs_unknown_chat'), initials: '?', avatarPath: '' };
     const peer: PeerInfo = { title: current.title, initials: current.initials, avatarPath: path };
     this.peers.set(chatId, peer);
     this.patchChat(chatId, peer);

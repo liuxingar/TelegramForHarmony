@@ -8,6 +8,7 @@ import {
 import {
   COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
+import { plural, str } from '../../util/strings';
 
 const CARD_RADIUS: number = 14;
 
@@ -92,13 +93,13 @@ struct StickerSetsPage {
     setStickerSetInstalled(row.id, !archived, archived).then((): void => {
       if (!this.active) { return; }
       this.busyId = '';
-      promptAction.showToast({ message: archived ? '已归档' : '已恢复', duration: 1400 });
+      promptAction.showToast({ message: archived ? $r('app.string.sticker_archived') : $r('app.string.sticker_restored'), duration: 1400 });
       this.load();
     }).catch((error: TdError): void => {
       if (!this.active) { return; }
       this.busyId = '';
       console.error(`StickerSetsPage.archive failed: ${error.message}`);
-      promptAction.showToast({ message: '操作失败，请重试', duration: 1600 });
+      promptAction.showToast({ message: $r('app.string.action_failed_retry'), duration: 1600 });
     });
   }
 
@@ -108,12 +109,12 @@ struct StickerSetsPage {
     setStickerSetInstalled(row.id, false, false).then((): void => {
       if (!this.active) { return; }
       this.busyId = '';
-      promptAction.showToast({ message: '贴纸包已移除', duration: 1400 });
+      promptAction.showToast({ message: $r('app.string.sticker_set_removed'), duration: 1400 });
       this.load();
     }).catch((): void => {
       if (!this.active) { return; }
       this.busyId = '';
-      promptAction.showToast({ message: '移除失败', duration: 1500 });
+      promptAction.showToast({ message: $r('app.string.remove_failed'), duration: 1500 });
     });
   }
 
@@ -129,7 +130,7 @@ struct StickerSetsPage {
     reorderInstalledStickerSets(next.map((r: StickerSetRow): string => r.id))
       .catch((error: TdError): void => {
         console.error(`StickerSetsPage.reorder failed: ${error.message}`);
-        promptAction.showToast({ message: '排序保存失败', duration: 1500 });
+        promptAction.showToast({ message: $r('app.string.sticker_reorder_failed'), duration: 1500 });
       });
   }
 
@@ -140,7 +141,7 @@ struct StickerSetsPage {
         SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(24).fontColor([COLOR_TEXT_PRIMARY]);
       }.width(40).height(40).borderRadius(20).backgroundColor(Color.Transparent)
       .onClick((): void => { router.back(); });
-      Text('贴纸包').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
+      Text($r('app.string.settings_stickers')).fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
         .layoutWeight(1);
       if (this.busyId !== '') { LoadingProgress().width(20).height(20).color(COLOR_PRIMARY); }
     }.width('100%').height(52).padding({ left: 8, right: 16 }).alignItems(VerticalAlign.Center);
@@ -150,10 +151,10 @@ struct StickerSetsPage {
   setRow(row: StickerSetRow, index: number, isArchived: boolean) {
     Row({ space: 10 }) {
       Column({ space: 2 }) {
-        Text(row.title !== '' ? row.title : '未命名贴纸包')
+        Text(row.title !== '' ? row.title : $r('app.string.sticker_set_untitled'))
           .fontSize(16).fontColor(COLOR_TEXT_PRIMARY)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
-        Text(`${row.count} 张贴纸`).fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
+        Text(plural('sticker_set_count', row.count, row.count)).fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
       if (!isArchived && index > 0) {
         Button() {
@@ -181,7 +182,7 @@ struct StickerSetsPage {
       this.header();
       Row({ space: 8 }) {
         SymbolGlyph($r('sys.symbol.magnifyingglass')).fontSize(16).fontColor([COLOR_TEXT_SECONDARY]);
-        TextInput({ placeholder: '搜索已安装的贴纸包', text: this.query })
+        TextInput({ placeholder: $r('app.string.sticker_search'), text: this.query })
           .fontSize(15).layoutWeight(1).backgroundColor(Color.Transparent).padding(0)
           .onChange((value: string): void => this.onQueryChange(value));
       }
@@ -190,17 +191,17 @@ struct StickerSetsPage {
       if (this.loadState === 'loading') {
         Column({ space: 9 }) {
           LoadingProgress().width(32).height(32).color(COLOR_PRIMARY);
-          Text('正在加载贴纸包…').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.sticker_loading')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else if (this.loadState === 'error') {
         Column({ space: 10 }) {
-          Text('加载失败').fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
-          Button('重新加载').onClick((): void => this.load());
+          Text($r('app.string.load_failed')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
+          Button($r('app.string.settings_reload')).onClick((): void => this.load());
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else {
         Scroll() {
           Column({ space: 12 }) {
-            Text(`已安装 · ${this.installed.length}`).fontSize(12)
+            Text(str('sticker_installed_count', this.installed.length)).fontSize(12)
               .fontColor(COLOR_TEXT_SECONDARY).width('100%').padding({ left: 4 });
             Column() {
               ForEach(this.installed, (row: StickerSetRow, index: number) => {
@@ -211,7 +212,7 @@ struct StickerSetsPage {
               }, (row: StickerSetRow): string => `inst_${row.id}`);
             }.width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
             if (this.archived.length > 0) {
-              Text(`已归档 · ${this.archived.length}`).fontSize(12)
+              Text(str('sticker_archived_count', this.archived.length)).fontSize(12)
                 .fontColor(COLOR_TEXT_SECONDARY).width('100%').padding({ left: 4 });
               Column() {
                 ForEach(this.archived, (row: StickerSetRow, index: number) => {
@@ -222,7 +223,7 @@ struct StickerSetsPage {
                 }, (row: StickerSetRow): string => `arch_${row.id}`);
               }.width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
             }
-            Text('归档的贴纸包会从输入面板隐藏，但仍保留在账号中，可随时恢复。')
+            Text($r('app.string.sticker_archive_note'))
               .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).lineHeight(18).width('100%');
           }.width('100%').padding({ left: 12, right: 12, bottom: this.bottomSafe + 24 });
         }.layoutWeight(1).width('100%').scrollBar(BarState.Off);

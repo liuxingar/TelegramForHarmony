@@ -18,6 +18,12 @@ export const KEY_THREE_LINES: string = 'chatListThreeLines'; // chat list row sh
 export const KEY_NIGHT_MODE: string = 'nightMode';         // 'system' | 'dark' | 'light'
 export const KEY_REDUCE_ANIM: string = 'reduceAnimations'; // stop autoplaying animated stickers
 export const KEY_SEND_BY_ENTER: string = 'sendByEnter';    // Enter sends instead of newline
+// 'default' (follow system) or a BCP-47 tag. The language actually in force is
+// the platform's — setAppPreferredLanguage() persists on its own and this is
+// never read back to apply it. It exists because the platform can report the
+// effective language but not whether the user chose it, and the settings page
+// has to know which row to tick.
+export const KEY_APP_LANGUAGE: string = 'appLanguage';
 // Power saving. Threshold: 0 = off, 10..100 = activate at/below this SOC,
 // 101 = always on. User choices are kept separately from the derived active
 // flag, so leaving low-power mode restores the exact previous behaviour.
@@ -286,6 +292,7 @@ export async function initSettings(context: common.Context): Promise<void> {
     AppStorage.setOrCreate(KEY_THREE_LINES, await s.get(KEY_THREE_LINES, false) as boolean);
     AppStorage.setOrCreate(KEY_REDUCE_ANIM, await s.get(KEY_REDUCE_ANIM, false) as boolean);
     AppStorage.setOrCreate(KEY_SEND_BY_ENTER, await s.get(KEY_SEND_BY_ENTER, false) as boolean);
+    AppStorage.setOrCreate(KEY_APP_LANGUAGE, await s.get(KEY_APP_LANGUAGE, 'default') as string);
     AppStorage.setOrCreate(
       KEY_POWER_THRESHOLD,
       await s.get(KEY_POWER_THRESHOLD, POWER_THRESHOLD_DEFAULT) as number

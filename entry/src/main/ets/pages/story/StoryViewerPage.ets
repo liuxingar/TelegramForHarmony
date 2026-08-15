@@ -299,8 +299,8 @@ struct StoryViewerPage {
       }
       if (this.loadFailed) {
         Column({ space: 10 }) {
-          Text('这条故事暂时无法查看').fontSize(14).fontColor('#B8C4CF');
-          Button('关闭').onClick((): void => router.back());
+          Text($r('app.string.story_unavailable')).fontSize(14).fontColor('#B8C4CF');
+          Button($r('app.string.close')).onClick((): void => router.back());
         }
         .width('100%').height('100%').justifyContent(FlexAlign.Center);
       }

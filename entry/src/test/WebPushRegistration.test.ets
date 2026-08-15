@@ -126,7 +126,7 @@ export default function webPushRegistrationTest() {
 
     it('reports_malformed_json_without_throwing', 0, () => {
       const r = parseSubscriptionJson('{ endpoint: 缺引号 }');
-      expect(r.error.includes('JSON')).assertTrue();
+      expect(r.error).assertEqual('wp_bad_json');
       expect(r.config.endpoint).assertEqual('');
     });
 

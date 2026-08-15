@@ -1,0 +1,230 @@
+import { i18n } from '@kit.LocalizationKit';
+
+// Dates, times and numbers are *formatting*, not copy. English is not a word
+// swap but a structure swap — "3月5日" → "Mar 5", 24-hour → AM/PM, "1234.5" →
+// "1,234.5" — so putting "${m}月${d}日" in string.json would produce English
+// that is grammatical and still wrong. Those go through Intl; only the
+// surrounding sentence ("最近上线于 %1$s") lives in string.json.
+//
+// @ohos.intl is deprecated since API 20 in favour of the standard global Intl,
+// which is what this module uses.
+
+// Used when the platform API is unavailable — host unit tests, where nothing
+// installs an application context. Keeping it zh-CN means the existing date
+// assertions stay meaningful instead of silently becoming locale-dependent.
+const FALLBACK_LOCALE = 'zh-CN';
+
+// Left to ICU. zh-CN's own default is 12-hour with 上午/下午, which is not what
+// the app has ever shown, so on a device the system setting decides instead —
+// this value only applies when there is no platform to ask.
+const AUTO_HOUR_CYCLE = 'auto';
+
+let localeTag: string = '';
+let hourCycle: string = '';
+// Building a formatter loads ICU pattern data, and formatTime() runs once per
+// chat row on every list rebuild, so each one is built once and reused.
+let clockFmt: Intl.DateTimeFormat | null = null;
+let weekdayFmt: Intl.DateTimeFormat | null = null;
+let monthDayFmt: Intl.DateTimeFormat | null = null;
+let fullDateFmt: Intl.DateTimeFormat | null = null;
+let monthDayTimeFmt: Intl.DateTimeFormat | null = null;
+let fullDateTimeFmt: Intl.DateTimeFormat | null = null;
+
+export function currentLocale(): string {
+  if (localeTag === '') {
+    let tag: string = '';
+    try {
+      tag = i18n.System.getAppPreferredLanguage();
+    } catch (e) {
+      tag = '';
+    }
+    localeTag = tag !== '' ? tag : FALLBACK_LOCALE;
+  }
+  return localeTag;
+}
+
+// 12- or 24-hour clock is a device setting, not a property of the language:
+// the same zh-CN user may want either. Reading it here is also what keeps the
+// hardcoded language-code comparison that the platform guidance forbids out of
+// this file — nothing here ever asks "is the locale Chinese?".
+function resolvedHourCycle(): string {
+  if (hourCycle === '') {
+    try {
+      hourCycle = i18n.System.is24HourClock() ? 'h23' : 'h12';
+    } catch (e) {
+      hourCycle = AUTO_HOUR_CYCLE;
+    }
+  }
+  return hourCycle;
+}
+
+function withHourCycle(opts: Intl.DateTimeFormatOptions): Intl.DateTimeFormatOptions {
+  // Written out rather than assigned from the variable: hourCycle is a union of
+  // string literals, and a plain string does not satisfy it.
+  const hc = resolvedHourCycle();
+  if (hc === 'h23') {
+    opts.hourCycle = 'h23';
+  } else if (hc === 'h12') {
+    opts.hourCycle = 'h12';
+  }
+  return opts;
+}
+
+// Must be called after i18n.System.setAppPreferredLanguage(): resources reload
+// themselves, but the formatters cached here still carry the old locale and
+// would keep rendering dates in the language the user just left.
+export function refreshLocale(): void {
+  localeTag = '';
+  hourCycle = '';
+  clockFmt = null;
+  weekdayFmt = null;
+  monthDayFmt = null;
+  fullDateFmt = null;
+  monthDayTimeFmt = null;
+  fullDateTimeFmt = null;
+}
+
+// Test seams: force a locale and a clock without a running platform.
+export function setLocaleForTest(tag: string): void {
+  refreshLocale();
+  localeTag = tag;
+}
+
+export function setHourCycleForTest(use24: boolean): void {
+  hourCycle = use24 ? 'h23' : 'h12';
+  clockFmt = null;
+  monthDayTimeFmt = null;
+  fullDateTimeFmt = null;
+}
+
+function pad2(n: number): string {
+  return n < 10 ? `0${n}` : `${n}`;
+}
+
+// 2-digit rather than numeric hours: it keeps zh-CN at the "09:05" the app has
+// always shown, instead of quietly switching every timestamp to "9:05".
+export function clockTime(d: Date): string {
+  if (clockFmt === null) {
+    try {
+      const opts: Intl.DateTimeFormatOptions = { hour: '2-digit', minute: '2-digit' };
+      clockFmt = new Intl.DateTimeFormat(currentLocale(), withHourCycle(opts));
+    } catch (e) {
+      return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    }
+  }
+  return clockFmt.format(d);
+}
+
+// zh-CN "周二", en-US "Tue".
+export function weekdayShort(d: Date): string {
+  if (weekdayFmt === null) {
+    try {
+      const opts: Intl.DateTimeFormatOptions = { weekday: 'short' };
+      weekdayFmt = new Intl.DateTimeFormat(currentLocale(), opts);
+    } catch (e) {
+      return '';
+    }
+  }
+  return weekdayFmt.format(d);
+}
+
+// month:'short' rather than 'numeric' — zh-CN renders numeric M/d as "7/6",
+// losing the 月/日 the app shows today; 'short' gives "7月6日" and "Jul 6".
+export function monthDay(d: Date): string {
+  if (monthDayFmt === null) {
+    try {
+      const opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };
+      monthDayFmt = new Intl.DateTimeFormat(currentLocale(), opts);
+    } catch (e) {
+      return `${d.getMonth() + 1}/${d.getDate()}`;
+    }
+  }
+  return monthDayFmt.format(d);
+}
+
+// zh-CN "2024年12月31日", en-US "Dec 31, 2024".
+export function fullDate(d: Date): string {
+  if (fullDateFmt === null) {
+    try {
+      const opts: Intl.DateTimeFormatOptions = {
+        year: 'numeric', month: 'short', day: 'numeric'
+      };
+      fullDateFmt = new Intl.DateTimeFormat(currentLocale(), opts);
+    } catch (e) {
+      return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+    }
+  }
+  return fullDateFmt.format(d);
+}
+
+// Date and time in one formatter rather than two joined by a space: the
+// separator and the order are locale business — zh-CN wants "2024年12月31日
+// 09:05", en-US wants "Dec 31, 2024, 9:05 AM" with a comma.
+export function monthDayTime(d: Date): string {
+  if (monthDayTimeFmt === null) {
+    try {
+      const opts: Intl.DateTimeFormatOptions = {
+        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+      };
+      monthDayTimeFmt = new Intl.DateTimeFormat(currentLocale(), withHourCycle(opts));
+    } catch (e) {
+      return `${monthDay(d)} ${clockTime(d)}`;
+    }
+  }
+  return monthDayTimeFmt.format(d);
+}
+
+export function fullDateTime(d: Date): string {
+  if (fullDateTimeFmt === null) {
+    try {
+      const opts: Intl.DateTimeFormatOptions = {
+        year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+      };
+      fullDateTimeFmt = new Intl.DateTimeFormat(currentLocale(), withHourCycle(opts));
+    } catch (e) {
+      return `${fullDate(d)} ${clockTime(d)}`;
+    }
+  }
+  return fullDateTimeFmt.format(d);
+}
+
+// Only the number: the unit symbol stays a resource string. B/KB/MB/GB are not
+// reliably present in every ICU build's unit data, and CLDR's own short forms
+// ("532 byte") read worse than the symbols the app already uses. What Intl is
+// genuinely needed for here is the decimal separator — "1,2 MB" in German.
+export function decimal(value: number, fractionDigits: number): string {
+  try {
+    const opts: Intl.NumberFormatOptions = {
+      minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits
+    };
+    return new Intl.NumberFormat(currentLocale(), opts).format(value);
+  } catch (e) {
+    return value.toFixed(fractionDigits);
+  }
+}
+
+// Trailing zeros dropped rather than padded — "1.5 TON", not "1.500 TON".
+export function decimalUpTo(value: number, maxFractionDigits: number): string {
+  try {
+    const opts: Intl.NumberFormatOptions = {
+      minimumFractionDigits: 0, maximumFractionDigits: maxFractionDigits
+    };
+    return new Intl.NumberFormat(currentLocale(), opts).format(value);
+  } catch (e) {
+    return value.toFixed(maxFractionDigits).replace(/\.?0+$/, '');
+  }
+}
+
+// Gift values come from TDLib in USD cents regardless of where the user is, so
+// the currency is fixed and only its presentation is localised: "$12.34" in
+// en-US, "US$12.34" in zh-CN — the disambiguating prefix matters when the
+// reader's own currency also uses a dollar sign.
+export function usd(cents: number): string {
+  const amount = cents / 100;
+  try {
+    const opts: Intl.NumberFormatOptions = { style: 'currency', currency: 'USD' };
+    return new Intl.NumberFormat(currentLocale(), opts).format(amount);
+  } catch (e) {
+    return `$${amount.toFixed(2)}`;
+  }
+}

@@ -127,9 +127,9 @@ export struct ChatListView {
           Circle({ width: 58, height: 58 }).fill($r('app.color.surface_alt'));
           LoadingProgress().width(28).height(28).color(COLOR_PRIMARY);
         }
-        Text(this.listKey === 'archive' ? '正在同步归档…' : '正在加载聊天…')
+        Text(this.listKey === 'archive' ? $r('app.string.cl_syncing_archive') : $r('app.string.cl_loading_chats'))
           .fontSize(15).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-        Text('已有内容会在同步后自动出现')
+        Text($r('app.string.cl_content_appears'))
           .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
       } else if (this.loadFailed) {
         Row() {
@@ -139,13 +139,13 @@ export struct ChatListView {
         .width(58).height(58).borderRadius(29)
         .backgroundColor($r('app.color.surface_alt'))
         .justifyContent(FlexAlign.Center);
-        Text(this.listKey === 'archive' ? '归档加载失败' : '聊天加载失败')
+        Text(this.listKey === 'archive' ? $r('app.string.cl_archive_failed') : $r('app.string.cl_chats_failed'))
           .fontSize(17).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-        Text('请检查网络后重试，已有聊天不会受到影响')
+        Text($r('app.string.cl_check_network'))
           .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center);
         Row({ space: 6 }) {
           SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(14).fontColor([Color.White]);
-          Text('重新加载').fontSize(14).fontWeight(FontWeight.Medium).fontColor(Color.White);
+          Text($r('app.string.settings_reload')).fontSize(14).fontWeight(FontWeight.Medium).fontColor(Color.White);
         }
         .height(38).padding({ left: 15, right: 16 }).borderRadius(19)
         .backgroundColor(COLOR_PRIMARY)
@@ -160,13 +160,13 @@ export struct ChatListView {
         .width(56).height(56).borderRadius(28)
         .backgroundColor($r('app.color.surface_alt'))
         .justifyContent(FlexAlign.Center);
-        Text(this.listKey === 'archive' ? '暂无已归档聊天' : '这个文件夹还没有聊天')
+        Text(this.listKey === 'archive' ? $r('app.string.cl_no_archived') : $r('app.string.cl_folder_empty'))
           .fontSize(17).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
         if (this.listKey === 'archive') {
-          Text('长按首页中的聊天，选择“归档”后会显示在这里')
+          Text($r('app.string.cl_archive_hint'))
             .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center);
         } else {
-          Text('可以从聊天的长按菜单中添加')
+          Text($r('app.string.cl_add_hint'))
             .fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
         }
       }
@@ -190,9 +190,9 @@ export struct ChatListView {
             Row({ space: 7 }) {
               SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
                 .fontSize(14).fontColor([COLOR_PRIMARY]);
-              Text('归档同步失败，当前显示的是本地内容')
+              Text($r('app.string.cl_archive_sync_failed'))
                 .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).layoutWeight(1);
-              Text('重试').fontSize(12).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY);
+              Text($r('app.string.settings_retry')).fontSize(12).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY);
             }
             .height(40).padding({ left: 14, right: 14 })
             .backgroundColor($r('app.color.surface_alt'))
@@ -220,7 +220,7 @@ export struct ChatListView {
           ListItem() {
             Row({ space: 6 }) {
               SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(13).fontColor([COLOR_PRIMARY]);
-              Text('加载更多失败，点击重试').fontSize(12).fontColor(COLOR_PRIMARY);
+              Text($r('app.string.load_more_failed')).fontSize(12).fontColor(COLOR_PRIMARY);
             }
             .width('100%').height(44).justifyContent(FlexAlign.Center)
             .stateStyles({ normal: this.actionNormalStyle, pressed: this.actionPressedStyle })

@@ -2,6 +2,7 @@ import { common, wantAgent } from '@kit.AbilityKit';
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { avSession } from '@kit.AVSessionKit';
 import { KEY_BG_PLAY_LIVE } from '../store/AppSettings';
+import { str } from '../util/strings';
 
 // One live-room page can be active at a time. Serialize changes because
 // start/update/stop are asynchronous system calls and a quick mute + back
@@ -94,7 +95,7 @@ class LiveStreamBackgroundTask {
       session.on('play', (): void => {});
       session.on('pause', (): void => {});
       session.on('stop', (): void => {});
-      await session.setAVMetadata({ assetId: 'telegram_live', title: '正在直播' });
+      await session.setAVMetadata({ assetId: 'telegram_live', title: str('cp_live_now') });
       await session.setAVPlaybackState({
         state: avSession.PlaybackState.PLAYBACK_STATE_PLAY
       });

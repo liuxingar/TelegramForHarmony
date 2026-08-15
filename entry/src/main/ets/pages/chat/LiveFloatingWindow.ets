@@ -20,6 +20,7 @@ import {
 import {
   FloatingDragAnchor, FloatingDragBounds, clampFloatingTranslation, dragFloatingTranslation
 } from '../../util/floatingDrag';
+import { str } from '../../util/strings';
 
 const FLOAT_BACKGROUND: string = '#101820';
 const FLOAT_PANEL: string = '#E9142029';
@@ -159,7 +160,7 @@ export class LiveFloatingWindowController {
     large: false,
     title: '',
     participantCount: 0,
-    status: '正在切换到悬浮窗…',
+    status: str('lfw_switching'),
     hasVideo: false,
     recovering: false,
     isRtmp: false,
@@ -246,11 +247,11 @@ export class LiveFloatingWindowController {
     this.state = {
       visible: true,
       large: false,
-      title: descriptor.title !== '' ? descriptor.title : '正在直播',
+      title: descriptor.title !== '' ? descriptor.title : str('lfw_live'),
       participantCount: descriptor.participantCount,
       status: handoff.visualReady
-        ? (this.requestedEndpoint !== '' ? '直播播放中' : '直播音频播放中')
-        : '正在切换到悬浮窗…',
+        ? (this.requestedEndpoint !== '' ? str('lfw_playing') : str('lfw_audio_playing'))
+        : str('lfw_switching'),
       hasVideo: this.requestedEndpoint !== '',
       recovering: !handoff.mediaConnected,
       isRtmp: descriptor.isRtmp,
@@ -442,7 +443,7 @@ export class LiveFloatingWindowController {
   private async openFullPage(descriptor: FloatingLiveDescriptor): Promise<void> {
     this.state.actionBusy = true;
     this.state.large = true;
-    this.state.status = '正在返回直播…';
+    this.state.status = str('lfw_returning');
     this.emit();
     const params: Record<string, Object> = {
       'groupCallId': descriptor.groupCallId,
@@ -459,7 +460,7 @@ export class LiveFloatingWindowController {
     } catch (caught) {
       if (this.descriptor?.groupCallId === descriptor.groupCallId) {
         this.state.actionBusy = false;
-        this.state.status = this.state.hasVideo ? '直播播放中' : '直播音频播放中';
+        this.state.status = this.state.hasVideo ? str('lfw_playing') : str('lfw_audio_playing');
         this.emit();
       }
       console.error(`LiveFloating.restore failed: ${caught}`);
@@ -516,7 +517,7 @@ export class LiveFloatingWindowController {
         if (!this.isCurrent(session, sequence) || !descriptor.isRtmp) { return; }
         if (received && this.state.hasVideo) { this.state.visualReady = true; }
         this.setPlaybackState(
-          received ? (this.state.hasVideo ? '直播播放中' : '直播音频播放中') : '直播缓冲中…',
+          received ? (this.state.hasVideo ? str('lfw_playing') : str('lfw_audio_playing')) : str('lfw_buffering'),
           this.state.hasVideo,
           !received
         );
@@ -614,14 +615,14 @@ export class LiveFloatingWindowController {
       session.resumeMedia();
       this.bindCurrentSurface();
       this.setPlaybackState(
-        this.state.hasVideo ? '直播播放中' : '直播音频播放中',
+        this.state.hasVideo ? str('lfw_playing') : str('lfw_audio_playing'),
         this.state.hasVideo,
         false
       );
       return;
     }
     if (this.hasJoinedOnce) {
-      this.setPlaybackState('网络波动，正在恢复…', this.state.hasVideo, true);
+      this.setPlaybackState(str('lfw_recovering'), this.state.hasVideo, true);
       this.scheduleReconnect(RECONNECT_GRACE_MS);
     }
   }
@@ -643,10 +644,10 @@ export class LiveFloatingWindowController {
       }
       this.state.ended = true;
       this.state.error = false;
-      this.setPlaybackState('直播已结束', this.state.hasVideo, false);
+      this.setPlaybackState(str('lfw_ended'), this.state.hasVideo, false);
     } else if (state.needRejoin || (this.hasJoinedOnce && !state.isJoined)) {
       this.state.ended = false;
-      this.setPlaybackState('正在重新加入直播…', this.state.hasVideo, true);
+      this.setPlaybackState(str('lfw_rejoining'), this.state.hasVideo, true);
       this.scheduleReconnect(500);
     } else {
       this.state.ended = false;
@@ -672,7 +673,7 @@ export class LiveFloatingWindowController {
       // TDLib has delivered the loaded participants. Keep the handed-off
       // source alive through that gap so minimizing cannot blank the video.
       if (this.primarySource === null) {
-        this.setPlaybackState('直播音频播放中', false, this.state.recovering);
+        this.setPlaybackState(str('lfw_audio_playing'), false, this.state.recovering);
       }
       return;
     }
@@ -737,7 +738,7 @@ export class LiveFloatingWindowController {
     if (ids.length === 0) {
       this.requestedEndpoint = '';
       this.state.visualReady = false;
-      this.setPlaybackState('等待主播画面…', false, this.state.recovering);
+      this.setPlaybackState(str('lfw_waiting_host'), false, this.state.recovering);
       return;
     }
     this.requestedEndpoint = 'unified';
@@ -768,7 +769,7 @@ export class LiveFloatingWindowController {
       this.bindCurrentSurface();
       this.refreshGroupCall();
       this.state.error = true;
-      this.setPlaybackState('连接仍未恢复 · 返回直播重试', this.state.hasVideo, true);
+      this.setPlaybackState(str('lfw_still_down'), this.state.hasVideo, true);
     }, Math.max(0, delayMs));
   }
 
@@ -1015,7 +1016,7 @@ struct FloatingLiveOverlay {
                     (this.state.error ? FLOAT_RED :
                       (this.state.recovering ? '#F5A623' : FLOAT_RED))
                 );
-                Text(this.state.ended ? '结束' : (this.state.hasVideo ? 'LIVE' : 'AUDIO'))
+                Text(this.state.ended ? $r('app.string.lfw_end') : (this.state.hasVideo ? 'LIVE' : 'AUDIO'))
                   .fontSize(10).fontWeight(FontWeight.Bold).fontColor(Color.White);
                 Text(this.state.title).fontSize(11).fontColor(FLOAT_TEXT)
                   .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -1032,7 +1033,7 @@ struct FloatingLiveOverlay {
               Blank()
                 .onClick((): void => this.onPlayerTap());
               Row({ space: 7 }) {
-                Text(this.state.isMuted ? '麦克风已关闭' : '麦克风已开启')
+                Text(this.state.isMuted ? $r('app.string.lfw_mic_off') : $r('app.string.lfw_mic_on'))
                   .fontSize(10).fontColor(this.state.isMuted ? FLOAT_SUBTEXT : FLOAT_GREEN)
                   .layoutWeight(1);
                 Button() {
@@ -1043,7 +1044,7 @@ struct FloatingLiveOverlay {
                       SymbolGlyph($r('sys.symbol.plus_square_on_square'))
                         .fontSize(14).fontColor([Color.White]);
                     }
-                    Text(this.state.actionBusy ? '正在返回' : '返回直播')
+                    Text(this.state.actionBusy ? $r('app.string.lfw_returning_short') : $r('app.string.lfw_return'))
                       .fontSize(11).fontColor(Color.White);
                   }
                 }

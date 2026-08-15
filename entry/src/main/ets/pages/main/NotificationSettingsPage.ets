@@ -10,6 +10,7 @@ import {
 import {
   KEY_NOTIFY_PRIVATE, KEY_NOTIFY_GROUP, KEY_NOTIFY_CHANNEL, KEY_WEBPUSH_ENABLED, setBoolean
 } from '../../store/AppSettings';
+import { str } from '../../util/strings';
 
 const CARD_RADIUS: number = 14;
 
@@ -80,25 +81,25 @@ struct NotificationSettingsPage {
     setScopeSettings(scope, next).catch((error: TdError): void => {
       console.error(`NotificationSettingsPage.update failed: ${error.message}`);
       this.applyLocal(scope, current);
-      promptAction.showToast({ message: '通知设置更新失败', duration: 1600 });
+      promptAction.showToast({ message: $r('app.string.ns_update_failed'), duration: 1600 });
     });
   }
 
   private resetAll(): void {
     promptAction.showDialog({
-      title: '恢复默认通知设置',
-      message: '所有会话的通知例外也会被清除。',
+      title: $r('app.string.ns_reset'),
+      message: $r('app.string.ns_reset_confirm'),
       buttons: [
-        { text: '取消', color: '#8E8E93' },
-        { text: '恢复', color: '#E5484D' }
+        { text: $r('app.string.cancel'), color: '#8E8E93' },
+        { text: $r('app.string.restore'), color: '#E5484D' }
       ]
     }).then((result): void => {
       if (result.index !== 1) { return; }
       resetAllNotificationSettings().then((): void => {
-        promptAction.showToast({ message: '已恢复默认', duration: 1500 });
+        promptAction.showToast({ message: $r('app.string.ns_reset_done'), duration: 1500 });
         this.load();
       }).catch((): void => {
-        promptAction.showToast({ message: '恢复失败，请重试', duration: 1600 });
+        promptAction.showToast({ message: $r('app.string.restore_failed_retry'), duration: 1600 });
       });
     }).catch((): void => {});
   }
@@ -134,40 +135,40 @@ struct NotificationSettingsPage {
   // 里，值参数不会随数据变化重新求值（本页 muteButton 一类的坑仓库里已有记录）。
   @Builder
   privateCard() {
-    this.scopeCard('私聊', SCOPE_PRIVATE, this.privateSettings, false,
+    this.scopeCard($r('app.string.ns_private'), SCOPE_PRIVATE, this.privateSettings, false,
       this.notifyPrivate, (next: boolean): void => setBoolean(KEY_NOTIFY_PRIVATE, next));
   }
 
   @Builder
   groupCard() {
-    this.scopeCard('群组', SCOPE_GROUP, this.groupSettings, true,
+    this.scopeCard($r('app.string.gn_group'), SCOPE_GROUP, this.groupSettings, true,
       this.notifyGroup, (next: boolean): void => setBoolean(KEY_NOTIFY_GROUP, next));
   }
 
   @Builder
   channelCard() {
-    this.scopeCard('频道', SCOPE_CHANNEL, this.channelSettings, true,
+    this.scopeCard($r('app.string.gn_channel'), SCOPE_CHANNEL, this.channelSettings, true,
       this.notifyChannel, (next: boolean): void => setBoolean(KEY_NOTIFY_CHANNEL, next));
   }
 
   @Builder
-  scopeCard(title: string, scope: string, settings: ScopeSettings, hasMentions: boolean,
+  scopeCard(title: ResourceStr, scope: string, settings: ScopeSettings, hasMentions: boolean,
     localOn: boolean, onLocalChange: (next: boolean) => void) {
     Column() {
       Text(title).fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
         .width('100%').padding({ left: 14, top: 12, bottom: 4 });
-      this.switchRowWithHint('在这台设备上通知', '仅本机生效，优先于下面的设置',
+      this.switchRowWithHint(str('ns_device_local'), str('ns_device_local_sub'),
         localOn, onLocalChange);
-      this.switchRowWithHint('接收通知', '同步到你的所有设备',
+      this.switchRowWithHint(str('ns_receive'), str('ns_receive_sub'),
         !settings.muted, (next: boolean): void => this.update(scope, 'muted', !next));
       // 本机已关掉时，账号级的细项对这台设备不起作用，收起来避免误以为生效。
       if (localOn) {
-        this.switchRow('显示消息预览', settings.showPreview,
+        this.switchRow(str('ns_preview'), settings.showPreview,
           (next: boolean): void => this.update(scope, 'showPreview', next));
         if (hasMentions) {
-          this.switchRow('置顶消息通知', !settings.disablePinned,
+          this.switchRow(str('ns_pinned'), !settings.disablePinned,
             (next: boolean): void => this.update(scope, 'disablePinned', !next));
-          this.switchRow('提及我时通知', !settings.disableMentions,
+          this.switchRow(str('ns_mentions'), !settings.disableMentions,
             (next: boolean): void => this.update(scope, 'disableMentions', !next));
         }
       }
@@ -183,18 +184,18 @@ struct NotificationSettingsPage {
           SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(24).fontColor([COLOR_TEXT_PRIMARY]);
         }.width(40).height(40).borderRadius(20).backgroundColor(Color.Transparent)
         .onClick((): void => { router.back(); });
-        Text('通知').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
+        Text($r('app.string.settings_notifications')).fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
           .layoutWeight(1);
       }.width('100%').height(52).padding({ left: 8, right: 16 }).alignItems(VerticalAlign.Center);
       if (this.loadState === 'loading') {
         Column({ space: 9 }) {
           LoadingProgress().width(32).height(32).color(COLOR_PRIMARY);
-          Text('正在读取通知设置…').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.gn_loading')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else if (this.loadState === 'error') {
         Column({ space: 10 }) {
-          Text('加载失败').fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
-          Button('重新加载').onClick((): void => this.load());
+          Text($r('app.string.load_failed')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
+          Button($r('app.string.settings_reload')).onClick((): void => this.load());
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else {
         Scroll() {
@@ -204,8 +205,8 @@ struct NotificationSettingsPage {
             this.channelCard();
             Row({ space: 10 }) {
               Column({ space: 2 }) {
-                Text('群组和频道通知').fontSize(15).fontColor(COLOR_TEXT_PRIMARY);
-                Text('逐个查看和切换，一屏看全哪些会响')
+                Text($r('app.string.gn_title')).fontSize(15).fontColor(COLOR_TEXT_PRIMARY);
+                Text($r('app.string.ns_per_chat_sub'))
                   .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
               }.alignItems(HorizontalAlign.Start).layoutWeight(1);
               SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(16)
@@ -220,8 +221,8 @@ struct NotificationSettingsPage {
             });
             Row({ space: 10 }) {
               Column({ space: 2 }) {
-                Text('自定义推送通道').fontSize(15).fontColor(COLOR_TEXT_PRIMARY);
-                Text(this.webPushEnabled ? '已启用' : '未启用')
+                Text($r('app.string.ns_custom_push')).fontSize(15).fontColor(COLOR_TEXT_PRIMARY);
+                Text(this.webPushEnabled ? $r('app.string.enabled') : $r('app.string.disabled'))
                   .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
               }.alignItems(HorizontalAlign.Start).layoutWeight(1);
               SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(16)
@@ -236,12 +237,12 @@ struct NotificationSettingsPage {
             });
             Row({ space: 10 }) {
               SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(17).fontColor(['#E5484D']);
-              Text('恢复默认通知设置').fontSize(15).fontColor('#E5484D').layoutWeight(1);
+              Text($r('app.string.ns_reset')).fontSize(15).fontColor('#E5484D').layoutWeight(1);
             }
             .width('100%').height(48).padding({ left: 14, right: 14 })
             .backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS)
             .onClick((): void => this.resetAll());
-            Text('优先级从高到低：单个会话的设置 › 本机开关 › 上面的账号级默认设置。')
+            Text($r('app.string.ns_priority_note'))
               .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).lineHeight(18).width('100%');
           }.width('100%').padding({ left: 12, right: 12, bottom: this.bottomSafe + 24 });
         }.layoutWeight(1).width('100%').scrollBar(BarState.Off);

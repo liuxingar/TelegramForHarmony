@@ -6,6 +6,7 @@ import { TdRequest, TdObject, TdError } from '../../tdkit/TdTypes';
 import { promptAction, router, SymbolGlyphModifier } from '@kit.ArkUI';
 import { searchPublicUsers } from '../../store/PublicUserSearch';
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
+import { plural, str } from '../../util/strings';
 
 const CARD_BG: ResourceColor = $r('app.color.surface');
 const CARD_RADIUS: number = 14;
@@ -31,6 +32,8 @@ export struct ContactsPage {
   @State remoteUsers: ContactItem[] = [];
   @State remoteLoading: boolean = false;
   @State searchFocused: boolean = false;
+  // Keyed by the icon name, not the label: a label is display text and
+  // changes with the language, so it cannot serve as an identity.
   @State pressedAction: string = '';
   @State pressedContactId: number = 0;
   @State openingContactId: number = 0;
@@ -275,15 +278,15 @@ export struct ContactsPage {
   private addContactFailureMessage(error: TdError): string {
     const message = error.message.toUpperCase();
     if (message.includes('PHONE_NUMBER_INVALID')) {
-      return '手机号格式不正确，请包含国家或地区代码';
+      return str('ct_bad_phone');
     }
     if (message.includes('USER_NOT_FOUND') || message.includes('PHONE_NUMBER_NOT_OCCUPIED')) {
-      return '未找到使用此号码的 Telegram 用户';
+      return str('ct_no_user');
     }
     if (message.includes('NETWORK') || message.includes('TIMEOUT')) {
-      return '网络连接失败，请稍后重试';
+      return str('network_failed_retry');
     }
-    return '添加联系人失败，请稍后重试';
+    return str('ct_add_failed');
   }
 
   private submitNewContact(): void {
@@ -294,11 +297,11 @@ export struct ContactsPage {
     const lastName = this.addLastName.trim();
     const phone = this.phoneDigits(this.addPhone);
     if (firstName === '') {
-      this.addContactError = '请输入名字';
+      this.addContactError = str('ct_enter_first_name');
       return;
     }
     if (phone.length < 6 || phone.length > 15) {
-      this.addContactError = '请输入包含国家或地区代码的有效手机号';
+      this.addContactError = str('ct_enter_phone');
       return;
     }
     this.addContactError = '';
@@ -319,7 +322,7 @@ export struct ContactsPage {
       }
       this.addContactSaving = false;
       this.addContactSheetOpen = false;
-      promptAction.showToast({ message: `已添加联系人「${firstName}${lastName !== '' ? ' ' + lastName : ''}」`, duration: 1800 });
+      promptAction.showToast({ message: str('ct_added', firstName + (lastName !== '' ? ' ' + lastName : '')), duration: 1800 });
       if (this.store !== null) {
         this.store.reload();
       }
@@ -379,7 +382,7 @@ export struct ContactsPage {
         const params: Record<string, Object> = { 'chatId': id };
         router.pushUrl({ url: 'pages/chat/ChatPage', params: params }).catch((error: Error): void => {
           console.error(`ContactsPage.openChat failed: ${error.message}`);
-          promptAction.showToast({ message: '无法打开聊天，请稍后重试', duration: 1800 });
+          promptAction.showToast({ message: $r('app.string.open_chat_failed'), duration: 1800 });
         });
       }
     }).catch((e: TdError): void => {
@@ -388,7 +391,7 @@ export struct ContactsPage {
       }
       this.openingContactId = 0;
       console.error(`ContactsPage.createPrivateChat failed: ${e.message}`);
-      promptAction.showToast({ message: '无法打开聊天，请稍后重试', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.open_chat_failed'), duration: 1800 });
     });
   }
 
@@ -449,11 +452,11 @@ export struct ContactsPage {
       return;
     }
     promptAction.showDialog({
-      title: '删除联系人',
-      message: `确定从联系人中删除「${name}」吗？聊天记录不会被删除。`,
+      title: $r('app.string.ct_delete'),
+      message: str('ct_delete_confirm', name),
       buttons: [
-        { text: '取消', color: COLOR_TEXT_SECONDARY as string },
-        { text: '删除', color: '#E64646' }
+        { text: $r('app.string.cancel'), color: COLOR_TEXT_SECONDARY as string },
+        { text: $r('app.string.delete'), color: '#E64646' }
       ]
     }).then((result: promptAction.ShowDialogSuccessResponse): void => {
       if (result.index === 1) {
@@ -474,14 +477,14 @@ export struct ContactsPage {
         return;
       }
       this.deletingContactId = 0;
-      promptAction.showToast({ message: `已删除联系人「${name}」`, duration: 1600 });
+      promptAction.showToast({ message: str('ct_deleted', name), duration: 1600 });
     }).catch((error: TdError): void => {
       if (sequence !== this.deleteSequence) {
         return;
       }
       this.deletingContactId = 0;
       console.error(`ContactsPage.removeContact failed: ${error.message}`);
-      promptAction.showToast({ message: '删除联系人失败，请重试', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.ct_delete_failed'), duration: 1800 });
     });
   }
 
@@ -506,11 +509,11 @@ export struct ContactsPage {
   @Builder
   topMenu() {
     Menu() {
-      MenuItem({ content: '新建群组' })
+      MenuItem({ content: $r('app.string.ct_new_group') })
         .onClick((): void => {
           router.pushUrl({ url: 'pages/main/NewGroupPage' });
         });
-      MenuItem({ content: '最近通话' })
+      MenuItem({ content: $r('app.string.ct_recent_calls') })
         .onClick((): void => {
           router.pushUrl({ url: 'pages/main/CallsPage' });
         });
@@ -521,7 +524,7 @@ export struct ContactsPage {
   topBar() {
     Row({ space: 4 }) {
       Column() {
-        Text('联系人')
+        Text($r('app.string.tab_contacts'))
           .fontSize(28).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
           .maxLines(1)
           .translate({ y: this.loading ? 0 : 7 })
@@ -529,7 +532,7 @@ export struct ContactsPage {
             duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
             curve: Curve.EaseOut
           });
-        Text('正在刷新…')
+        Text($r('app.string.refreshing'))
           .height(14).fontSize(11).lineHeight(14)
           .fontColor(COLOR_TEXT_SECONDARY)
           .maxLines(1)
@@ -556,7 +559,7 @@ export struct ContactsPage {
         normal: this.topActionNormalStyle,
         pressed: this.topActionPressedStyle
       })
-      .accessibilityText('联系人更多操作')
+      .accessibilityText($r('app.string.ct_more_actions'))
       .bindMenu(this.topMenu());
     }
     .width('100%').height(TOP_BAR_HEIGHT)
@@ -575,7 +578,7 @@ export struct ContactsPage {
           duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 160),
           curve: Curve.EaseOut
         });
-      TextInput({ text: this.query, placeholder: '搜索联系人或 @用户名' })
+      TextInput({ text: this.query, placeholder: $r('app.string.ct_search_hint') })
         .layoutWeight(1).height(38).fontSize(16)
         .backgroundColor(Color.Transparent).padding(0).borderRadius(0)
         .placeholderColor(COLOR_TEXT_SECONDARY)
@@ -607,7 +610,7 @@ export struct ContactsPage {
           normal: this.topActionNormalStyle,
           pressed: this.topActionPressedStyle
         })
-        .accessibilityText('清空搜索')
+        .accessibilityText($r('app.string.clear_search'))
         .onClick((): void => { this.clearSearch(); })
         .transition(TransitionEffect.OPACITY
           .combine(TransitionEffect.scale({ x: 0.72, y: 0.72 }))
@@ -635,15 +638,15 @@ export struct ContactsPage {
   }
 
   @Builder
-  actionRow(icon: string, bg: string, label: string, detail: string, onTap: () => void) {
+  actionRow(icon: string, bg: string, label: ResourceStr, detail: ResourceStr, onTap: () => void) {
     Row({ space: 14 }) {
       Row() {
         SymbolGlyph($r(icon))
           .fontSize(20)
           .fontColor([Color.White])
           .scale({
-            x: this.pressedAction === label ? 0.9 : 1,
-            y: this.pressedAction === label ? 0.9 : 1
+            x: this.pressedAction === icon ? 0.9 : 1,
+            y: this.pressedAction === icon ? 0.9 : 1
           })
           .animation({
             duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 120),
@@ -669,7 +672,7 @@ export struct ContactsPage {
       SymbolGlyph($r('sys.symbol.chevron_right'))
         .fontSize(16)
         .fontColor([COLOR_TEXT_SECONDARY])
-        .translate({ x: this.pressedAction === label ? 2 : 0 })
+        .translate({ x: this.pressedAction === icon ? 2 : 0 })
         .animation({
           duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 120),
           curve: Curve.EaseOut
@@ -680,10 +683,10 @@ export struct ContactsPage {
     .padding({ left: 12, right: 14 })
     .alignItems(VerticalAlign.Center)
     .borderRadius(CARD_RADIUS - 4)
-    .backgroundColor(this.pressedAction === label ? $r('app.color.surface_alt') : Color.Transparent)
+    .backgroundColor(this.pressedAction === icon ? $r('app.color.surface_alt') : Color.Transparent)
     .scale({
-      x: this.pressedAction === label ? 0.986 : 1,
-      y: this.pressedAction === label ? 0.97 : 1
+      x: this.pressedAction === icon ? 0.986 : 1,
+      y: this.pressedAction === icon ? 0.97 : 1
     })
     .animation({
       duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 120),
@@ -692,7 +695,7 @@ export struct ContactsPage {
     .accessibilityText(`${label}，${detail}`)
     .onTouch((event: TouchEvent): void => {
       if (event.type === TouchType.Down) {
-        this.pressedAction = label;
+        this.pressedAction = icon;
       } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
         this.pressedAction = '';
       }
@@ -710,8 +713,8 @@ export struct ContactsPage {
         this.actionRow(
           'sys.symbol.phone_fill',
           '#34C759',
-          '最近通话',
-          '查看呼入、呼出与未接记录',
+          $r('app.string.ct_recent_calls'),
+          str('ct_recent_calls_sub'),
           (): void => { this.openRecentCalls(); }
         );
       }
@@ -729,7 +732,7 @@ export struct ContactsPage {
     Menu() {
       MenuItem({
         symbolStartIcon: new SymbolGlyphModifier($r('sys.symbol.trash')).fontColor([Color.Red]),
-        content: '删除联系人'
+        content: $r('app.string.ct_delete')
       })
         .onClick((): void => { this.confirmDeleteContact(); });
     }
@@ -915,11 +918,11 @@ export struct ContactsPage {
           .fontSize(28)
           .fontColor([COLOR_TEXT_SECONDARY]);
       }
-      Text('暂无联系人')
+      Text($r('app.string.ct_empty'))
         .fontSize(17)
         .fontWeight(FontWeight.Medium)
         .fontColor(COLOR_TEXT_PRIMARY);
-      Text('可以搜索姓名或 @用户名开始聊天')
+      Text($r('app.string.ct_empty_sub'))
         .fontSize(13)
         .fontColor(COLOR_TEXT_SECONDARY)
         .textAlign(TextAlign.Center);
@@ -947,18 +950,18 @@ export struct ContactsPage {
           .fontSize(28)
           .fontColor(['#E64646']);
       }
-      Text(this.loadError !== '' ? this.loadError : '联系人加载失败')
+      Text(this.loadError !== '' ? this.loadError : $r('app.string.contacts_load_failed'))
         .fontSize(17)
         .fontWeight(FontWeight.Medium)
         .fontColor(COLOR_TEXT_PRIMARY);
-      Text('网络或服务暂时不可用')
+      Text($r('app.string.ct_service_unavailable'))
         .fontSize(13)
         .fontColor(COLOR_TEXT_SECONDARY);
       Row({ space: 6 }) {
         SymbolGlyph($r('sys.symbol.arrow_clockwise'))
           .fontSize(15)
           .fontColor([COLOR_PRIMARY]);
-        Text('重新加载')
+        Text($r('app.string.settings_reload'))
           .fontSize(14)
           .fontWeight(FontWeight.Medium)
           .fontColor(COLOR_PRIMARY);
@@ -971,7 +974,7 @@ export struct ContactsPage {
         normal: this.retryNormalStyle,
         pressed: this.retryPressedStyle
       })
-      .accessibilityText('重新加载联系人')
+      .accessibilityText($r('app.string.ct_reload_contacts'))
       .onClick((): void => { this.retryContacts(); });
     }
     .width('calc(100% - 24vp)')
@@ -994,11 +997,11 @@ export struct ContactsPage {
       SymbolGlyph($r('sys.symbol.magnifyingglass'))
         .fontSize(26)
         .fontColor([COLOR_TEXT_SECONDARY]);
-      Text('未找到相关用户')
+      Text($r('app.string.ct_no_results'))
         .fontSize(15)
         .fontWeight(FontWeight.Medium)
         .fontColor(COLOR_TEXT_PRIMARY);
-      Text('请检查姓名或 @用户名是否正确')
+      Text($r('app.string.ct_no_results_sub'))
         .fontSize(12)
         .fontColor(COLOR_TEXT_SECONDARY);
     }
@@ -1023,14 +1026,14 @@ export struct ContactsPage {
             : $r('sys.symbol.magnifyingglass'))
             .fontSize(13)
             .fontColor([COLOR_PRIMARY]);
-          Text(this.query.trim() === '' ? '按最近上线排序' : '联系人与全局用户')
+          Text(this.query.trim() === '' ? $r('app.string.ct_sort_by_last_seen') : $r('app.string.ct_contacts_and_global'))
             .fontSize(13)
             .fontColor(COLOR_PRIMARY)
             .fontWeight(FontWeight.Medium)
             .layoutWeight(1);
           Text(this.remoteLoading
-            ? '搜索中'
-            : `${this.filtered().length} 位`)
+            ? $r('app.string.searching')
+            : plural('ct_result_count', this.filtered().length, this.filtered().length))
             .fontSize(12)
             .fontColor(COLOR_TEXT_SECONDARY);
         }
@@ -1056,7 +1059,7 @@ export struct ContactsPage {
         if (this.remoteLoading) {
           Row({ space: 8 }) {
             LoadingProgress().width(18).height(18).color(COLOR_PRIMARY);
-            Text('正在搜索陌生用户…').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+            Text($r('app.string.ct_searching_global')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
           }
           .width('100%')
           .height(48)
@@ -1079,11 +1082,11 @@ export struct ContactsPage {
     Column({ space: 0 }) {
       Row() {
         Column({ space: 2 }) {
-          Text('新建联系人')
+          Text($r('app.string.ct_new_contact'))
             .fontSize(21)
             .fontWeight(FontWeight.Bold)
             .fontColor(COLOR_TEXT_PRIMARY);
-          Text('使用对方的国际手机号添加')
+          Text($r('app.string.ct_new_contact_sub'))
             .fontSize(12)
             .fontColor(COLOR_TEXT_SECONDARY);
         }
@@ -1103,7 +1106,7 @@ export struct ContactsPage {
           pressed: this.topActionPressedStyle
         })
         .enabled(!this.addContactSaving)
-        .accessibilityText('关闭新建联系人')
+        .accessibilityText($r('app.string.ct_close_new_contact'))
         .onClick((): void => { this.addContactSheetOpen = false; });
       }
       .width('100%')
@@ -1111,12 +1114,12 @@ export struct ContactsPage {
       .alignItems(VerticalAlign.Center);
 
       Column({ space: 6 }) {
-        Text('姓名')
+        Text($r('app.string.ct_name'))
           .width('100%')
           .fontSize(12)
           .fontColor(COLOR_TEXT_SECONDARY)
           .padding({ left: 4 });
-        TextInput({ text: this.addFirstName, placeholder: '名字（必填）' })
+        TextInput({ text: this.addFirstName, placeholder: $r('app.string.ct_first_name') })
           .width('100%')
           .height(48)
           .fontSize(16)
@@ -1133,7 +1136,7 @@ export struct ContactsPage {
             this.addFirstName = value;
             this.addContactError = '';
           });
-        TextInput({ text: this.addLastName, placeholder: '姓（选填）' })
+        TextInput({ text: this.addLastName, placeholder: $r('app.string.ct_last_name') })
           .width('100%')
           .height(48)
           .fontSize(16)
@@ -1155,7 +1158,7 @@ export struct ContactsPage {
       .margin({ top: 12 });
 
       Column({ space: 6 }) {
-        Text('手机号码')
+        Text($r('app.string.ct_phone'))
           .width('100%')
           .fontSize(12)
           .fontColor(COLOR_TEXT_SECONDARY)
@@ -1225,7 +1228,7 @@ export struct ContactsPage {
               .fontSize(18)
               .fontColor([Color.White]);
           }
-          Text(this.addContactSaving ? '正在添加…' : '添加联系人')
+          Text(this.addContactSaving ? $r('app.string.adding') : $r('app.string.ct_add_contact'))
             .fontSize(16)
             .fontWeight(FontWeight.Medium)
             .fontColor(Color.White);
@@ -1283,7 +1286,7 @@ export struct ContactsPage {
       curve: Curve.EaseOut
     })
     .enabled(!this.addContactSheetOpen && !this.contextMenuShown)
-    .accessibilityText('新建联系人')
+    .accessibilityText($r('app.string.ct_new_contact'))
     .onTouch((event: TouchEvent): void => {
       if (event.type === TouchType.Down) {
         this.fabPressed = true;

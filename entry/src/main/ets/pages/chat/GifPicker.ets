@@ -5,6 +5,7 @@ import {
 } from '../../store/AppSettings';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
 import { SmartLoopVideo } from '../common/SmartLoopVideo';
+import { str } from '../../util/strings';
 
 export interface GifItem {
   fileId: number;    // the animation file (what gets sent)
@@ -113,7 +114,7 @@ export struct GifPicker {
         return;
       }
       console.error(`GifPicker.getSavedAnimations failed: ${e.message}`);
-      this.errorText = 'GIF 加载失败';
+      this.errorText = str('gif_load_failed');
       this.loadState = 'error';
     });
   }
@@ -211,7 +212,7 @@ export struct GifPicker {
       Text(title).fontSize(15).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
       Text(detail).fontSize(13).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center);
       if (retry) {
-        Text('重新加载')
+        Text($r('app.string.settings_reload'))
           .fontSize(14).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
           .padding({ left: 16, right: 16, top: 7, bottom: 7 })
           .backgroundColor($r('app.color.selected_pill')).borderRadius(16)
@@ -240,10 +241,10 @@ export struct GifPicker {
         .width('100%').height('100%');
       } else if (this.loadState === 'error') {
         this.stateMessage($r('sys.symbol.exclamationmark_circle'), this.errorText,
-          '检查网络后重试', true);
+          str('check_network_retry'), true);
       } else if (this.gifs.length === 0) {
-        this.stateMessage($r('sys.symbol.video'), '还没有保存的 GIF',
-          '在聊天中保存 GIF 后会显示在这里', false);
+        this.stateMessage($r('sys.symbol.video'), str('gif_none_saved'),
+          str('gif_none_saved_sub'), false);
       } else {
         Grid() {
           ForEach(this.gifs, (g: GifItem) => {

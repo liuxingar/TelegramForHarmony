@@ -1,6 +1,7 @@
 import { TdClient } from '../tdkit/TdClient';
 import { TdObject, TdRequest, TdError } from '../tdkit/TdTypes';
 import { formatLastSeen } from '../util/formatLastSeen';
+import { str } from '../util/strings';
 
 const DL_PRIORITY: number = 1;
 
@@ -107,7 +108,7 @@ export class ContactsStore {
         }
         this.loading = false;
         if (ids.length > 0 && !results.some((loaded: boolean): boolean => loaded)) {
-          this.errorMessage = '联系人资料加载失败';
+          this.errorMessage = str('cs_contact_load_failed');
         }
         this.rebuild();
         this.notify();
@@ -118,7 +119,7 @@ export class ContactsStore {
       }
       console.error(`ContactsStore.getContacts failed: ${e.message}`);
       this.loading = false;
-      this.errorMessage = '联系人加载失败';
+      this.errorMessage = str('contacts_load_failed');
       this.notify();
     });
   }
@@ -185,7 +186,7 @@ export class ContactsStore {
     const previous = this.byId.get(id);
     const item: ContactItem = {
       id,
-      name: name !== '' ? name : '未命名',
+      name: name !== '' ? name : str('cs_unnamed'),
       initials: name.length > 0 ? name.substring(0, 1).toUpperCase() : '?',
       avatarPath: previous !== undefined ? previous.avatarPath : '',
       statusText: formatLastSeen(status, Math.floor(Date.now() / 1000)),

@@ -65,7 +65,7 @@ struct InAppBrowserPage {
   private openExternally(): void {
     const target = this.currentUrl !== '' ? this.currentUrl : this.initialUrl;
     openUrl(getContext(this) as common.UIAbilityContext, target, (): void => {
-      promptAction.showToast({ message: '没有可打开该链接的浏览器', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.web_no_browser'), duration: 1800 });
     });
   }
 
@@ -73,10 +73,10 @@ struct InAppBrowserPage {
     const target = this.currentUrl !== '' ? this.currentUrl : this.initialUrl;
     const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, target);
     pasteboard.getSystemPasteboard().setData(data).then((): void => {
-      promptAction.showToast({ message: '链接已复制', duration: 1400 });
+      promptAction.showToast({ message: $r('app.string.link_copied'), duration: 1400 });
     }).catch((error: BusinessError): void => {
       console.error(`InAppBrowser copy failed: ${error.code} ${error.message}`);
-      promptAction.showToast({ message: '复制失败', duration: 1400 });
+      promptAction.showToast({ message: $r('app.string.copy_failed'), duration: 1400 });
     });
   }
 
@@ -93,11 +93,11 @@ struct InAppBrowserPage {
   @Builder
   moreMenu() {
     Menu() {
-      MenuItem({ content: '刷新' })
+      MenuItem({ content: $r('app.string.web_reload') })
         .onClick((): void => this.reload());
-      MenuItem({ content: '复制链接' })
+      MenuItem({ content: $r('app.string.fl_copy_link') })
         .onClick((): void => this.copyLink());
-      MenuItem({ content: '在浏览器中打开' })
+      MenuItem({ content: $r('app.string.web_open_external') })
         .onClick((): void => this.openExternally());
     }
   }
@@ -110,7 +110,7 @@ struct InAppBrowserPage {
       }.width(40).height(40).borderRadius(20).backgroundColor(Color.Transparent)
       .onClick((): void => { router.back(); });
       Column({ space: 1 }) {
-        Text(this.pageTitle !== '' ? this.pageTitle : '网页')
+        Text(this.pageTitle !== '' ? this.pageTitle : $r('app.string.web_page'))
           .fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
         Text(hostOf(this.currentUrl)).fontSize(11).fontColor(COLOR_TEXT_SECONDARY)
@@ -163,8 +163,8 @@ struct InAppBrowserPage {
           Column({ space: 12 }) {
             SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
               .fontSize(46).fontColor([COLOR_TEXT_SECONDARY]);
-            Text('网页加载失败').fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
-            Button('重新加载').height(38).fontSize(14)
+            Text($r('app.string.web_load_failed')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
+            Button($r('app.string.settings_reload')).height(38).fontSize(14)
               .onClick((): void => this.reload());
           }.width('100%').height('100%').justifyContent(FlexAlign.Center)
           .backgroundColor(COLOR_PAGE_BG);

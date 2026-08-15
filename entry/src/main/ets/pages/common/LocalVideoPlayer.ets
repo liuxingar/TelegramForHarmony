@@ -186,7 +186,7 @@ export struct LocalVideoPlayer {
       if (this.failed) {
         Column({ space: 10 }) {
           SymbolGlyph($r('sys.symbol.exclamationmark_triangle')).fontSize(34).fontColor([Color.White]);
-          Text('无法播放该视频').fontSize(15).fontColor(Color.White);
+          Text($r('app.string.lvp_cannot_play')).fontSize(15).fontColor(Color.White);
         }
         .width('100%').height('100%').justifyContent(FlexAlign.Center);
       } else {
@@ -216,7 +216,7 @@ export struct LocalVideoPlayer {
                 .fontSize(22).fontColor([Color.White]);
             }
             .width(40).height(40).backgroundColor(Color.Transparent)
-            .accessibilityText(this.playing ? '暂停' : '播放')
+            .accessibilityText(this.playing ? $r('app.string.lvp_pause') : $r('app.string.lvp_play'))
             .onClick((): void => this.togglePlay());
             Text(LocalVideoPlayer.timeLabel(this.positionMs))
               .fontSize(13).fontColor(Color.White);
@@ -262,7 +262,7 @@ export struct LocalVideoPlayer {
             SymbolGlyph($r('sys.symbol.xmark')).fontSize(20).fontColor([Color.White]);
           }
           .width(40).height(40).backgroundColor('#4D000000')
-          .accessibilityText('关闭')
+          .accessibilityText($r('app.string.close'))
           .onClick((): void => this.onClose());
           if (this.title !== '') {
             Text(this.title).fontSize(15).fontColor(Color.White)

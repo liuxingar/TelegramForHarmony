@@ -28,11 +28,11 @@ export default function proxyLogicTest() {
     });
 
     it('validates_required_proxy_fields', 0, (): void => {
-      expect(proxyFormError('', '443', PROXY_SOCKS5, '')).assertEqual('请填写服务器地址');
+      expect(proxyFormError('', '443', PROXY_SOCKS5, '')).assertEqual('proxy_server_required');
       expect(proxyFormError('host', 'abc', PROXY_SOCKS5, ''))
-        .assertEqual('端口需为 1–65535 的整数');
+        .assertEqual('proxy_port_invalid');
       expect(proxyFormError('host', '443', PROXY_MTPROTO, ''))
-        .assertEqual('MTProto 代理需要填写密钥');
+        .assertEqual('proxy_secret_required');
       expect(proxyFormError('host', '443', PROXY_MTPROTO, 'secret')).assertEqual('');
     });
 
@@ -70,12 +70,12 @@ export default function proxyLogicTest() {
     });
 
     it('maps_connection_and_action_states', 0, (): void => {
-      expect(proxyConnectionText('connectionStateReady', true)).assertEqual('代理已连接');
-      expect(proxyConnectionText('connectionStateReady', false)).assertEqual('当前为直连');
+      expect(proxyConnectionText('connectionStateReady', true)).assertEqual('proxy_state_connected');
+      expect(proxyConnectionText('connectionStateReady', false)).assertEqual('proxy_state_direct');
       expect(proxyConnectionText('connectionStateConnectingToProxy', true))
-        .assertEqual('正在连接代理');
+        .assertEqual('proxy_state_connecting_proxy');
       expect(proxyActionErrorText('request timeout', '启用代理'))
-        .assertEqual('启用代理超时，请刷新状态后重试');
+        .assertEqual('proxy_error_timeout(启用代理)');
     });
   });
 }

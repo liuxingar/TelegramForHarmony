@@ -5,6 +5,7 @@ import { formatPreview } from '../../util/formatPreview';
 import {
   COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
+import { plural, str } from '../../util/strings';
 
 const CARD_RADIUS: number = 14;
 // forumTopicIcon.color 的取值集合（TDLib 固定的六色）。
@@ -30,7 +31,7 @@ interface TopicRow {
 struct ForumTopicsPage {
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
-  @State title: string = '话题';
+  @State title: string = str('ft_topics');
   @State rows: TopicRow[] = [];
   @State loadState: string = 'loading'; // loading | ready | error
   @State creating: boolean = false;
@@ -164,7 +165,7 @@ struct ForumTopicsPage {
     const lastMessage = topic['last_message'] as TdObject | undefined;
     return {
       threadId: threadId,
-      name: name !== '' ? name : '话题',
+      name: name !== '' ? name : str('ft_topics'),
       iconColor: TOPIC_COLORS.get(colorValue) ?? '#6FB9F0',
       isGeneral: info !== undefined
         ? ((info['is_general'] as boolean | undefined) ?? false) : false,
@@ -187,7 +188,7 @@ struct ForumTopicsPage {
 
   private manageFailed(action: string, e: TdError): void {
     console.error(`ForumTopicsPage.${action} failed: ${e.message}`);
-    promptAction.showToast({ message: `${action === 'delete' ? '删除' : '操作'}失败（需要管理话题权限）`, duration: 2000 });
+    promptAction.showToast({ message: str('ft_action_failed', action === 'delete' ? str('delete') : str('ft_action_word')), duration: 2000 });
   }
 
   private togglePinned(row: TopicRow): void {
@@ -214,11 +215,11 @@ struct ForumTopicsPage {
 
   private confirmDelete(row: TopicRow): void {
     promptAction.showDialog({
-      title: '删除话题',
-      message: `“${row.name}”内的所有消息将被删除，此操作不可撤销。`,
+      title: $r('app.string.ft_delete_topic'),
+      message: str('ft_delete_confirm', row.name),
       buttons: [
-        { text: '取消', color: '#8E8E93' },
-        { text: '删除', color: '#E5484D' }
+        { text: $r('app.string.cancel'), color: '#8E8E93' },
+        { text: $r('app.string.delete'), color: '#E5484D' }
       ]
     }).then((result): void => {
       if (result.index !== 1) {
@@ -238,7 +239,7 @@ struct ForumTopicsPage {
       // General 话题不可删除/重命名，只支持置顶与隐藏（隐藏暂不做）。
       promptAction.showActionMenu({
         title: row.name,
-        buttons: [{ text: row.isPinned ? '取消置顶' : '置顶', color: '#007AFF' }]
+        buttons: [{ text: row.isPinned ? $r('app.string.ft_unpin') : $r('app.string.ft_pin'), color: '#007AFF' }]
       }).then((result): void => {
         if (result.index === 0) {
           this.togglePinned(row);
@@ -249,10 +250,10 @@ struct ForumTopicsPage {
     promptAction.showActionMenu({
       title: row.name,
       buttons: [
-        { text: row.isPinned ? '取消置顶' : '置顶', color: '#007AFF' },
-        { text: row.isClosed ? '重新开启' : '关闭话题', color: '#007AFF' },
-        { text: '重命名', color: '#007AFF' },
-        { text: '删除话题', color: '#E5484D' }
+        { text: row.isPinned ? $r('app.string.ft_unpin') : $r('app.string.ft_pin'), color: '#007AFF' },
+        { text: row.isClosed ? $r('app.string.ft_reopen') : $r('app.string.ft_close_topic'), color: '#007AFF' },
+        { text: $r('app.string.ft_rename'), color: '#007AFF' },
+        { text: $r('app.string.ft_delete_topic'), color: '#E5484D' }
       ]
     }).then((result): void => {
       if (result.index === 0) {
@@ -304,7 +305,7 @@ struct ForumTopicsPage {
     }).catch((e: TdError): void => {
       this.creating = false;
       console.error(`ForumTopicsPage.createForumTopic failed: ${e.message}`);
-      promptAction.showToast({ message: '创建话题失败（需要管理话题权限）', duration: 2000 });
+      promptAction.showToast({ message: $r('app.string.ft_create_failed'), duration: 2000 });
     });
   }
 
@@ -334,7 +335,7 @@ struct ForumTopicsPage {
           }
         }
         .width('100%');
-        Text(row.lastMessageText !== '' ? row.lastMessageText : '暂无消息')
+        Text(row.lastMessageText !== '' ? row.lastMessageText : $r('app.string.ft_no_messages'))
           .fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%');
@@ -365,7 +366,7 @@ struct ForumTopicsPage {
         Column({ space: 1 }) {
           Text(this.title).fontSize(19).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
-          Text(`${this.rows.length} 个话题`).fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
+          Text(plural('ft_topic_count', this.rows.length, this.rows.length)).fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
         }
         .alignItems(HorizontalAlign.Start).layoutWeight(1);
         Row() {
@@ -384,8 +385,8 @@ struct ForumTopicsPage {
         .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center);
       } else if (this.loadState === 'error') {
         Column({ space: 10 }) {
-          Text('话题加载失败').fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
-          Button('重试').onClick((): void => {
+          Text($r('app.string.ft_load_failed')).fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
+          Button($r('app.string.settings_retry')).onClick((): void => {
             this.loadState = 'loading';
             this.load();
           });
@@ -405,21 +406,21 @@ struct ForumTopicsPage {
       }
       if (this.showNameInput) {
         Column({ space: 10 }) {
-          Text(this.renameTarget !== null ? '重命名话题' : '新建话题')
+          Text(this.renameTarget !== null ? $r('app.string.ft_rename_topic') : $r('app.string.ft_new_topic'))
             .fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-          TextInput({ placeholder: '话题名称', text: this.pendingTopicName })
+          TextInput({ placeholder: $r('app.string.ft_topic_name'), text: this.pendingTopicName })
             .fontSize(15).height(42)
             .onChange((value: string): void => {
               this.pendingTopicName = value;
             });
           Row({ space: 12 }) {
-            Button('取消').buttonStyle(ButtonStyleMode.NORMAL).layoutWeight(1)
+            Button($r('app.string.cancel')).buttonStyle(ButtonStyleMode.NORMAL).layoutWeight(1)
               .onClick((): void => {
                 this.showNameInput = false;
                 this.pendingTopicName = '';
                 this.renameTarget = null;
               });
-            Button(this.renameTarget !== null ? '保存' : (this.creating ? '创建中…' : '创建'))
+            Button(this.renameTarget !== null ? $r('app.string.save') : (this.creating ? $r('app.string.creating_dots') : $r('app.string.create')))
               .backgroundColor(COLOR_PRIMARY).layoutWeight(1)
               .enabled(!this.creating && this.pendingTopicName.trim() !== '')
               .onClick((): void => {

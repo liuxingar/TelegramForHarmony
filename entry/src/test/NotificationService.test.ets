@@ -172,7 +172,7 @@ export default function notificationServiceTest() {
         .filter((n: LocalNotice): boolean => n.isCall);
       expect(published.length).assertEqual(1);
       expect(published[0].id).assertEqual(CALL_NOTIFICATION_ID);
-      expect(published[0].text).assertEqual('视频来电');
+      expect(published[0].text).assertEqual('ns_incoming_video_call');
       // 响铃结束 → 撤销
       callObj['state'] = { '@type': 'callStateDiscarded' } as TdObject;
       b2.onReceive(JSON.stringify(upd));

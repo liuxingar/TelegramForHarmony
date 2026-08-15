@@ -25,7 +25,7 @@ export default function formatPreviewTest() {
       cap['text'] = '';
       const c: TdObject = { '@type': 'messagePhoto' };
       c['caption'] = cap;
-      expect(formatPreview(msg(c))).assertEqual('📷 照片');
+      expect(formatPreview(msg(c))).assertEqual('📷 preview_photo');
     });
     it('photo_with_caption', 0, () => {
       const cap: TdObject = { '@type': 'formattedText' };
@@ -39,19 +39,19 @@ export default function formatPreviewTest() {
       st['emoji'] = '🎉';
       const c: TdObject = { '@type': 'messageSticker' };
       c['sticker'] = st;
-      expect(formatPreview(msg(c))).assertEqual('🎉 贴纸');
+      expect(formatPreview(msg(c))).assertEqual('preview_sticker_emoji(🎉)');
     });
     it('voice', 0, () => {
       const c: TdObject = { '@type': 'messageVoiceNote' };
-      expect(formatPreview(msg(c))).assertEqual('🎤 语音消息');
+      expect(formatPreview(msg(c))).assertEqual('preview_voice');
     });
     it('poll_no_question', 0, () => {
       const c: TdObject = { '@type': 'messagePoll' };
-      expect(formatPreview(msg(c))).assertEqual('📊 投票');
+      expect(formatPreview(msg(c))).assertEqual('preview_poll');
     });
     it('unknown_fallback', 0, () => {
       const c: TdObject = { '@type': 'messageSomeFutureType' };
-      expect(formatPreview(msg(c))).assertEqual('暂不支持的消息');
+      expect(formatPreview(msg(c))).assertEqual('preview_unsupported');
     });
     it('custom_service_action_keeps_server_text', 0, () => {
       const c: TdObject = { '@type': 'messageCustomServiceAction' };
@@ -60,11 +60,11 @@ export default function formatPreviewTest() {
     });
     it('expired_media_is_understandable', 0, () => {
       const c: TdObject = { '@type': 'messageExpiredPhoto' };
-      expect(formatPreview(msg(c))).assertEqual('照片已过期');
+      expect(formatPreview(msg(c))).assertEqual('preview_photo_expired');
     });
     it('video_no_caption', 0, () => {
       const c: TdObject = { '@type': 'messageVideo' };
-      expect(formatPreview(msg(c))).assertEqual('📹 视频');
+      expect(formatPreview(msg(c))).assertEqual('📹 preview_video');
     });
     it('video_with_caption', 0, () => {
       const cap: TdObject = { '@type': 'formattedText' }; cap['text'] = 'trip';
@@ -73,7 +73,7 @@ export default function formatPreviewTest() {
     });
     it('document', 0, () => {
       const c: TdObject = { '@type': 'messageDocument' };
-      expect(formatPreview(msg(c))).assertEqual('📎 文件');
+      expect(formatPreview(msg(c))).assertEqual('📎 preview_file');
     });
     it('animation', 0, () => {
       const c: TdObject = { '@type': 'messageAnimation' };
@@ -81,16 +81,16 @@ export default function formatPreviewTest() {
     });
     it('audio', 0, () => {
       const c: TdObject = { '@type': 'messageAudio' };
-      expect(formatPreview(msg(c))).assertEqual('🎵 音乐');
+      expect(formatPreview(msg(c))).assertEqual('preview_music');
     });
     it('location', 0, () => {
       const c: TdObject = { '@type': 'messageLocation' };
-      expect(formatPreview(msg(c))).assertEqual('📍 位置');
+      expect(formatPreview(msg(c))).assertEqual('preview_location');
     });
     it('sticker_no_emoji', 0, () => {
       const st: TdObject = { '@type': 'sticker' }; st['emoji'] = '';
       const c: TdObject = { '@type': 'messageSticker' }; c['sticker'] = st;
-      expect(formatPreview(msg(c))).assertEqual('贴纸');
+      expect(formatPreview(msg(c))).assertEqual('preview_sticker');
     });
     it('text_missing_inner', 0, () => {
       const inner: TdObject = { '@type': 'formattedText' };
@@ -103,15 +103,15 @@ export default function formatPreviewTest() {
     });
     it('video_chat_started', 0, () => {
       const c: TdObject = { '@type': 'messageVideoChatStarted' };
-      expect(formatPreview(msg(c))).assertEqual('发起了视频通话');
+      expect(formatPreview(msg(c))).assertEqual('service_video_chat_started');
     });
     it('video_chat_ended', 0, () => {
       const c: TdObject = { '@type': 'messageVideoChatEnded' };
-      expect(formatPreview(msg(c))).assertEqual('结束了视频通话');
+      expect(formatPreview(msg(c))).assertEqual('service_video_chat_ended');
     });
     it('video_chat_scheduled', 0, () => {
       const c: TdObject = { '@type': 'messageVideoChatScheduled' };
-      expect(formatPreview(msg(c))).assertEqual('安排了视频通话');
+      expect(formatPreview(msg(c))).assertEqual('service_video_chat_scheduled');
     });
   });
 }

@@ -1,6 +1,7 @@
 import { getTdClient } from '../tdkit/Globals';
 import { TdObject, TdRequest } from '../tdkit/TdTypes';
 import { AutoDownloadPolicy } from './AppSettings';
+import { str } from '../util/strings';
 
 export interface StorageUsage {
   filesSize: number;
@@ -75,9 +76,9 @@ export function formatDuration(seconds: number): string {
   const safe = Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : 0;
   const hours = Math.floor(safe / 3600);
   const minutes = Math.floor((safe % 3600) / 60);
-  if (hours > 0) { return `${hours} 小时 ${minutes} 分钟`; }
-  if (minutes > 0) { return `${minutes} 分钟`; }
-  return `${safe} 秒`;
+  if (hours > 0) { return str('duration_hours_minutes', hours, minutes); }
+  if (minutes > 0) { return str('duration_minutes', minutes); }
+  return str('duration_seconds', safe);
 }
 
 export async function getStorageUsage(): Promise<StorageUsage> {
@@ -98,20 +99,20 @@ export async function getStorageUsage(): Promise<StorageUsage> {
 
 function fileTypeInfo(type: TdObject | undefined): StorageCategory {
   const raw = type !== undefined ? ((type['@type'] as string | undefined) ?? '') : '';
-  if (raw === 'fileTypePhoto') { return { key: 'photo', label: '图片', size: 0, count: 0 }; }
+  if (raw === 'fileTypePhoto') { return { key: 'photo', label: str('storage_photo'), size: 0, count: 0 }; }
   if (raw === 'fileTypeVideo' || raw === 'fileTypeVideoNote') {
-    return { key: 'video', label: '视频', size: 0, count: 0 };
+    return { key: 'video', label: str('storage_video'), size: 0, count: 0 };
   }
   if (raw === 'fileTypeAnimation') { return { key: 'animation', label: 'GIF', size: 0, count: 0 }; }
-  if (raw === 'fileTypeAudio') { return { key: 'audio', label: '音乐', size: 0, count: 0 }; }
-  if (raw === 'fileTypeVoiceNote') { return { key: 'voice', label: '语音', size: 0, count: 0 }; }
-  if (raw === 'fileTypeSticker') { return { key: 'sticker', label: '贴纸', size: 0, count: 0 }; }
-  if (raw === 'fileTypeDocument') { return { key: 'file', label: '文件', size: 0, count: 0 }; }
-  if (raw === 'fileTypeThumbnail') { return { key: 'thumbnail', label: '缩略图', size: 0, count: 0 }; }
-  if (raw === 'fileTypeProfilePhoto') { return { key: 'profile', label: '头像', size: 0, count: 0 }; }
-  if (raw === 'fileTypeWallpaper') { return { key: 'wallpaper', label: '聊天背景', size: 0, count: 0 }; }
-  if (raw === 'fileTypeSecret') { return { key: 'secret', label: '秘密聊天', size: 0, count: 0 }; }
-  return { key: 'other', label: '其他', size: 0, count: 0 };
+  if (raw === 'fileTypeAudio') { return { key: 'audio', label: str('storage_audio'), size: 0, count: 0 }; }
+  if (raw === 'fileTypeVoiceNote') { return { key: 'voice', label: str('storage_voice'), size: 0, count: 0 }; }
+  if (raw === 'fileTypeSticker') { return { key: 'sticker', label: str('storage_sticker'), size: 0, count: 0 }; }
+  if (raw === 'fileTypeDocument') { return { key: 'file', label: str('storage_file'), size: 0, count: 0 }; }
+  if (raw === 'fileTypeThumbnail') { return { key: 'thumbnail', label: str('storage_thumbnail'), size: 0, count: 0 }; }
+  if (raw === 'fileTypeProfilePhoto') { return { key: 'profile', label: str('storage_profile'), size: 0, count: 0 }; }
+  if (raw === 'fileTypeWallpaper') { return { key: 'wallpaper', label: str('storage_wallpaper'), size: 0, count: 0 }; }
+  if (raw === 'fileTypeSecret') { return { key: 'secret', label: str('storage_secret'), size: 0, count: 0 }; }
+  return { key: 'other', label: str('storage_other'), size: 0, count: 0 };
 }
 
 function addCategory(target: Map<string, StorageCategory>, item: StorageCategory): void {
@@ -211,9 +212,9 @@ export async function clearCacheSelection(category: string, chatId: number): Pro
 function networkInfo(type: TdObject | undefined): NetworkBreakdown {
   const raw = type !== undefined ? ((type['@type'] as string | undefined) ?? '') : '';
   if (raw === 'networkTypeWiFi') { return { key: 'wifi', label: 'Wi‑Fi', sent: 0, received: 0, duration: 0 }; }
-  if (raw === 'networkTypeMobile') { return { key: 'mobile', label: '移动网络', sent: 0, received: 0, duration: 0 }; }
-  if (raw === 'networkTypeMobileRoaming') { return { key: 'roaming', label: '漫游', sent: 0, received: 0, duration: 0 }; }
-  return { key: 'other', label: '其他网络', sent: 0, received: 0, duration: 0 };
+  if (raw === 'networkTypeMobile') { return { key: 'mobile', label: str('network_mobile'), sent: 0, received: 0, duration: 0 }; }
+  if (raw === 'networkTypeMobileRoaming') { return { key: 'roaming', label: str('network_roaming'), sent: 0, received: 0, duration: 0 }; }
+  return { key: 'other', label: str('network_other'), sent: 0, received: 0, duration: 0 };
 }
 
 function fileNetworkCategory(type: TdObject | undefined): NetworkBreakdown {
@@ -261,7 +262,7 @@ export async function getNetworkUsage(onlyCurrent: boolean = false): Promise<Net
     const type = (entry['@type'] as string | undefined) ?? '';
     let category: NetworkBreakdown;
     if (type === 'networkStatisticsEntryCall') {
-      category = { key: 'call', label: '通话', sent: 0, received: 0, duration: 0 };
+      category = { key: 'call', label: str('network_calls'), sent: 0, received: 0, duration: 0 };
     } else {
       category = fileNetworkCategory(entry['file_type'] as TdObject | undefined);
     }

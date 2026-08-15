@@ -1,5 +1,6 @@
 import { COLOR_TEXT_SECONDARY } from '../../util/theme';
 import { TgsStickerView } from './TgsStickerView';
+import { str } from '../../util/strings';
 
 // 骰子/飞镖/篮球等（messageDice）：直接播 TDLib 下发的官方 TGS 结果动画
 // （动画播完定格在结果上）。动画未就绪时显示 emoji 占位。
@@ -59,6 +60,6 @@ export struct DiceBubble {
     .padding({ right: 24, bottom: 8 })
     .alignItems(HorizontalAlign.Start)
     .accessibilityText(this.value > 0
-      ? `${this.safeEmoji()}，结果 ${this.value}` : `${this.safeEmoji()}，等待结果`);
+      ? str('dice_result', this.safeEmoji(), this.value) : str('dice_waiting', this.safeEmoji()));
   }
 }

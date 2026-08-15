@@ -8,6 +8,8 @@ import {
   COLOR_DIVIDER, COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE,
   COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
+import { str } from '../../util/strings';
+import { fullDate } from '../../util/intlFormat';
 
 const CARD_RADIUS: number = 14;
 const DANGER: string = '#E64646';
@@ -54,37 +56,38 @@ struct NetworkUsagePage {
       if (!this.active || current !== this.sequence) { return; }
       this.loading = false;
       this.refreshing = false;
-      if (this.usage === null) { this.errorText = '无法读取流量统计'; }
-      else { this.warning = '刷新失败，正在显示上次统计'; }
+      if (this.usage === null) { this.errorText = str('network_unreadable'); }
+      else { this.warning = str('network_refresh_failed'); }
       console.error(`NetworkUsagePage.load failed: ${error.message}`);
     });
   }
 
   private sinceLabel(): string {
-    if (this.usage === null || this.usage.sinceDate <= 0) { return '统计起始时间不可用'; }
-    const date = new Date(this.usage.sinceDate * 1000);
-    return `统计自 ${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+    if (this.usage === null || this.usage.sinceDate <= 0) { return str('network_since_unknown'); }
+    // The date goes through Intl, not into the resource string: "2026-8-6" is a
+    // format, and English wants "Aug 6, 2026".
+    return str('network_since', fullDate(new Date(this.usage.sinceDate * 1000)));
   }
 
   private reset(): void {
     if (this.resetting) { return; }
     promptAction.showDialog({
-      title: '重置流量统计', message: '所有网络和媒体分类的上传、下载计数都会归零。',
+      title: $r('app.string.network_reset'), message: $r('app.string.network_reset_confirm'),
       buttons: [
-        { text: '取消', color: COLOR_TEXT_SECONDARY as string },
-        { text: '重置', color: DANGER }
+        { text: $r('app.string.cancel'), color: COLOR_TEXT_SECONDARY as string },
+        { text: $r('app.string.reset'), color: DANGER }
       ]
     }).then((result: promptAction.ShowDialogSuccessResponse): void => {
       if (result.index !== 1 || this.resetting) { return; }
       this.resetting = true;
       resetNetworkUsage().then((): void => {
         this.resetting = false;
-        promptAction.showToast({ message: '流量统计已重置', duration: 1500 });
+        promptAction.showToast({ message: $r('app.string.network_reset_done'), duration: 1500 });
         this.load(false);
       }).catch((error: TdError): void => {
         this.resetting = false;
         console.error(`NetworkUsagePage.reset failed: ${error.message}`);
-        promptAction.showToast({ message: '重置失败，请重试', duration: 1700 });
+        promptAction.showToast({ message: $r('app.string.reset_failed_retry'), duration: 1700 });
         this.load(false);
       });
     });
@@ -103,7 +106,7 @@ struct NetworkUsagePage {
       .width(44).height(44).borderRadius(22).justifyContent(FlexAlign.Center)
       .stateStyles({ normal: this.actionNormalStyle, pressed: this.actionPressedStyle })
       .onClick((): void => router.back());
-      Text('流量使用情况').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
+      Text($r('app.string.network_title')).fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
         .layoutWeight(1);
       Row() {
         if (this.refreshing) { LoadingProgress().width(18).height(18).color(COLOR_PRIMARY); }
@@ -121,20 +124,20 @@ struct NetworkUsagePage {
       Text(this.sinceLabel()).fontSize(12).fontColor(COLOR_TEXT_SECONDARY).width('100%');
       Row({ space: 10 }) {
         Column({ space: 3 }) {
-          Text('已接收').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.network_received')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
           Text(this.usage !== null ? formatBytes(this.usage.received) : '—')
             .fontSize(23).fontWeight(FontWeight.Bold).fontColor(COLOR_PRIMARY);
         }.layoutWeight(1).alignItems(HorizontalAlign.Start);
         Divider().vertical(true).height(44).strokeWidth(0.5).color(COLOR_DIVIDER);
         Column({ space: 3 }) {
-          Text('已发送').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.network_sent')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
           Text(this.usage !== null ? formatBytes(this.usage.sent) : '—')
             .fontSize(23).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
         }.layoutWeight(1).alignItems(HorizontalAlign.Start);
       }.width('100%');
       if (this.usage !== null && this.usage.callDuration > 0) {
         Row() {
-          Text('累计通话').fontSize(13).fontColor(COLOR_TEXT_SECONDARY).layoutWeight(1);
+          Text($r('app.string.network_total_calls')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY).layoutWeight(1);
           Text(formatDuration(this.usage.callDuration)).fontSize(13).fontColor(COLOR_TEXT_PRIMARY);
         }.width('100%');
       }
@@ -166,7 +169,7 @@ struct NetworkUsagePage {
   }
 
   @Builder
-  breakdownCard(title: string, items: NetworkBreakdown[]) {
+  breakdownCard(title: ResourceStr, items: NetworkBreakdown[]) {
     Column() {
       Text(title).fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
         .width('100%').padding({ left: 14, right: 14, top: 12, bottom: 6 });
@@ -181,7 +184,7 @@ struct NetworkUsagePage {
   loadingState() {
     Column({ space: 11 }) {
       LoadingProgress().width(34).height(34).color(COLOR_PRIMARY);
-      Text('正在汇总流量统计…').fontSize(15).fontColor(COLOR_TEXT_PRIMARY);
+      Text($r('app.string.network_loading')).fontSize(15).fontColor(COLOR_TEXT_PRIMARY);
     }.width('100%').padding({ top: 72, bottom: 72 }).backgroundColor(COLOR_SURFACE)
       .borderRadius(CARD_RADIUS);
   }
@@ -190,9 +193,9 @@ struct NetworkUsagePage {
   errorState() {
     Column({ space: 10 }) {
       SymbolGlyph($r('sys.symbol.exclamationmark_circle')).fontSize(34).fontColor([DANGER]);
-      Text('流量统计加载失败').fontSize(18).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+      Text($r('app.string.network_load_failed')).fontSize(18).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
       Text(this.errorText).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
-      Text('重新加载').fontSize(14).fontColor(Color.White).padding({ left: 17, right: 17, top: 10, bottom: 10 })
+      Text($r('app.string.settings_reload')).fontSize(14).fontColor(Color.White).padding({ left: 17, right: 17, top: 10, bottom: 10 })
         .backgroundColor(COLOR_PRIMARY).borderRadius(20).onClick((): void => this.load(true));
     }.width('100%').padding({ top: 54, bottom: 54 }).backgroundColor(COLOR_SURFACE)
       .borderRadius(CARD_RADIUS);
@@ -202,8 +205,8 @@ struct NetworkUsagePage {
   emptyState() {
     Column({ space: 9 }) {
       SymbolGlyph($r('sys.symbol.data_proportion')).fontSize(36).fontColor([COLOR_PRIMARY]);
-      Text('还没有流量记录').fontSize(18).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-      Text('发送或接收消息后，分类统计会显示在这里。')
+      Text($r('app.string.network_empty')).fontSize(18).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+      Text($r('app.string.network_empty_sub'))
         .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center);
     }.width('100%').padding({ top: 52, bottom: 52 }).backgroundColor(COLOR_SURFACE)
       .borderRadius(CARD_RADIUS);
@@ -224,12 +227,12 @@ struct NetworkUsagePage {
             this.emptyState();
           } else if (this.usage !== null) {
             this.summaryCard();
-            if (this.usage.byNetwork.length > 0) { this.breakdownCard('按网络', this.usage.byNetwork); }
-            if (this.usage.byCategory.length > 0) { this.breakdownCard('按类型', this.usage.byCategory); }
+            if (this.usage.byNetwork.length > 0) { this.breakdownCard($r('app.string.network_by_network'), this.usage.byNetwork); }
+            if (this.usage.byCategory.length > 0) { this.breakdownCard($r('app.string.network_by_type'), this.usage.byCategory); }
           }
           Row({ space: 8 }) {
             if (this.resetting) { LoadingProgress().width(17).height(17).color(DANGER); }
-            Text(this.resetting ? '正在重置…' : '重置流量统计')
+            Text(this.resetting ? $r('app.string.resetting') : $r('app.string.network_reset'))
               .fontSize(15).fontColor(DANGER).fontWeight(FontWeight.Medium);
           }.width('100%').height(46).justifyContent(FlexAlign.Center)
             .backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS)

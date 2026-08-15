@@ -1,5 +1,8 @@
 import { describe, expect, it } from '@ohos/hypium';
 import {
+  LIVE_PHASE_AUDIO, LIVE_PHASE_NONE
+} from '../main/ets/util/liveViewerHeaderPresentation';
+import {
   LiveViewerMediaInput, liveViewerMediaPresentation
 } from '../main/ets/util/liveViewerMediaPresentation';
 
@@ -8,7 +11,7 @@ function input(mode: string): LiveViewerMediaInput {
     mode, valid: true, resolved: false, active: false, joined: false,
     joinedOnce: false, recovering: false, ending: false, hasVideo: false, visualReady: false,
     terminalError: false, reconnectAttempt: 0, retrySeconds: 0, retryable: false,
-    participantCount: 0, mediaStatus: '正在加入直播…', error: ''
+    participantCount: 0, mediaPhase: LIVE_PHASE_NONE, error: ''
   };
 }
 
@@ -24,7 +27,7 @@ export default function liveViewerMediaPresentationTest() {
       value.participantCount = 8;
       const result = liveViewerMediaPresentation(value);
       expect(result.kind).assertEqual('audio');
-      expect(result.detail).assertEqual('8 人在直播间');
+      expect(result.detail).assertEqual('live_media_in_room(8,8)');
     });
     it('waits_for_rtmp_visual_activity_before_revealing_video', 0, (): void => {
       const value = input('rtmp');
@@ -40,7 +43,7 @@ export default function liveViewerMediaPresentationTest() {
       value.joined = true;
       value.joinedOnce = true;
       expect(liveViewerMediaPresentation(value).kind).assertEqual('waiting');
-      value.mediaStatus = '直播音频播放中';
+      value.mediaPhase = LIVE_PHASE_AUDIO;
       expect(liveViewerMediaPresentation(value).kind).assertEqual('audio');
     });
     it('renders_ended_only_after_resolution', 0, (): void => {
@@ -60,8 +63,8 @@ export default function liveViewerMediaPresentationTest() {
       value.retryable = true;
       const result = liveViewerMediaPresentation(value);
       expect(result.kind).assertEqual('recovering');
-      expect(result.detail).assertEqual('第 3 次尝试 · 8 秒后自动重试');
-      expect(result.actionText).assertEqual('立即重试');
+      expect(result.detail).assertEqual('live_media_attempt_retry(3,8)');
+      expect(result.actionText).assertEqual('live_media_retry_now');
       expect(result.keepVisual).assertTrue();
     });
     it('treats_mode_change_as_terminal_error', 0, (): void => {
@@ -73,7 +76,7 @@ export default function liveViewerMediaPresentationTest() {
       const result = liveViewerMediaPresentation(value);
       expect(result.kind).assertEqual('error');
       expect(result.retryable).assertFalse();
-      expect(result.title).assertEqual('直播模式已经变化');
+      expect(result.title).assertEqual('live_media_mode_title');
     });
   });
 }

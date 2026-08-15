@@ -22,6 +22,7 @@ import { openUrl } from '../../util/openUrl';
 import { common } from '@kit.AbilityKit';
 import { publicLink } from '../../util/telegramLink';
 import { MUTE_LONG, setMute } from '../../store/ChatActions';
+import { str } from '../../util/strings';
 
 const CARD_BG: ResourceColor = $r('app.color.surface');
 const CARD_RADIUS: number = 14;
@@ -38,17 +39,17 @@ interface UserProfileTab {
 }
 
 const USER_PROFILE_TABS: UserProfileTab[] = [
-  { key: PROFILE_TAB_STORIES, label: '动态' },
-  { key: PROFILE_TAB_MEDIA, label: '媒体' },
-  { key: PROFILE_TAB_FILES, label: '文件' },
-  { key: PROFILE_TAB_LINKS, label: '链接' },
-  { key: PROFILE_TAB_MUSIC, label: '音乐' },
-  { key: PROFILE_TAB_POLLS, label: '投票' },
-  { key: PROFILE_TAB_VOICE, label: '语音' },
-  { key: PROFILE_TAB_VIDEO_NOTES, label: '圆形视频' },
+  { key: PROFILE_TAB_STORIES, label: str('mp_stories') },
+  { key: PROFILE_TAB_MEDIA, label: str('cpp_media') },
+  { key: PROFILE_TAB_FILES, label: str('storage_file') },
+  { key: PROFILE_TAB_LINKS, label: str('cpp_links') },
+  { key: PROFILE_TAB_MUSIC, label: str('storage_audio') },
+  { key: PROFILE_TAB_POLLS, label: str('poll_word') },
+  { key: PROFILE_TAB_VOICE, label: str('storage_voice') },
+  { key: PROFILE_TAB_VIDEO_NOTES, label: str('cp_video_message') },
   { key: PROFILE_TAB_GIFS, label: 'GIF' },
-  { key: PROFILE_TAB_RECEIVED_GIFTS, label: '礼物' },
-  { key: PROFILE_TAB_GROUPS, label: '群组' }
+  { key: PROFILE_TAB_RECEIVED_GIFTS, label: str('cpp_gifts') },
+  { key: PROFILE_TAB_GROUPS, label: str('gn_group') }
 ];
 
 // User profile page (Telegram-style): avatar header, quick actions, personal
@@ -303,11 +304,11 @@ struct ProfilePage {
     this.store.sendGift(g.id, (error: string) => {
       if (error === '') {
         this.showGiftPicker = false;
-        promptAction.showToast({ message: '礼物已发送 🎁' });
+        promptAction.showToast({ message: $r('app.string.pp_gift_sent') });
       } else if (error.indexOf('BALANCE') >= 0) {
-        promptAction.showToast({ message: '星币余额不足' });
+        promptAction.showToast({ message: $r('app.string.pp_not_enough_stars') });
       } else {
-        promptAction.showToast({ message: `发送失败: ${error}` });
+        promptAction.showToast({ message: str('pp_send_failed_msg', error) });
       }
     });
   }
@@ -350,7 +351,7 @@ struct ProfilePage {
           this.pendingStartParam = '';
           getTdClient().send(start).catch((e: TdError): void => {
             console.error(`ProfilePage.sendBotStartMessage failed: ${e.message}`);
-            promptAction.showToast({ message: '发送 /start 失败', duration: 1500 });
+            promptAction.showToast({ message: $r('app.string.pp_start_failed'), duration: 1500 });
           });
         }
       }
@@ -362,7 +363,7 @@ struct ProfilePage {
   private addContact(): void {
     this.sendAddContact().then(() => {
       this.isContact = true;
-      promptAction.showToast({ message: '已添加为联系人', duration: 1500 });
+      promptAction.showToast({ message: $r('app.string.pp_added_contact'), duration: 1500 });
     }).catch((e: TdError) => {
       // min user：本地没有对方的 access hash（只在群消息里见过对方时的常态），
       // addContact 按 id 直发会报 400 User not found。电话可见时按 TDLib 推荐
@@ -374,7 +375,7 @@ struct ProfilePage {
           .then(() => this.sendAddContact())
           .then(() => {
             this.isContact = true;
-            promptAction.showToast({ message: '已添加为联系人', duration: 1500 });
+            promptAction.showToast({ message: $r('app.string.pp_added_contact'), duration: 1500 });
           })
           .catch((retryError: TdError) => {
             console.error(`ProfilePage.addContact retry failed(code=${retryError.code}): ` +
@@ -386,7 +387,7 @@ struct ProfilePage {
       console.error(`ProfilePage.addContact failed(code=${e.code}): ${e.message} ` +
         `userId=${this.userId} phone='${this.phone}' name='${this.name}'`);
       promptAction.showToast({
-        message: e.code === 400 ? '无法添加：对方信息不完整' : '添加失败，请稍后重试',
+        message: e.code === 400 ? $r('app.string.pp_add_incomplete') : $r('app.string.pp_add_failed'),
         duration: 1700
       });
     });
@@ -398,7 +399,7 @@ struct ProfilePage {
   private importContactFallback(): void {
     const contact: TdObject = { '@type': 'contact' };
     contact['phone_number'] = this.phone;
-    contact['first_name'] = this.name !== '' ? this.name : '联系人';
+    contact['first_name'] = this.name !== '' ? this.name : $r('app.string.tab_contacts');
     contact['last_name'] = '';
     contact['user_id'] = 0;
     const req: TdRequest = { '@type': 'importContacts' };
@@ -407,22 +408,22 @@ struct ProfilePage {
       const userIds: number[] = (res['user_ids'] as number[] | undefined) ?? [];
       if (userIds.length > 0 && userIds[0] > 0) {
         this.isContact = true;
-        promptAction.showToast({ message: '已添加为联系人', duration: 1500 });
+        promptAction.showToast({ message: $r('app.string.pp_added_contact'), duration: 1500 });
         return;
       }
       promptAction.showToast({
-        message: '对方隐私设置不允许通过手机号添加', duration: 2000
+        message: $r('app.string.pp_privacy_blocks_add'), duration: 2000
       });
     }).catch((e: TdError) => {
       console.error(`ProfilePage.importContacts failed(code=${e.code}): ${e.message}`);
-      promptAction.showToast({ message: '添加失败，请稍后重试', duration: 1700 });
+      promptAction.showToast({ message: $r('app.string.pp_add_failed'), duration: 1700 });
     });
   }
 
   private sendAddContact(): Promise<TdObject> {
     const contact: TdObject = { '@type': 'contact' };
     contact['phone_number'] = this.phone;
-    contact['first_name'] = this.name !== '' ? this.name : '联系人';
+    contact['first_name'] = this.name !== '' ? this.name : $r('app.string.tab_contacts');
     contact['last_name'] = '';
     contact['user_id'] = this.userId;
     const req: TdRequest = { '@type': 'addContact' };
@@ -601,11 +602,11 @@ struct ProfilePage {
   @Builder
   actionsRow() {
     Row({ space: 8 }) {
-      this.actionButton('sys.symbol.message', '消息', () => { this.sendMessage(); });
-      this.actionButton('sys.symbol.bell', '静音', () => { this.toggleMute(); });
-      this.actionButton('sys.symbol.phone', '通话', () => { this.startCall(false); });
-      this.actionButton('sys.symbol.video', '视频', () => { this.startCall(true); });
-      this.actionButton('sys.symbol.gift', '礼物', () => {
+      this.actionButton('sys.symbol.message', str('cps_messages'), () => { this.sendMessage(); });
+      this.actionButton('sys.symbol.bell', str('cp_mute'), () => { this.toggleMute(); });
+      this.actionButton('sys.symbol.phone', str('pp_call'), () => { this.startCall(false); });
+      this.actionButton('sys.symbol.video', str('storage_video'), () => { this.startCall(true); });
+      this.actionButton('sys.symbol.gift', str('cpp_gifts'), () => {
         if (this.store !== null) {
           this.store.loadAvailableGifts();
         }
@@ -622,7 +623,7 @@ struct ProfilePage {
     Column() {
       Column({ space: 8 }) {
         Row({ space: 8 }) {
-          Text('频道').fontSize(14).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Bold);
+          Text($r('app.string.gn_channel')).fontSize(14).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Bold);
           Text(this.chSubs).fontSize(13).fontColor(COLOR_PRIMARY);
           Blank().layoutWeight(1);
         }.width('100%');
@@ -657,7 +658,7 @@ struct ProfilePage {
     Column() {
       Column() {
         if (this.phone !== '') {
-          this.infoRow(`+${this.phone}`, this.phone.startsWith('888') ? '匿名号码' : '手机号码', COLOR_TEXT_PRIMARY);
+          this.infoRow(`+${this.phone}`, this.phone.startsWith('888') ? str('pp_anonymous_number') : str('ct_phone'), COLOR_TEXT_PRIMARY);
         }
         if (this.bio !== '') {
           if (this.phone !== '') {
@@ -665,7 +666,7 @@ struct ProfilePage {
           }
           Column({ space: 2 }) {
             ExpandableText({ content: this.bio, entities: this.bioEntities });
-            Text('个人简介').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+            Text($r('app.string.ae_bio')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
           }
           .alignItems(HorizontalAlign.Start)
           .width('100%')
@@ -679,10 +680,10 @@ struct ProfilePage {
             Column({ space: 2 }) {
               Text(`@${this.usernames[0]}`).fontSize(15).fontColor(COLOR_PRIMARY).copyOption(CopyOptions.LocalDevice);
               if (this.usernames.length > 1) {
-                Text(`同时 ${this.usernames.slice(1).map((u: string) => `@${u}`).join(', ')}`)
+                Text(str('pp_also_usernames', this.usernames.slice(1).map((u: string) => `@${u}`).join(', ')))
                   .fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
               } else {
-                Text('用户名').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+                Text($r('app.string.ae_username')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
               }
             }.alignItems(HorizontalAlign.Start).layoutWeight(1);
             SymbolGlyph($r('sys.symbol.qrcode')).fontSize(22).fontColor([COLOR_TEXT_SECONDARY])
@@ -697,9 +698,9 @@ struct ProfilePage {
           }
           Row() {
             Column({ space: 2 }) {
-              Text(this.bizOpen ? '营业中' : '休息中')
+              Text(this.bizOpen ? $r('app.string.pp_open_now') : $r('app.string.pp_closed_now'))
                 .fontSize(15).fontColor(this.bizOpen ? '#34C759' : '#FF3B30');
-              Text('营业时间').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+              Text($r('app.string.pp_opening_hours')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
             }.alignItems(HorizontalAlign.Start).layoutWeight(1);
             Text(this.bizHoursText).fontSize(14).fontColor(COLOR_TEXT_PRIMARY);
           }
@@ -713,7 +714,7 @@ struct ProfilePage {
           Column({ space: 2 }) {
             Text(this.bizAddress).fontSize(15).fontColor(COLOR_PRIMARY)
               .copyOption(CopyOptions.LocalDevice);
-            Text('位置 · 点击打开地图').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+            Text($r('app.string.pp_location_tap')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
           }
           .alignItems(HorizontalAlign.Start)
           .width('100%')
@@ -722,7 +723,7 @@ struct ProfilePage {
         }
         if (this.phone === '' && this.bio === '' && this.usernames.length === 0
           && this.bizHoursText === '' && this.bizAddress === '') {
-          Text('暂无资料').fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
+          Text($r('app.string.cpp_no_profile')).fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
             .padding({ top: 10, bottom: 10 });
         }
       }
@@ -747,7 +748,7 @@ struct ProfilePage {
       this.creatingSecretChat = false;
       const chatId: number = (chat['id'] as number | undefined) ?? 0;
       if (chatId === 0) {
-        promptAction.showToast({ message: '秘密聊天创建失败', duration: 1700 });
+        promptAction.showToast({ message: $r('app.string.pp_secret_failed'), duration: 1700 });
         return;
       }
       const params: Record<string, Object> = { 'chatId': chatId };
@@ -757,7 +758,7 @@ struct ProfilePage {
     }).catch((e: TdError): void => {
       this.creatingSecretChat = false;
       console.error(`ProfilePage.createNewSecretChat failed: ${e.message}`);
-      promptAction.showToast({ message: '秘密聊天创建失败，请稍后重试', duration: 1700 });
+      promptAction.showToast({ message: $r('app.string.pp_secret_failed_retry'), duration: 1700 });
     });
   }
 
@@ -768,7 +769,7 @@ struct ProfilePage {
         SymbolGlyph($r('sys.symbol.lock_fill'))
           .fontSize(22)
           .fontColor(['#31C48D']);
-        Text('发起秘密聊天')
+        Text($r('app.string.pp_start_secret'))
           .fontSize(15)
           .fontColor('#31C48D');
       }
@@ -788,7 +789,7 @@ struct ProfilePage {
         SymbolGlyph($r('sys.symbol.person_badge_plus'))
           .fontSize(22)
           .fontColor([COLOR_TEXT_PRIMARY]);
-        Text('添加为联系人')
+        Text($r('app.string.pp_add_contact'))
           .fontSize(15)
           .fontColor(COLOR_TEXT_PRIMARY);
       }
@@ -863,7 +864,7 @@ struct ProfilePage {
   @Builder
   storiesGrid() {
     if (this.stories.length === 0) {
-      this.emptyHint('暂无动态');
+      this.emptyHint(str('mp_no_stories'));
     } else {
       Flex({ wrap: FlexWrap.Wrap }) {
         ForEach(this.stories, (it: StoryItem) => {
@@ -892,7 +893,7 @@ struct ProfilePage {
   @Builder
   giftsGrid() {
     if (this.gifts.length === 0) {
-      this.emptyHint('暂无礼物');
+      this.emptyHint(str('pp_no_gifts'));
     } else {
       Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
         ForEach(this.gifts, (g: GiftItem) => {
@@ -916,7 +917,7 @@ struct ProfilePage {
   groupsList() {
     Column() {
       if (this.groups.length === 0) {
-        this.emptyHint('暂无共同群组');
+        this.emptyHint(str('pp_no_common_groups'));
       } else {
         Column() {
           ForEach(this.groups, (g: CommonGroup, index: number) => {
@@ -971,13 +972,13 @@ struct ProfilePage {
     Column({ space: 10 }) {
       if (this.sharedState === 'loading' || this.sharedState === 'idle') {
         LoadingProgress().width(28).height(28).color(COLOR_PRIMARY);
-        Text('正在加载共享内容…').fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
+        Text($r('app.string.pp_loading_shared')).fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
       } else if (this.sharedState === 'error') {
         SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
           .fontSize(28).fontColor([COLOR_TEXT_SECONDARY]);
-        Text(this.sharedErrorText !== '' ? this.sharedErrorText : '加载失败')
+        Text(this.sharedErrorText !== '' ? this.sharedErrorText : $r('app.string.load_failed'))
           .fontSize(14).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center);
-        Text('重试').fontSize(14).fontColor(COLOR_PRIMARY)
+        Text($r('app.string.settings_retry')).fontSize(14).fontColor(COLOR_PRIMARY)
           .height(34).padding({ left: 16, right: 16 }).textAlign(TextAlign.Center)
           .backgroundColor('#123390EC').borderRadius(17)
           .onClick((): void => {
@@ -987,7 +988,7 @@ struct ProfilePage {
           });
       } else {
         SymbolGlyph($r('sys.symbol.message')).fontSize(27).fontColor([COLOR_TEXT_SECONDARY]);
-        Text('暂无共享内容').fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
+        Text($r('app.string.pp_no_shared')).fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
       }
     }
     .width('calc(100% - 24vp)').height(178)
@@ -1089,12 +1090,12 @@ struct ProfilePage {
     Row({ space: 8 }) {
       if (this.sharedPaging) {
         LoadingProgress().width(18).height(18).color(COLOR_PRIMARY);
-        Text('正在加载更多').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+        Text($r('app.string.cpp_loading_more')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
       } else if (this.sharedPagingError) {
         SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(16).fontColor([COLOR_PRIMARY]);
-        Text('加载失败，点击重试').fontSize(13).fontColor(COLOR_PRIMARY);
+        Text($r('app.string.load_failed_tap')).fontSize(13).fontColor(COLOR_PRIMARY);
       } else if (!this.sharedHasMore && this.sharedItems.length > 0) {
-        Text('已经到底了').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+        Text($r('app.string.cpp_end_of_list')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
       }
     }
     .width('100%').height(this.sharedItems.length > 0 ? 52 : 0)
@@ -1132,8 +1133,8 @@ struct ProfilePage {
       Column().width('100%').layoutWeight(1)
         .onClick(() => { this.showGiftPicker = false; });
       Column({ space: 10 }) {
-        Text('发送礼物').fontSize(16).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
-        Text('使用 Telegram 星币支付').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+        Text($r('app.string.pp_send_gift')).fontSize(16).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
+        Text($r('app.string.pp_pay_with_stars')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
         Scroll() {
           Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
             ForEach(this.availGifts, (g: AvailGift) => {
@@ -1153,7 +1154,7 @@ struct ProfilePage {
           }.width('100%');
         }.constraintSize({ maxHeight: 360 }).scrollBar(BarState.Off);
         if (this.availGifts.length === 0) {
-          Text('加载礼物目录...').fontSize(13).fontColor(COLOR_TEXT_SECONDARY).padding(16);
+          Text($r('app.string.pp_loading_gifts')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY).padding(16);
         }
       }
       .width('100%').padding({ left: 12, right: 12, top: 14, bottom: 24 })

@@ -3,7 +3,8 @@ import { ChatEntry, ChatKind } from '../../store/ChatEntry';
 import { FOLDER_TAGS_ENABLED, FolderInfo } from '../../store/FolderStore';
 import {
   MUTE_OPTIONS, MuteOption, togglePin, setMute, markAsRead, markUnread,
-  setArchived, setInFolder, clearHistory, leaveOrDeleteChat, leaveLabel, blockAndDeleteChat
+  setArchived, setInFolder, clearHistory, leaveOrDeleteChat, leaveLabel, leaveConfirmMessage,
+  blockAndDeleteChat
 } from '../../store/ChatActions';
 import { getChatStore, getFolderStore } from '../../tdkit/Globals';
 import {
@@ -15,6 +16,7 @@ import { AvatarView } from './AvatarView';
 import { formatTime } from '../../util/formatTime';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY, COLOR_MUTED_BADGE, ROW_PAD_H, ROW_PAD_V } from '../../util/theme';
 import { folderColor } from '../../util/FolderVisuals';
+import { plural, str } from '../../util/strings';
 
 // 等上下文菜单收起再弹确认框。菜单是独立子窗口，收起过程中弹出的
 // 对话框会挂死（Promise 既不 resolve 也不 reject）。
@@ -97,13 +99,13 @@ export struct ChatRow {
   private accessibilitySummary(): string {
     const parts: string[] = [this.chat.title];
     if (this.isPinned()) {
-      parts.push('已置顶');
+      parts.push(str('cl_pinned'));
     }
     if (this.chat.isMuted) {
-      parts.push('已静音');
+      parts.push(str('cl_muted'));
     }
     if (this.isUnread()) {
-      parts.push(this.chat.unreadCount > 0 ? `${this.chat.unreadCount} 条未读` : '标记为未读');
+      parts.push(this.chat.unreadCount > 0 ? plural('cl_unread_n', this.chat.unreadCount, this.chat.unreadCount) : str('cl_mark_unread'));
     }
     if (this.chat.lastMessageText !== '') {
       parts.push(this.chat.lastMessageText);
@@ -145,15 +147,15 @@ export struct ChatRow {
 
   private confirmClearHistory(): void {
     const isPrivate = this.chat.kind === 'private' || this.chat.kind === 'secret';
-    const buttons: promptAction.Button[] = [{ text: '取消', color: COLOR_TEXT_SECONDARY as string }];
-    buttons.push({ text: '清空', color: '#E64646' });
+    const buttons: promptAction.Button[] = [{ text: $r('app.string.cancel'), color: COLOR_TEXT_SECONDARY as string }];
+    buttons.push({ text: $r('app.string.clear_all'), color: '#E64646' });
     if (isPrivate) {
-      buttons.push({ text: '同时为对方清空', color: '#E64646' });
+      buttons.push({ text: $r('app.string.cl_clear_for_both'), color: '#E64646' });
     }
     const chatId: number = this.chat.id;
     this.showConfirm({
-      title: '清空聊天记录',
-      message: `确定要清空与「${this.chat.title}」的聊天记录吗？此操作无法撤销。`,
+      title: $r('app.string.cp_clear_history'),
+      message: str('cl_clear_confirm', this.chat.title),
       buttons: buttons
     }, 'confirmClearHistory', (index: number): void => {
       if (index === 1) {
@@ -193,19 +195,19 @@ export struct ChatRow {
     const canBlock: boolean = kind === 'private';
     const buttons: promptAction.Button[] = canBlock
       ? [
-        { text: '取消', color: COLOR_TEXT_SECONDARY as string },
-        { text: '删除聊天', color: '#E64646' },
-        { text: '删除并屏蔽', color: '#E64646' }
+        { text: $r('app.string.cancel'), color: COLOR_TEXT_SECONDARY as string },
+        { text: $r('app.string.ca_delete_chat'), color: '#E64646' },
+        { text: $r('app.string.cl_delete_and_block'), color: '#E64646' }
       ]
       : [
-        { text: '取消', color: COLOR_TEXT_SECONDARY as string },
+        { text: $r('app.string.cancel'), color: COLOR_TEXT_SECONDARY as string },
         { text: label, color: '#E64646' }
       ];
     this.showConfirm({
       title: label,
       message: canBlock
-        ? `删除与「${title}」的聊天。屏蔽后对方无法再给你发消息，可在设置的已屏蔽用户里解除。`
-        : `确定要${label.substring(0, 2)}「${title}」吗？`,
+        ? str('cl_delete_block_confirm', title)
+        : leaveConfirmMessage(kind, title),
       buttons: buttons
     }, 'confirmLeave', (index: number): void => {
       if (index === 1) {
@@ -214,7 +216,7 @@ export struct ChatRow {
       }
       if (index === 2 && canBlock) {
         blockAndDeleteChat(chatId);
-        promptAction.showToast({ message: `已删除并屏蔽「${title}」`, duration: 1800 });
+        promptAction.showToast({ message: str('cl_deleted_blocked', title), duration: 1800 });
       }
     });
   }
@@ -246,7 +248,7 @@ export struct ChatRow {
   folderSubMenu() {
     Menu() {
       if (this.folders().length === 0) {
-        MenuItem({ content: '暂无文件夹' }).enabled(false);
+        MenuItem({ content: $r('app.string.cl_no_folders') }).enabled(false);
       } else {
         ForEach(this.folders(), (f: FolderInfo) => {
           // Tapping a folder the chat already belongs to removes it again.
@@ -266,27 +268,27 @@ export struct ChatRow {
     Menu() {
       MenuItem({
         symbolStartIcon: new SymbolGlyphModifier($r('sys.symbol.pin')),
-        content: this.isPinned() ? '取消置顶' : '置顶'
+        content: this.isPinned() ? $r('app.string.ft_unpin') : $r('app.string.ft_pin')
       })
         .onClick(() => { togglePin(this.listKey, this.chat.id, !this.isPinned()); });
 
       if (this.chat.isMuted) {
         MenuItem({
           symbolStartIcon: new SymbolGlyphModifier($r('sys.symbol.bell')),
-          content: '取消静音'
+          content: $r('app.string.cp_unmute')
         })
           .onClick(() => { setMute(this.chat.id, 0); });
       } else {
         MenuItem({
           symbolStartIcon: new SymbolGlyphModifier($r('sys.symbol.bell_slash')),
-          content: '静音',
+          content: $r('app.string.cp_mute'),
           builder: (): void => { this.muteSubMenu(); }
         });
       }
 
       MenuItem({
         symbolStartIcon: new SymbolGlyphModifier($r('sys.symbol.checkmark_circle')),
-        content: this.isUnread() ? '标记为已读' : '标记为未读'
+        content: this.isUnread() ? $r('app.string.cl_mark_read') : $r('app.string.cl_mark_unread')
       })
         .onClick(() => {
           if (this.isUnread()) {
@@ -298,19 +300,19 @@ export struct ChatRow {
 
       MenuItem({
         symbolStartIcon: new SymbolGlyphModifier($r('sys.symbol.archivebox')),
-        content: this.isArchived() ? '取消归档' : '归档'
+        content: this.isArchived() ? $r('app.string.cl_unarchive') : $r('app.string.cl_archive')
       })
         .onClick(() => { setArchived(this.chat.id, !this.isArchived()); });
 
       MenuItem({
         symbolStartIcon: new SymbolGlyphModifier($r('sys.symbol.folder_badge_plus')),
-        content: '添加到文件夹',
+        content: $r('app.string.cl_add_to_folder'),
         builder: (): void => { this.folderSubMenu(); }
       });
 
       MenuItem({
         symbolStartIcon: new SymbolGlyphModifier($r('sys.symbol.trash')),
-        content: '清空聊天记录'
+        content: $r('app.string.cp_clear_history')
       })
         .onClick(() => { this.confirmClearHistory(); });
 

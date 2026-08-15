@@ -1,5 +1,6 @@
 import { TdClient } from '../tdkit/TdClient';
 import { TdObject, TdRequest, TdError } from '../tdkit/TdTypes';
+import { str } from '../util/strings';
 
 // 自定义 Web Push 中转通道的注册。
 //
@@ -53,7 +54,7 @@ function isIpLiteral(host: string): boolean {
 export function validateWebPushConfig(config: WebPushConfig): WebPushValidation {
   const endpoint = config.endpoint.trim();
   if (endpoint === '') {
-    return { valid: false, error: '请填写 Endpoint 地址' };
+    return { valid: false, error: str('wp_endpoint_required') };
   }
   // 必须是 https + 域名。
   //
@@ -64,25 +65,25 @@ export function validateWebPushConfig(config: WebPushConfig): WebPushValidation 
   // 究竟是 scheme、裸 IP 还是非标准端口导致的没有进一步区分，所以这里按
   // Web Push 规范取最保守的一档，避免用户在一个静默失效的配置上耗时间。
   if (!endpoint.startsWith('https://')) {
-    return { valid: false, error: 'Endpoint 必须是 https:// 开头（实测 http 收不到投递）' };
+    return { valid: false, error: str('wp_endpoint_https') };
   }
   const host = endpointHost(endpoint);
   if (host === '') {
-    return { valid: false, error: 'Endpoint 缺少主机名' };
+    return { valid: false, error: str('wp_endpoint_no_host') };
   }
   if (isIpLiteral(host)) {
-    return { valid: false, error: '请用域名而不是 IP 地址（IP 形式实测收不到投递）' };
+    return { valid: false, error: str('wp_endpoint_domain') };
   }
   if (endpoint.indexOf(',') >= 0) {
-    return { valid: false, error: 'Endpoint 不能包含逗号' };
+    return { valid: false, error: str('wp_endpoint_comma') };
   }
   const p256dh = config.p256dh.trim();
   if (p256dh === '' || !BASE64URL_PATTERN.test(p256dh)) {
-    return { valid: false, error: 'p256dh 必须是 base64url 编码（只含 A-Z a-z 0-9 - _，无 = 填充）' };
+    return { valid: false, error: str('wp_p256dh_base64url') };
   }
   const auth = config.auth.trim();
   if (auth === '' || !BASE64URL_PATTERN.test(auth)) {
-    return { valid: false, error: 'auth 必须是 base64url 编码（只含 A-Z a-z 0-9 - _，无 = 填充）' };
+    return { valid: false, error: str('wp_auth_base64url') };
   }
   return { valid: true, error: '' };
 }
@@ -112,16 +113,16 @@ export function parseSubscriptionJson(text: string): ParsedSubscription {
   const empty: WebPushConfig = { endpoint: '', p256dh: '', auth: '' };
   const trimmed = text.trim();
   if (trimmed === '') {
-    return { config: empty, error: '请先粘贴订阅 JSON' };
+    return { config: empty, error: str('wp_paste_first') };
   }
   let root: Record<string, Object>;
   try {
     root = JSON.parse(trimmed) as Record<string, Object>;
   } catch (e) {
-    return { config: empty, error: 'JSON 格式有误，请检查引号和逗号' };
+    return { config: empty, error: str('wp_bad_json') };
   }
   if (root === null || typeof root !== 'object') {
-    return { config: empty, error: 'JSON 顶层必须是对象' };
+    return { config: empty, error: str('wp_json_object') };
   }
   const keys = root['keys'] as Record<string, Object> | undefined;
   const config: WebPushConfig = {
@@ -135,7 +136,7 @@ export function parseSubscriptionJson(text: string): ParsedSubscription {
   if (config.p256dh === '') { missing.push('p256dh'); }
   if (config.auth === '') { missing.push('auth'); }
   if (missing.length > 0) {
-    return { config, error: `缺少字段：${missing.join('、')}` };
+    return { config, error: str('wp_missing_fields', missing.join(str('list_separator'))) };
   }
   return { config, error: '' };
 }

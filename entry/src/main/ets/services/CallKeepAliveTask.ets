@@ -1,6 +1,7 @@
 import { common, wantAgent } from '@kit.AbilityKit';
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { avSession } from '@kit.AVSessionKit';
+import { str } from '../util/strings';
 
 // 1对1 通话期间的后台保活：voip 长时任务让通话切后台后进程不被挂起、
 // 音频路由不被冻结。串行化模式与 LiveStreamBackgroundTask 相同 ——
@@ -62,7 +63,7 @@ class CallKeepAliveTask {
     }
     try {
       const session = await avSession.createAVSession(context, 'telegram_call', 'voice_call');
-      await session.setAVMetadata({ assetId: 'telegram_call', title: '通话中' });
+      await session.setAVMetadata({ assetId: 'telegram_call', title: str('svc_in_call') });
       await session.setAVPlaybackState({
         state: avSession.PlaybackState.PLAYBACK_STATE_PLAY
       });

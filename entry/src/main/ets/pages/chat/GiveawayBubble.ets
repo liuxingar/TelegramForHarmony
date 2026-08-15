@@ -1,4 +1,6 @@
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import { plural, str } from '../../util/strings';
+import { monthDayTime } from '../../util/intlFormat';
 
 @Component
 export struct GiveawayBubble {
@@ -32,40 +34,35 @@ export struct GiveawayBubble {
 
   private title(): string {
     if (this.refunded) {
-      return '抽奖已取消';
+      return str('gw_cancelled');
     }
     if (this.state === 'active') {
-      return '频道抽奖';
+      return str('gw_channel');
     }
     if (this.state === 'prize') {
-      return '你获得了抽奖奖品';
+      return str('gw_you_won');
     }
-    return this.state === 'winners' ? '抽奖结果' : '抽奖已结束';
+    return this.state === 'winners' ? str('gw_results') : str('gw_ended');
   }
 
   private statusText(): string {
     if (this.refunded) {
-      return '奖品已全额退回';
+      return str('gw_refunded');
     }
     if (this.state === 'active') {
-      return this.selectionDate > 0 ? `${this.dateText()} 开奖` : '等待开奖';
+      return this.selectionDate > 0 ? str('gw_draw_at', this.dateText()) : str('gw_awaiting_draw');
     }
     if (this.state === 'prize') {
-      return this.description.trim() !== '' ? this.description : '奖品已到账';
+      return this.description.trim() !== '' ? this.description : str('gw_prize_credited');
     }
-    return `${Math.max(0, this.winnerCount)} 位获奖者`;
+    return plural('gw_winners_n', Math.max(0, this.winnerCount), Math.max(0, this.winnerCount));
   }
 
   private dateText(): string {
     if (this.selectionDate <= 0) {
       return '';
     }
-    const date = new Date(this.selectionDate * 1000);
-    const month = date.getMonth() + 1;
-    const day = date.getDate();
-    const hour = date.getHours().toString().padStart(2, '0');
-    const minute = date.getMinutes().toString().padStart(2, '0');
-    return `${month}月${day}日 ${hour}:${minute}`;
+    return monthDayTime(new Date(this.selectionDate * 1000));
   }
 
   build() {
@@ -101,7 +98,7 @@ export struct GiveawayBubble {
       Text(this.title())
         .fontSize(15).fontWeight(FontWeight.Medium)
         .fontColor(this.refunded ? COLOR_TEXT_SECONDARY : COLOR_TEXT_PRIMARY);
-      Text(this.prize.trim() !== '' ? this.prize : '奖品信息暂不可用')
+      Text(this.prize.trim() !== '' ? this.prize : $r('app.string.giveaway_prize_unavailable'))
         .fontSize(13).fontWeight(FontWeight.Medium)
         .fontColor(this.refunded ? COLOR_TEXT_SECONDARY : '#7B57C7')
         .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis });
@@ -111,21 +108,21 @@ export struct GiveawayBubble {
       }
       Row({ space: 10 }) {
         if (this.winnerCount > 0) {
-          Text(`${this.winnerCount} 位获奖者`)
+          Text(plural('gw_winners_n', this.winnerCount, this.winnerCount))
             .fontSize(10.5).fontColor(COLOR_TEXT_SECONDARY);
         }
         if (this.onlyNewMembers) {
-          Text('仅限新成员').fontSize(10.5).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.gw_new_members_only')).fontSize(10.5).fontColor(COLOR_TEXT_SECONDARY);
         }
         if (this.unclaimedCount > 0) {
-          Text(`${this.unclaimedCount} 份未领取`)
+          Text(plural('gw_unclaimed_n', this.unclaimedCount, this.unclaimedCount))
             .fontSize(10.5).fontColor('#B06A32');
         }
       }.width('100%');
       if (this.originalMessageId > 0) {
         Row({ space: 6 }) {
           SymbolGlyph($r('sys.symbol.arrow_up_right')).fontSize(13).fontColor([COLOR_PRIMARY]);
-          Text('查看原抽奖').fontSize(12).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY);
+          Text($r('app.string.gw_view_original')).fontSize(12).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY);
         }
         .width('100%').height(34)
         .justifyContent(FlexAlign.Center)

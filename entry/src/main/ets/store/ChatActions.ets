@@ -4,6 +4,7 @@ import { TdObject, TdRequest, TdError } from '../tdkit/TdTypes';
 import { chatListOf } from './ListKey';
 import { serializeFolderMutation } from './FolderApi';
 import { ChatKind } from './ChatEntry';
+import { str } from '../util/strings';
 
 // Every chat-list context-menu action, as a plain TDLib call. The UI never
 // mutates the store directly — TDLib echoes each change back as an update
@@ -27,15 +28,15 @@ export interface MuteOption {
 }
 
 export const MUTE_OPTIONS: MuteOption[] = [
-  { label: '静音 1 小时', seconds: 3600 },
-  { label: '静音 8 小时', seconds: 8 * 3600 },
-  { label: '静音 2 天', seconds: 2 * 24 * 3600 },
-  { label: '永久静音', seconds: MUTE_LONG }
+  { label: str('ca_mute_1h'), seconds: 3600 },
+  { label: str('ca_mute_8h'), seconds: 8 * 3600 },
+  { label: str('ca_mute_2d'), seconds: 2 * 24 * 3600 },
+  { label: str('ca_mute_forever'), seconds: MUTE_LONG }
 ];
 
 function fail(what: string, e: TdError): void {
   console.error(`ChatActions.${what} failed: ${e.message}`);
-  promptAction.showToast({ message: `操作失败：${e.message}`, duration: 2000 });
+  promptAction.showToast({ message: str('ca_action_failed_msg', e.message), duration: 2000 });
 }
 
 // TDLib 的 chat 级方法都要求该会话在当前运行期"已加载"，否则一律拒为
@@ -173,7 +174,7 @@ export async function setInFolder(folderId: number, chatId: number, include: boo
       const info = await client.send(edit);
       getFolderStore().applyServerFolderInfo(info);
     });
-    promptAction.showToast({ message: include ? '已添加到文件夹' : '已移出文件夹', duration: 1500 });
+    promptAction.showToast({ message: include ? str('ca_added_to_folder') : str('ca_removed_from_folder'), duration: 1500 });
   } catch (e) {
     fail('setInFolder', e as TdError);
   }
@@ -237,10 +238,23 @@ export function leaveOrDeleteChat(chatId: number, kind: ChatKind): void {
 // Menu label for the destructive last item, by chat kind.
 export function leaveLabel(kind: ChatKind): string {
   if (kind === 'channel') {
-    return '退出频道';
+    return str('cp_leave_channel');
   }
   if (kind === 'basicGroup' || kind === 'supergroup') {
-    return '退出群组';
+    return str('cp_leave_group');
   }
-  return '删除聊天';
+  return str('ca_delete_chat');
+}
+
+// A full sentence per kind rather than a verb spliced out of leaveLabel(). The
+// caller used to do label.substring(0, 2) to get "退出" / "删除" — a character
+// slice of display text, which yields "De" the moment the label is English.
+export function leaveConfirmMessage(kind: ChatKind, title: string): string {
+  if (kind === 'channel') {
+    return str('ca_confirm_leave_channel', title);
+  }
+  if (kind === 'basicGroup' || kind === 'supergroup') {
+    return str('ca_confirm_leave_group', title);
+  }
+  return str('ca_confirm_delete_chat', title);
 }

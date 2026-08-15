@@ -60,7 +60,7 @@ export struct LiveInteractionBubble {
               .fontColor(this.message.isFromOwner ? INTERACTION_GREEN : INTERACTION_ACCENT)
               .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
             if (this.message.isFromOwner) {
-              Text('主播').fontSize(8).fontWeight(FontWeight.Bold).fontColor('#082018')
+              Text($r('app.string.live_host')).fontSize(8).fontWeight(FontWeight.Bold).fontColor('#082018')
                 .padding({ left: 5, right: 5, top: 2, bottom: 2 })
                 .backgroundColor(INTERACTION_GREEN).borderRadius(6);
             }
@@ -78,9 +78,9 @@ export struct LiveInteractionBubble {
               .constraintSize({ maxWidth: 270 });
           }
           if (this.message.sendState === 'pending') {
-            Text('正在发送…').fontSize(9).fontColor(INTERACTION_SUBTEXT);
+            Text($r('app.string.sending')).fontSize(9).fontColor(INTERACTION_SUBTEXT);
           } else if (this.message.sendState === 'failed') {
-            Text('发送失败').fontSize(9).fontColor('#FF8190');
+            Text($r('app.string.send_failed')).fontSize(9).fontColor('#FF8190');
           }
         }
         .alignItems(HorizontalAlign.Start)

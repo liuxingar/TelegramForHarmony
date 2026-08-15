@@ -11,6 +11,7 @@ import {
 } from './AppSettings';
 import { PollOptionInfo } from '../util/formatMsgContent';
 import { reactionTypeOf } from '../util/reactions';
+import { str } from '../util/strings';
 
 const PAGE: number = 30;
 // Visible bubble/header thumbnails should outrank silent video prefetch. The
@@ -28,23 +29,23 @@ const THUMB_REKICK_MS: number = 8000;
 function pollVoteErrorText(raw: string): string {
   const normalized = raw.trim().toUpperCase();
   if (normalized.indexOf('POLL_MEMBER_RESTRICTED') >= 0) {
-    return '该投票仅限符合条件的订阅成员参与（加入需满 24 小时）';
+    return str('ms_poll_subscribers_only');
   }
   if (normalized.indexOf('POLL_COUNTRY_RESTRICTED') >= 0) {
-    return '该投票仅限指定国家或地区的用户参与';
+    return str('ms_poll_region_only');
   }
   if (normalized.indexOf('REVOTE_NOT_ALLOWED') >= 0) {
-    return '该投票提交后不能修改选择';
+    return str('ms_poll_no_change');
   }
   if (normalized.indexOf('MESSAGE_POLL_CLOSED') >= 0 ||
     normalized.indexOf('POLL_CLOSED') >= 0) {
-    return '投票已经结束';
+    return str('ms_poll_closed');
   }
   if (normalized.indexOf('OPTION_INVALID') >= 0 ||
     normalized.indexOf('POLL_OPTION_INVALID') >= 0) {
-    return '该投票选项已经失效，请刷新后重试';
+    return str('ms_poll_option_stale');
   }
-  return raw.trim() !== '' ? `投票失败：${raw.trim()}` : '投票失败，请稍后重试';
+  return raw.trim() !== '' ? str('ms_vote_failed_msg', raw.trim()) : str('ms_vote_failed');
 }
 
 type MsgListener = (msgs: MessageEntry[]) => void;
@@ -1427,7 +1428,7 @@ export class MessageStore {
   recognizeSpeech(messageId: number): Promise<void> {
     const idx = this.indexOf(messageId);
     if (idx < 0) {
-      return Promise.reject(new Error('消息不存在'));
+      return Promise.reject(new Error(str('ms_message_missing')));
     }
     this.patch(messageId, (c: MessageEntry): void => {
       c.speechState = 'pending';
@@ -3235,12 +3236,12 @@ export class MessageStore {
 
   private historyErrorHint(error: TdError): string {
     if (error.code === -1 || error.message.toLowerCase().indexOf('timeout') >= 0) {
-      return '连接超时，请检查网络后重试';
+      return str('ms_timeout');
     }
     if (error.code === 401) {
-      return '登录状态已失效，请重新登录';
+      return str('ms_session_expired');
     }
-    return '暂时无法同步消息，请稍后重试';
+    return str('ms_sync_failed');
   }
 
   private notifyPinned(): void {
@@ -3410,10 +3411,10 @@ export class MessageStore {
     if (this.memberCount <= 0) {
       return;
     }
-    let s = `${formatMemberCount(this.memberCount)} 位${this.isChannel ? '订阅者' : '成员'}`;
+    let s = str('subtitle_member_count', formatMemberCount(this.memberCount), this.isChannel ? str('subscribers_word') : str('members_word'));
     // Channels don't surface member presence — online counts are a group thing.
     if (!this.isChannel && this.onlineCount > 0) {
-      s += `, ${this.onlineCount} 人在线`;
+      s += str('subtitle_online_suffix', this.onlineCount);
     }
     this.setSubtitle(s);
   }
@@ -3507,7 +3508,7 @@ export class MessageStore {
     onFinished: (ok: boolean, error: string) => void): void {
     const idx = this.indexOf(messageId);
     if (idx < 0) {
-      onFinished(false, '投票消息已不可用');
+      onFinished(false, str('ms_poll_message_gone'));
       return;
     }
     const entry = this.messages[idx];
@@ -3515,19 +3516,19 @@ export class MessageStore {
       Math.floor(Date.now() / 1000) >= entry.pollCloseDate;
     if (entry.contentType !== 'poll' || entry.pollQuestion.trim() === '' ||
       entry.pollOptions.length < 2) {
-      onFinished(false, '投票内容不可用');
+      onFinished(false, str('poll_unavailable'));
       return;
     }
     if (entry.pollVotePending) {
       return;
     }
     if (entry.pollIsClosed || expired) {
-      onFinished(false, '投票已经结束');
+      onFinished(false, str('ms_poll_closed'));
       return;
     }
     if (entry.pollIsQuiz &&
       entry.pollOptions.some((option): boolean => option.isChosen)) {
-      onFinished(false, '答题投票只能提交一次');
+      onFinished(false, str('ms_quiz_once'));
       return;
     }
     const unique: number[] = [];
@@ -3538,7 +3539,7 @@ export class MessageStore {
       }
     }
     if (!entry.pollAllowMultiple && unique.length > 1) {
-      onFinished(false, '该投票只能选择一项');
+      onFinished(false, str('ms_single_choice'));
       return;
     }
     const previousOptions: PollOptionInfo[] =
@@ -3589,7 +3590,7 @@ export class MessageStore {
         current.pollVotePending = false;
         current.pollVoteError = message;
         current.pollOptions = previousOptions;
-        if (message === '投票已经结束') { current.pollIsClosed = true; }
+        if (message === str('ms_poll_closed')) { current.pollIsClosed = true; }
       });
       onFinished(false, message);
       console.error(`MessageStore.setPollAnswer failed: ${error.message}`);
@@ -3675,7 +3676,7 @@ export class MessageStore {
       }
       const c = cloneMessage(e);
       c.replySenderName = target.senderName;
-      c.replyText = target.contentType === 'text' ? target.text : (target.placeholderLabel !== '' ? target.placeholderLabel : '[图片]');
+      c.replyText = target.contentType === 'text' ? target.text : (target.placeholderLabel !== '' ? target.placeholderLabel : str('ms_photo_bracket'));
       return c;
     });
     for (const id of missing) {
@@ -3697,7 +3698,7 @@ export class MessageStore {
       const entry = buildMessageEntry(res, this.users);
       const preview: string = entry.contentType === 'text'
         ? entry.text
-        : (entry.placeholderLabel !== '' ? entry.placeholderLabel : '[图片]');
+        : (entry.placeholderLabel !== '' ? entry.placeholderLabel : str('ms_photo_bracket'));
       if (preview === '' && entry.senderName === '') {
         return;
       }

@@ -1,4 +1,5 @@
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import { plural, str } from '../../util/strings';
 
 @Component
 export struct LocationBubble {
@@ -62,16 +63,16 @@ export struct LocationBubble {
 
   private liveLabel(): string {
     if (!this.liveActive()) {
-      return '实时位置已结束';
+      return str('loc_live_ended');
     }
     const remaining = this.liveRemaining();
     if (remaining <= 0) {
-      return '实时共享中';
+      return str('loc_live_sharing');
     }
     if (remaining >= 3600) {
-      return `实时位置 · ${Math.ceil(remaining / 3600)} 小时`;
+      return plural('loc_live_hours', Math.ceil(remaining / 3600), Math.ceil(remaining / 3600));
     }
-    return `实时位置 · ${Math.max(1, Math.ceil(remaining / 60))} 分钟`;
+    return plural('loc_live_minutes', Math.max(1, Math.ceil(remaining / 60)), Math.max(1, Math.ceil(remaining / 60)));
   }
 
   private title(): string {
@@ -79,9 +80,9 @@ export struct LocationBubble {
       return this.venueTitle.trim();
     }
     if (this.livePeriod > 0) {
-      return this.liveActive() ? '实时位置' : '实时位置已结束';
+      return this.liveActive() ? str('loc_live') : str('loc_live_ended');
     }
-    return this.valid ? '位置' : '位置信息不可用';
+    return this.valid ? str('loc_location') : str('loc_unavailable');
   }
 
   private coordinateText(): string {
@@ -99,13 +100,13 @@ export struct LocationBubble {
       return this.liveLabel();
     }
     if (this.accuracy > 0) {
-      return `精确到约 ${Math.max(1, Math.round(this.accuracy))} 米`;
+      return plural('loc_accuracy', Math.max(1, Math.round(this.accuracy)), Math.max(1, Math.round(this.accuracy)));
     }
     if (this.proximityRadius > 0) {
-      return `提醒范围 ${Math.round(this.proximityRadius)} 米`;
+      return plural('loc_proximity', Math.round(this.proximityRadius), Math.round(this.proximityRadius));
     }
     const coordinate = this.coordinateText();
-    return coordinate !== '' ? coordinate : '无法读取坐标';
+    return coordinate !== '' ? coordinate : str('loc_no_coords');
   }
 
   @Builder
@@ -133,14 +134,14 @@ export struct LocationBubble {
       } else {
         Column({ space: 5 }) {
           SymbolGlyph($r('sys.symbol.map')).fontSize(24).fontColor(['#8E969F']);
-          Text('无可用坐标').fontSize(11).fontColor('#737B84');
+          Text($r('app.string.loc_coords_missing')).fontSize(11).fontColor('#737B84');
         }.justifyContent(FlexAlign.Center);
       }
       if (this.livePeriod > 0) {
         Row({ space: 5 }) {
           Circle({ width: 7, height: 7 })
             .fill(this.liveActive() ? '#32B66A' : '#929AA3');
-          Text(this.liveActive() ? '实时' : '已结束')
+          Text(this.liveActive() ? $r('app.string.loc_live_short') : $r('app.string.ended'))
             .fontSize(10.5).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
         }
         .padding({ left: 8, right: 8, top: 4, bottom: 4 })
@@ -177,7 +178,7 @@ export struct LocationBubble {
       if (this.sharing) {
         Row({ space: 6 }) {
           SymbolGlyph($r('sys.symbol.stop_circle')).fontSize(16).fontColor(['#D95B57']);
-          Text('停止共享')
+          Text($r('app.string.loc_stop_sharing'))
             .fontSize(13).fontWeight(FontWeight.Medium).fontColor('#D95B57');
         }
         .justifyContent(FlexAlign.Center)
@@ -196,7 +197,7 @@ export struct LocationBubble {
       pressed: this.cardPressedStyle
     })
     .animation({ duration: 120, curve: Curve.EaseOut })
-    .accessibilityText(this.available() ? `${this.title()}，${this.detail()}` : '位置信息不可用')
+    .accessibilityText(this.available() ? `${this.title()}，${this.detail()}` : str('loc_unavailable'))
     .onClick((): void => {
       if (this.available()) {
         this.onOpen();

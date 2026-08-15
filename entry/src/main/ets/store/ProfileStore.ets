@@ -3,6 +3,8 @@ import { TdObject, TdRequest, TdError } from '../tdkit/TdTypes';
 import { formatUserStatus } from '../util/formatUserStatus';
 import { formatMemberCount } from '../util/formatMemberCount';
 import { formatPreview } from '../util/formatPreview';
+import { str } from '../util/strings';
+import { monthDay } from '../util/intlFormat';
 
 const DL_PRIORITY: number = 1;
 const WEEK_MINUTES: number = 7 * 24 * 60;
@@ -341,7 +343,10 @@ export class ProfileStore {
       if (bd !== undefined) {
         const day = (bd['day'] as number | undefined) ?? 0;
         const month = (bd['month'] as number | undefined) ?? 0;
-        this.birthday = (day > 0 && month > 0) ? `${month}月${day}日` : '';
+        // A birthday has no year; Intl needs a Date, so the year is arbitrary
+        // and never rendered. The month/day order is locale business.
+        this.birthday = (day > 0 && month > 0)
+          ? monthDay(new Date(2000, month - 1, day)) : '';
       } else {
         this.birthday = '';
       }
@@ -372,7 +377,7 @@ export class ProfileStore {
       for (const iv of intervals) {
         total += ((iv['end_minute'] as number | undefined) ?? 0) - ((iv['start_minute'] as number | undefined) ?? 0);
       }
-      this.bizHoursText = total >= WEEK_MINUTES ? '7 × 24 小时营业' : '查看营业时间';
+      this.bizHoursText = total >= WEEK_MINUTES ? str('ps_open_24_7') : str('ps_view_hours');
     }
     const loc = biz['location'] as TdObject | undefined;
     this.bizAddress = loc !== undefined ? ((loc['address'] as string | undefined) ?? '') : '';
@@ -400,7 +405,7 @@ export class ProfileStore {
         this.send(sg, 'getSupergroupFullInfo', (f: TdObject) => {
           const c = (f['member_count'] as number | undefined) ?? 0;
           if (c > 0) {
-            this.chSubs = `${formatMemberCount(c)} 位订阅者`;
+            this.chSubs = str('subtitle_subscribers', formatMemberCount(c));
             this.notify();
           }
         });
@@ -479,7 +484,7 @@ export class ProfileStore {
       return;
     }
     this.storiesLoading = false;
-    this.storiesError = '动态加载失败，请稍后重试';
+    this.storiesError = str('ps_stories_failed');
     this.notify();
   }
 
@@ -613,7 +618,7 @@ export class ProfileStore {
         return;
       }
       this.archivedStoriesLoading = false;
-      this.archivedStoriesError = '归档动态加载失败，请稍后重试';
+      this.archivedStoriesError = str('ps_archived_failed');
       this.notify();
     });
   }
@@ -641,7 +646,7 @@ export class ProfileStore {
         return;
       }
       this.archivedStoriesLoading = false;
-      this.archivedStoriesError = '归档动态加载失败，请稍后重试';
+      this.archivedStoriesError = str('ps_archived_failed');
       this.notify();
     });
   }

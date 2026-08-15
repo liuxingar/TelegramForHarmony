@@ -13,6 +13,7 @@ import { mediaPlaybackKeepAlive } from '../../services/MediaPlaybackKeepAlive';
 import { KEY_BG_PLAY_VIDEO } from '../../store/AppSettings';
 import { VideoRangeServer } from '../../services/VideoRangeServer';
 import { VideoStreamSession } from '../../services/VideoStreamSession';
+import { str } from '../../util/strings';
 
 const CONTROL_BAR_BG: string = '#6e3e3e40';
 const CONTROL_ACCENT: string = '#FFFFFF';
@@ -91,7 +92,7 @@ export struct StreamingVideoPlayer {
   private surfaceContext: object | null = null;
   private active: boolean = true;
   private readonly playerInstanceId: number = nextPlayerInstanceId++;
-  @State status: string = '正在缓冲...';
+  @State status: string = str('player_buffering_dots');
   @State hasError: boolean = false;
   @State errorDetail: string = '';
   @State isPrepared: boolean = false;
@@ -231,11 +232,11 @@ export struct StreamingVideoPlayer {
       return;
     }
     if (this.localPath === '' && this.fileId === 0) {
-      this.showError('视频文件不可用');
+      this.showError(str('player_video_unavailable'));
       return;
     }
     if (this.localPath === '' && this.fileSize <= 0) {
-      this.showError('无法获取视频大小');
+      this.showError(str('player_no_size'));
       return;
     }
     this.surfaceContext = context;
@@ -243,7 +244,7 @@ export struct StreamingVideoPlayer {
     this.errorDetail = '';
     this.isPrepared = false;
     this.videoVisible = false;
-    this.status = '正在准备视频';
+    this.status = str('player_preparing');
     this.bufferedPercent = this.localPath !== '' ? 100 : 0;
     this.downloadSpeed = 0;
     this.lastBufferedBytes = 0;
@@ -321,7 +322,7 @@ export struct StreamingVideoPlayer {
       const infoListener: OnInfoListener = {
         onInfo: (what: number, extra: number): void => {
           if (what === 701) {
-            this.status = '正在缓冲';
+            this.status = str('player_buffering');
           } else if (what === 702 || what === 3) {
             this.status = '';
             if (what === 3 && this.firstFrameTimer === -1) {
@@ -341,7 +342,7 @@ export struct StreamingVideoPlayer {
       const errorListener: OnErrorListener = {
         onError: (what: number, extra: number): void => {
           this.isPlaying = false;
-          this.showError('播放失败，请稍后重试');
+          this.showError(str('player_play_failed'));
           console.error(`StreamingVideoPlayer error: what=${what}, extra=${extra}`);
         }
       };
@@ -367,7 +368,7 @@ export struct StreamingVideoPlayer {
     } catch (e) {
       console.error(`StreamingVideoPlayer.init failed: ${e}`);
       this.release();
-      this.showError('视频加载失败，请检查网络后重试');
+      this.showError(str('player_load_failed'));
     }
   }
 
@@ -388,7 +389,7 @@ export struct StreamingVideoPlayer {
     this.release();
     this.hasError = false;
     this.errorDetail = '';
-    this.status = '正在重新连接';
+    this.status = str('player_reconnecting');
     this.isCompleted = false;
     this.currentTimeMs = 0;
     this.retryTimer = setTimeout((): void => {
@@ -497,8 +498,8 @@ export struct StreamingVideoPlayer {
     // latest selection, so tapping during an initial buffer is never lost.
     this.speedIdx = nextIdx;
     this.showSpeedFeedback(applied
-      ? `播放速度 ${SPEED_LABELS[nextIdx]}`
-      : `倍速切换失败`);
+      ? str('player_speed', SPEED_LABELS[nextIdx])
+      : str('player_speed_failed'));
   }
 
   private showSpeedFeedback(text: string): void {
@@ -621,7 +622,7 @@ export struct StreamingVideoPlayer {
       .width('50%')
       .height('100%')
       .backgroundColor(Color.Transparent)
-      .accessibilityText(forward ? '双击快进15秒' : '双击快退15秒')
+      .accessibilityText(forward ? $r('app.string.player_double_tap_forward') : $r('app.string.player_double_tap_back'))
       .gesture(
         GestureGroup(GestureMode.Exclusive,
           TapGesture({ count: 2, fingers: 1 })
@@ -643,7 +644,7 @@ export struct StreamingVideoPlayer {
           SymbolGlyph($r('sys.symbol.goforward_15'))
             .fontSize(36).fontColor([Color.White]);
         }
-        Text(this.seekFeedbackSide < 0 ? '后退 15 秒' : '快进 15 秒')
+        Text(this.seekFeedbackSide < 0 ? $r('app.string.player_back_15') : $r('app.string.player_forward_15'))
           .fontSize(12)
           .fontColor(Color.White)
           .fontWeight(FontWeight.Medium);
@@ -668,7 +669,7 @@ export struct StreamingVideoPlayer {
           SymbolGlyph($r('sys.symbol.goforward_15'))
             .fontSize(36).fontColor([Color.White]);
         }
-        Text(this.seekFeedbackSide < 0 ? '后退 15 秒' : '快进 15 秒')
+        Text(this.seekFeedbackSide < 0 ? $r('app.string.player_back_15') : $r('app.string.player_forward_15'))
           .fontSize(12)
           .fontColor(Color.White)
           .fontWeight(FontWeight.Medium);
@@ -727,7 +728,7 @@ export struct StreamingVideoPlayer {
       pressed: this.controlPressedStyle
     })
     .animation({ duration: 120, curve: Curve.EaseOut })
-    .accessibilityText(`当前${SPEED_LABELS[this.speedIdx]}倍速，点击切换`)
+    .accessibilityText(str('player_speed_a11y', SPEED_LABELS[this.speedIdx]))
     .onClick((): void => { this.cycleSpeed(); });
   }
 
@@ -822,7 +823,7 @@ export struct StreamingVideoPlayer {
           SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
             .fontSize(30)
             .fontColor([Color.White]);
-          Text('视频播放失败')
+          Text($r('app.string.player_playback_failed'))
             .fontSize(14)
             .fontColor(Color.White)
             .fontWeight(FontWeight.Medium);
@@ -833,7 +834,7 @@ export struct StreamingVideoPlayer {
             .textAlign(TextAlign.Center);
           Row({ space: 5 }) {
             SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(13).fontColor([Color.White]);
-            Text('重试').fontSize(13).fontColor(Color.White).fontWeight(FontWeight.Medium);
+            Text($r('app.string.settings_retry')).fontSize(13).fontColor(Color.White).fontWeight(FontWeight.Medium);
           }
           .height(34)
           .padding({ left: 15, right: 15 })
@@ -877,7 +878,7 @@ export struct StreamingVideoPlayer {
           Row({ space: 8 }) {
             SymbolGlyph($r('sys.symbol.arrow_clockwise'))
               .fontSize(25).fontColor([Color.White]);
-            Text('重播').fontSize(18).fontColor(Color.White).fontWeight(FontWeight.Medium);
+            Text($r('app.string.player_replay')).fontSize(18).fontColor(Color.White).fontWeight(FontWeight.Medium);
           }
           .padding({ left: 20, right: 20, top: 14, bottom: 14 })
           .backgroundColor(CONTROL_BAR_BG)

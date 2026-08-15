@@ -6,6 +6,7 @@ import {
   getBoolOption, getConnectedWebsiteCount, getNewChatPrivacy, getPasswordState,
   getPrivacy, getReadDatePrivacy, getSessionCount, parsePrivacyRules
 } from './PrivacyApi';
+import { str } from '../util/strings';
 
 export type PrivacyLoadState = 'loading' | 'ready' | 'error';
 
@@ -175,11 +176,11 @@ export class PrivacyStore {
       this.refreshing = false;
       if (successCount === 0) {
         this.loadState = 'error';
-        this.syncError = '无法读取隐私设置，请检查网络后重试';
+        this.syncError = str('pst_read_failed');
       } else {
         this.loadState = 'ready';
         if (successCount < results.length) {
-          this.syncError = '部分设置暂未同步，未加载的项目不会显示假值';
+          this.syncError = str('pst_partial');
         }
       }
       this.notify();

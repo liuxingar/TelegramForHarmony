@@ -1,4 +1,5 @@
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import { str } from '../../util/strings';
 
 // 删除消息的确认弹窗。用 CustomDialog 而不是 promptAction.showDialog：后者
 // 只能排按钮，挂不了复选框，而"是否同时为对方删除"是一个开关而非第三个按钮
@@ -12,12 +13,12 @@ export struct DeleteMessagesDialog {
   @State revoke: boolean = false;
 
   private revokeLabel(): string {
-    return this.peerName !== '' ? `为我和 ${this.peerName} 删除` : '为所有人删除';
+    return this.peerName !== '' ? str('dm_delete_for_both', this.peerName) : str('dm_delete_for_everyone');
   }
 
   build() {
     Column({ space: 18 }) {
-      Text('是否删除所选消息？')
+      Text($r('app.string.dm_confirm'))
         .fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY)
         .textAlign(TextAlign.Center).width('100%');
 
@@ -36,13 +37,13 @@ export struct DeleteMessagesDialog {
       .onClick((): void => { this.revoke = !this.revoke; });
 
       Row({ space: 12 }) {
-        Button('取消')
+        Button($r('app.string.cancel'))
           .fontSize(16).fontColor(COLOR_TEXT_SECONDARY)
           .backgroundColor($r('app.color.surface_alt'))
           .borderRadius(22)
           .layoutWeight(1).height(44)
           .onClick((): void => { this.controller?.close(); });
-        Button('删除')
+        Button($r('app.string.delete'))
           .fontSize(16).fontWeight(FontWeight.Medium).fontColor(Color.White)
           .backgroundColor(COLOR_PRIMARY)
           .borderRadius(22)

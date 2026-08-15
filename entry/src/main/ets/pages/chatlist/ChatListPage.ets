@@ -7,6 +7,7 @@ import { CHAT_LIST_NOW } from './ChatListFreeze';
 import { COLOR_PRIMARY, COLOR_TEXT_SECONDARY, COLOR_TAB_SELECTED, COLOR_TAB_UNSELECTED, COLOR_BADGE_BG, COLOR_TAB_PILL_BG } from '../../util/theme';
 import { router } from '@kit.ArkUI';
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
+import { str } from '../../util/strings';
 
 interface TabSpec {
   key: string;
@@ -28,7 +29,10 @@ export struct ChatListPage {
   @State selectedIndex: number = 0;
   // TDLib connection state as a small status hint beside the title
   // ('' when connectionStateReady — nothing shown).
-  @State syncLabel: string = '';
+  // The connection state itself, not its label. Keeping the token rather than
+  // the rendered text lets the Text below hold a Resource, so the label follows
+  // a language switch without waiting for the next connection update.
+  @State syncState: string = '';
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('screenWidthVp') screenW: number = 360;
   // Sliding selection pill: position/size interpolated between tab frames so it
@@ -153,9 +157,8 @@ export struct ChatListPage {
     this.unsubConn = getTdClient().onUpdate('updateConnectionState', (u: TdObject) => {
       const st = u['state'] as TdObject | undefined;
       const t = st !== undefined ? ((st['@type'] as string | undefined) ?? '') : '';
-      this.syncLabel = t === 'connectionStateUpdating' ? '刷新中...'
-        : (t === 'connectionStateConnecting' || t === 'connectionStateConnectingToProxy' ? '连接中...'
-          : (t === 'connectionStateWaitingForNetwork' ? '等待网络...' : ''));
+      this.syncState = t === 'connectionStateUpdating' || t === 'connectionStateConnecting'
+        || t === 'connectionStateConnectingToProxy' || t === 'connectionStateWaitingForNetwork' ? t : '';
     });
   }
 
@@ -250,7 +253,7 @@ export struct ChatListPage {
       specs.push({ key: `folder:${f.id}`, title: f.title });
     }
     const position = Math.max(0, Math.min(specs.length, this.mainListPosition));
-    specs.splice(position, 0, { key: 'main', title: '所有' });
+    specs.splice(position, 0, { key: 'main', title: str('cl_all') });
     return specs;
   }
 
@@ -263,7 +266,7 @@ export struct ChatListPage {
     getTdClient().send(meRequest).then((me: TdObject): Promise<TdObject> => {
       const userId = (me['id'] as number | undefined) ?? 0;
       if (userId <= 0) {
-        return Promise.reject(new Error('当前账号信息不可用'));
+        return Promise.reject(new Error(str('cl_account_unavailable')));
       }
       const chatRequest: TdRequest = { '@type': 'createPrivateChat' };
       chatRequest['user_id'] = userId;
@@ -272,7 +275,7 @@ export struct ChatListPage {
     }).then((chat: TdObject): Promise<void> => {
       const chatId = (chat['id'] as number | undefined) ?? 0;
       if (chatId <= 0) {
-        return Promise.reject(new Error('收藏对话不可用'));
+        return Promise.reject(new Error(str('cl_saved_unavailable')));
       }
       const params: Record<string, Object> = { 'chatId': chatId };
       return router.pushUrl({ url: 'pages/chat/ChatPage', params: params });
@@ -326,11 +329,11 @@ export struct ChatListPage {
   @Builder
   moreMenu() {
     Menu() {
-      MenuItem({ content: '新建群组' })
+      MenuItem({ content: $r('app.string.ct_new_group') })
         .onClick((): void => {
           router.pushUrl({ url: 'pages/main/NewGroupPage' });
         });
-      MenuItem({ content: '我的收藏' })
+      MenuItem({ content: $r('app.string.cl_saved_messages') })
         .onClick((): void => {
           this.openSavedMessages();
         });
@@ -388,10 +391,17 @@ export struct ChatListPage {
       pressed: this.actionPressedStyle
     })
     .enabled(!this.searchOpening)
-    .accessibilityText(this.searchOpening ? '正在打开全局搜索' : '全局搜索')
+    .accessibilityText(this.searchOpening ? $r('app.string.cl_opening_search') : $r('app.string.cl_global_search'))
     .onClick((): void => {
       this.openGlobalSearch();
     });
+  }
+
+  syncLabel(): ResourceStr {
+    if (this.syncState === 'connectionStateUpdating') { return $r('app.string.cl_refreshing'); }
+    if (this.syncState === 'connectionStateWaitingForNetwork') { return $r('app.string.cl_waiting_network'); }
+    if (this.syncState === '') { return ''; }
+    return $r('app.string.cl_connecting');
   }
 
   @Builder
@@ -401,17 +411,17 @@ export struct ChatListPage {
         Text('Telegram')
           .fontSize(25).fontWeight(FontWeight.Bold).fontColor(COLOR_PRIMARY)
           .maxLines(1)
-          .translate({ y: this.syncLabel === '' ? 7 : 0 })
+          .translate({ y: this.syncState === '' ? 7 : 0 })
           .animation({
             duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
             curve: Curve.EaseOut
           });
-        Text(this.syncLabel)
+        Text(this.syncLabel())
           .height(14).fontSize(11).lineHeight(14)
           .fontColor(COLOR_TEXT_SECONDARY)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-          .opacity(this.syncLabel === '' ? 0 : 1)
-          .translate({ y: this.syncLabel === '' ? -3 : 0 })
+          .opacity(this.syncState === '' ? 0 : 1)
+          .translate({ y: this.syncState === '' ? -3 : 0 })
           .animation({
             duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
             curve: Curve.EaseOut
@@ -434,7 +444,7 @@ export struct ChatListPage {
         normal: this.actionNormalStyle,
         pressed: this.actionPressedStyle
       })
-      .accessibilityText('更多操作')
+      .accessibilityText($r('app.string.cl_more_actions'))
       .bindMenu(this.moreMenu());
     }
     .width('100%').height(TOP_BAR_HEIGHT)
@@ -490,7 +500,7 @@ export struct ChatListPage {
     })
     .accessibilityText(
       (this.unreadMap.get(spec.key) ?? 0) > 0
-        ? `${spec.title}，${this.tabBadgeText(spec)} 个未读`
+        ? str('cl_tab_unread_a11y', spec.title, this.tabBadgeText(spec))
         : spec.title
     )
     .onClick(() => { this.controller.changeIndex(index); });

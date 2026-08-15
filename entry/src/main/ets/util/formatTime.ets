@@ -1,8 +1,4 @@
-const WEEKDAYS: string[] = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-
-function pad2(n: number): string {
-  return n < 10 ? `0${n}` : `${n}`;
-}
+import { clockTime, fullDate, monthDay, weekdayShort } from './intlFormat';
 
 // Message bubbles always show the message's local clock time. Relative labels
 // such as "周二" belong to conversation/search previews, not the timestamp in
@@ -11,8 +7,7 @@ export function formatClockTime(unixSec: number): string {
   if (unixSec <= 0) {
     return '';
   }
-  const d = new Date(unixSec * 1000);
-  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  return clockTime(new Date(unixSec * 1000));
 }
 
 export function formatTime(unixSec: number, nowSec: number): string {
@@ -25,14 +20,14 @@ export function formatTime(unixSec: number, nowSec: number): string {
     && d.getMonth() === now.getMonth()
     && d.getDate() === now.getDate();
   if (sameDay) {
-    return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    return clockTime(d);
   }
   const deltaDays = (nowSec - unixSec) / 86400;
   if (deltaDays >= 0 && deltaDays < 7) {
-    return WEEKDAYS[d.getDay()];
+    return weekdayShort(d);
   }
   if (d.getFullYear() === now.getFullYear()) {
-    return `${d.getMonth() + 1}月${d.getDate()}日`;
+    return monthDay(d);
   }
-  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+  return fullDate(d);
 }

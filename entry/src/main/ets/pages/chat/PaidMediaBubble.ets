@@ -1,4 +1,5 @@
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import { str } from '../../util/strings';
 
 @Component
 export struct PaidMediaBubble {
@@ -32,7 +33,7 @@ export struct PaidMediaBubble {
 
   private countText(): string {
     const count = Math.max(1, this.mediaCount);
-    return `${count} 项${this.locked ? '付费' : '已解锁'}内容`;
+    return str('paid_items', count, this.locked ? str('paid_locked_word') : str('paid_unlocked_word'));
   }
 
   private available(): boolean {
@@ -45,12 +46,12 @@ export struct PaidMediaBubble {
 
   private actionText(): string {
     if (this.locked) {
-      return this.starCount > 0 ? `⭐ ${this.starCount}  解锁` : '暂时无法解锁';
+      return this.starCount > 0 ? str('paid_unlock_stars', this.starCount) : str('paid_cannot_unlock');
     }
     if (!this.available()) {
-      return '内容暂不可用';
+      return str('paid_content_unavailable');
     }
-    return this.mediaKind === 'video' ? '播放已解锁视频' : '查看已解锁图片';
+    return this.mediaKind === 'video' ? str('paid_play_video') : str('paid_view_photo');
   }
 
   private trigger(): void {
@@ -113,7 +114,7 @@ export struct PaidMediaBubble {
           SymbolGlyph($r(this.mediaKind === 'video'
             ? 'sys.symbol.video_fill' : 'sys.symbol.photo_fill'))
             .fontSize(30).fontColor([COLOR_TEXT_SECONDARY]);
-          Text(this.photoFileId === 0 ? '媒体内容暂不可用' : '正在加载已解锁内容')
+          Text(this.photoFileId === 0 ? $r('app.string.paid_media_unavailable') : $r('app.string.paid_loading_unlocked'))
             .fontSize(11.5).fontColor(COLOR_TEXT_SECONDARY);
         }
         .width('100%').height(156)
@@ -125,7 +126,7 @@ export struct PaidMediaBubble {
           Column({ space: 4 }) {
             SymbolGlyph($r('sys.symbol.arrow_clockwise'))
               .fontSize(19).fontColor([Color.White]);
-            Text('重试').fontSize(10.5).fontColor(Color.White);
+            Text($r('app.string.settings_retry')).fontSize(10.5).fontColor(Color.White);
           }
           .padding({ left: 12, right: 12, top: 8, bottom: 8 })
           .backgroundColor('#85000000').borderRadius(12)
@@ -169,14 +170,14 @@ export struct PaidMediaBubble {
       }
       Row() {
         Column({ space: 2 }) {
-          Text(this.locked ? '付费媒体' : '付费媒体 · 已解锁')
+          Text(this.locked ? $r('app.string.paid_media') : $r('app.string.paid_media_unlocked'))
             .fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
           if (this.caption.trim() !== '') {
             Text(this.caption).fontSize(11.5).fontColor(COLOR_TEXT_SECONDARY)
               .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis });
           }
           if (!this.locked && this.mediaCount > 1) {
-            Text('当前查看器先展示第 1 项，其余媒体仍保持已解锁状态')
+            Text($r('app.string.paid_viewer_note'))
               .fontSize(10.5).fontColor(COLOR_TEXT_SECONDARY)
               .maxLines(2);
           }
@@ -185,7 +186,7 @@ export struct PaidMediaBubble {
       Row({ space: 6 }) {
         if (this.pending) {
           LoadingProgress().width(16).height(16).color(Color.White);
-          Text('正在检查支付信息').fontSize(12.5).fontColor(Color.White);
+          Text($r('app.string.paid_checking')).fontSize(12.5).fontColor(Color.White);
         } else {
           Text(this.actionText())
             .fontSize(12.5).fontWeight(FontWeight.Medium).fontColor(Color.White);

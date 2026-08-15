@@ -2,6 +2,7 @@ import { TdClient } from '../tdkit/TdClient';
 import { TdObject, TdRequest, TdError } from '../tdkit/TdTypes';
 import { formatUserStatus } from '../util/formatUserStatus';
 import { formatMemberCount } from '../util/formatMemberCount';
+import { str } from '../util/strings';
 
 const DL_PRIORITY: number = 1;
 
@@ -149,7 +150,7 @@ export class GlobalSearchStore {
       const row: SearchRow = {
         chatId, userId: 0, title,
         initials: title.length > 0 ? title.substring(0, 1).toUpperCase() : '?',
-        avatarPath: '', subtitle: '频道', isChannel: true
+        avatarPath: '', subtitle: str('gn_channel'), isChannel: true
       };
       this.setBucket(bucket, [...this.getBucket(bucket), row]);
       this.notify();
@@ -197,7 +198,7 @@ export class GlobalSearchStore {
       if (count > 0) {
         this.patch(bucket, chatId, (r: SearchRow): SearchRow => ({
           chatId: r.chatId, userId: r.userId, title: r.title, initials: r.initials,
-          avatarPath: r.avatarPath, subtitle: `${formatMemberCount(count)} 位订阅者`, isChannel: r.isChannel
+          avatarPath: r.avatarPath, subtitle: str('subtitle_subscribers', formatMemberCount(count)), isChannel: r.isChannel
         }));
       }
     }).catch((e: TdError) => {
@@ -240,7 +241,7 @@ export class GlobalSearchStore {
       const title = `${first}${last !== '' ? ' ' + last : ''}`;
       const type = user['type'] as TdObject | undefined;
       const active = type !== undefined ? ((type['active_user_count'] as number | undefined) ?? 0) : 0;
-      const subtitle = active > 0 ? `${formatMemberCount(active)} 月活用户` : '小程序';
+      const subtitle = active > 0 ? str('gs_monthly_users', formatMemberCount(active)) : str('gs_mini_app');
       this.apps = this.apps.map((r: SearchRow): SearchRow => r.userId === userId
         ? {
           chatId: r.chatId, userId: r.userId, title,
@@ -499,16 +500,16 @@ export class GlobalSearchStore {
     req['chat_id'] = chatId;
     this.client.send(req).then((chat: TdObject) => {
       const rawTitle = (chat['title'] as string | undefined) ?? '';
-      const title = rawTitle !== '' ? rawTitle : '已删除账户';
+      const title = rawTitle !== '' ? rawTitle : str('deleted_account');
       const type = chat['type'] as TdObject | undefined;
       const typeName = type !== undefined ? ((type['@type'] as string | undefined) ?? '') : '';
       const isChannel = typeName === 'chatTypeSupergroup'
         && (((type as TdObject)['is_channel'] as boolean | undefined) ?? false);
       let subtitle = '';
       if (typeName === 'chatTypeSupergroup') {
-        subtitle = isChannel ? '频道' : '群组';
+        subtitle = isChannel ? str('gn_channel') : str('gn_group');
       } else if (typeName === 'chatTypeBasicGroup') {
-        subtitle = '群组';
+        subtitle = str('gn_group');
       }
       this.patch(bucket, chatId, (r: SearchRow): SearchRow => ({
         chatId: r.chatId, userId: r.userId, title,
@@ -544,7 +545,7 @@ export class GlobalSearchStore {
     this.client.send(req).then((user: TdObject) => {
       const type = user['type'] as TdObject | undefined;
       const isBot = type !== undefined && ((type['@type'] as string | undefined) ?? '') === 'userTypeBot';
-      const subtitle = isBot ? '机器人'
+      const subtitle = isBot ? str('fe_bots')
         : formatUserStatus(user['status'] as TdObject | undefined, Math.floor(Date.now() / 1000));
       this.patch(bucket, chatId, (r: SearchRow): SearchRow => ({
         chatId: r.chatId, userId: r.userId, title: r.title, initials: r.initials,

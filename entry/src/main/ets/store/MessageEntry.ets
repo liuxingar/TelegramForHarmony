@@ -2,7 +2,9 @@ import { TdObject } from '../tdkit/TdTypes';
 import { UserStore } from './UserStore';
 import { buttonStyleOf } from './ReplyKeyboard';
 import { formatMsgContent, MsgContent, PollOptionInfo } from '../util/formatMsgContent';
-import { SERVICE_LABELS } from '../util/formatPreview';
+import { SERVICE_LABEL_KEYS } from '../util/formatPreview';
+import { plural, str } from '../util/strings';
+import { monthDayTime } from '../util/intlFormat';
 
 export interface MessageEntry {
   id: number;
@@ -398,10 +400,10 @@ function emptySystemMessage(): SystemMessageInfo {
 
 function actorName(message: TdObject, users: UserStore): string {
   if ((message['is_outgoing'] as boolean | undefined) ?? false) {
-    return '你';
+    return str('sm_you');
   }
   const actor = senderName(message, users);
-  return actor !== '' ? actor : '有人';
+  return actor !== '' ? actor : str('cp_someone');
 }
 
 function userNames(ids: number[], users: UserStore): string {
@@ -440,29 +442,29 @@ export function refreshSystemUserLabel(entry: MessageEntry, users: UserStore): M
   if (entry.contentType !== 'system' || entry.systemUserIds.length === 0) {
     return entry;
   }
-  const who = entry.isOutgoing ? '你' : (entry.senderName !== '' ? entry.senderName : '有人');
+  const who = entry.isOutgoing ? str('sm_you') : (entry.senderName !== '' ? entry.senderName : str('cp_someone'));
   let nextLabel = entry.placeholderLabel;
   if (entry.systemType === 'messageChatAddMembers') {
     if (entry.systemUserIds.length === 1 && entry.systemUserIds[0] === entry.senderId) {
-      nextLabel = `${who} 加入了群组`;
+      nextLabel = str('sm_joined_group', who);
     } else {
       const names = userNames(entry.systemUserIds, users);
-      nextLabel = names !== '' ? `${who} 邀请了 ${names}` : `${who} 邀请了新成员`;
+      nextLabel = names !== '' ? str('sm_invited_names', who, names) : str('sm_invited_members', who);
     }
   } else if (entry.systemType === 'messageChatDeleteMember') {
     const targetId = entry.systemUserIds[0];
     if (targetId === entry.senderId) {
-      nextLabel = `${who} 退出了群组`;
+      nextLabel = str('sm_left_group', who);
     } else {
       const name = users.displayName(targetId);
       if (name === '') {
         users.ensure(targetId);
       }
-      nextLabel = name !== '' ? `${who} 移除了 ${name}` : `${who} 移除了一名成员`;
+      nextLabel = name !== '' ? str('sm_removed_name', who, name) : str('sm_removed_member', who);
     }
   } else if (entry.systemType === 'messageInviteVideoChatParticipants') {
     const names = userNames(entry.systemUserIds, users);
-    nextLabel = names !== '' ? `${who} 邀请 ${names} 加入视频通话` : `${who} 邀请成员加入视频通话`;
+    nextLabel = names !== '' ? str('sm_invited_to_call_names', who, names) : str('sm_invited_to_call', who);
   }
   if (nextLabel === entry.placeholderLabel) {
     return entry;
@@ -472,29 +474,35 @@ export function refreshSystemUserLabel(entry: MessageEntry, users: UserStore): M
   return next;
 }
 
+// Counted units go through plural(): "1 hour" and "2 hours" differ in English
+// even though Chinese has one form.
 function compactDuration(totalSeconds: number): string {
   const total = Math.max(0, Math.floor(totalSeconds));
   if (total < 60) {
-    return `${total} 秒`;
+    return plural('unit_seconds', total, total);
   }
   const hours = Math.floor(total / 3600);
   const minutes = Math.floor((total % 3600) / 60);
   if (hours > 0) {
-    return minutes > 0 ? `${hours} 小时 ${minutes} 分钟` : `${hours} 小时`;
+    return minutes > 0
+      ? str('unit_hours_minutes', hours, minutes) : plural('unit_hours', hours, hours);
   }
-  return `${minutes} 分钟`;
+  return plural('unit_minutes', minutes, minutes);
 }
 
 function autoDeleteDuration(totalSeconds: number): string {
   const seconds = Math.max(0, Math.floor(totalSeconds));
   if (seconds >= 86400 && seconds % 86400 === 0) {
-    return `${seconds / 86400} 天`;
+    const days = seconds / 86400;
+    return plural('unit_days', days, days);
   }
   if (seconds >= 3600 && seconds % 3600 === 0) {
-    return `${seconds / 3600} 小时`;
+    const hours = seconds / 3600;
+    return plural('unit_hours', hours, hours);
   }
   if (seconds >= 60 && seconds % 60 === 0) {
-    return `${seconds / 60} 分钟`;
+    const minutes = seconds / 60;
+    return plural('unit_minutes', minutes, minutes);
   }
   return compactDuration(seconds);
 }
@@ -503,9 +511,9 @@ function scheduledDateLabel(unixSeconds: number): string {
   if (unixSeconds <= 0) {
     return '';
   }
-  const date = new Date(unixSeconds * 1000);
-  const minute = date.getMinutes() < 10 ? `0${date.getMinutes()}` : `${date.getMinutes()}`;
-  return `${date.getMonth() + 1}月${date.getDate()}日 ${date.getHours()}:${minute}`;
+  // Date and time in one Intl formatter: the separator and the field order are
+  // locale business, and the app already renders this shape elsewhere.
+  return monthDayTime(new Date(unixSeconds * 1000));
 }
 
 function senderUserName(sender: TdObject | undefined, users: UserStore): string {
@@ -569,13 +577,13 @@ function systemMessageInfo(message: TdObject, users: UserStore): SystemMessageIn
   const kind = systemKindOf(type);
   if (type === 'messageChatChangeTitle') {
     const title = ((content['title'] as string | undefined) ?? '').trim();
-    return { label: title !== '' ? `${who} 将群组改名为“${title}”` : `${who} 更改了群名称`, kind };
+    return { label: title !== '' ? str('sm_renamed_group', who, title) : str('sm_changed_group_name', who), kind };
   }
   if (type === 'messageChatChangePhoto') {
-    return { label: `${who} 更新了群组头像`, kind };
+    return { label: str('sm_updated_group_photo', who), kind };
   }
   if (type === 'messageChatDeletePhoto') {
-    return { label: `${who} 删除了群组头像`, kind };
+    return { label: str('sm_removed_group_photo', who), kind };
   }
   if (type === 'messageChatAddMembers') {
     const ids = (content['member_user_ids'] as number[] | undefined) ?? [];
@@ -583,25 +591,25 @@ function systemMessageInfo(message: TdObject, users: UserStore): SystemMessageIn
     if (ids.length === 1 && actorId > 0 && ids[0] === actorId) {
       return {
         label: ((message['is_outgoing'] as boolean | undefined) ?? false)
-          ? '您已加入此群组' : `${who} 加入了群组`,
+          ? str('cp_joined_group') : str('sm_joined_group', who),
         kind
       };
     }
     const names = userNames(ids, users);
-    return { label: names !== '' ? `${who} 邀请了 ${names}` : `${who} 邀请了新成员`, kind };
+    return { label: names !== '' ? str('sm_invited_names', who, names) : str('sm_invited_members', who), kind };
   }
   if (type === 'messageChatDeleteMember') {
     const uid = content['user_id'] as number | undefined;
     const name = uid !== undefined ? users.displayName(uid) : '';
     if (uid !== undefined && uid > 0 && uid === senderIdOf(message)) {
-      return { label: `${who} 退出了群组`, kind };
+      return { label: str('sm_left_group', who), kind };
     }
-    return { label: name !== '' ? `${who} 移除了 ${name}` : `${who} 移除了一名成员`, kind };
+    return { label: name !== '' ? str('sm_removed_name', who, name) : str('sm_removed_member', who), kind };
   }
   if (type === 'messageChatJoinByLink') {
     return {
       label: ((message['is_outgoing'] as boolean | undefined) ?? false)
-        ? '您已加入此群组' : `${who} 通过邀请链接加入群组`,
+        ? str('cp_joined_group') : str('sm_joined_by_link', who),
       kind
     };
   }
@@ -609,107 +617,107 @@ function systemMessageInfo(message: TdObject, users: UserStore): SystemMessageIn
     const secs = (content['message_auto_delete_time'] as number | undefined) ?? 0;
     const fromUserId = (content['from_user_id'] as number | undefined) ?? 0;
     if (secs <= 0) {
-      return { label: `${who} 关闭了自动删除`, kind };
+      return { label: str('sm_auto_delete_off', who), kind };
     }
     const duration = autoDeleteDuration(secs);
     const fromName = fromUserId > 0 ? users.displayName(fromUserId) : '';
     if (fromName !== '' && fromUserId !== senderIdOf(message)) {
-      return { label: `已应用 ${fromName} 的默认自动删除设置：${duration}`, kind };
+      return { label: str('sm_auto_delete_default', fromName, duration), kind };
     }
-    return { label: `${who} 将消息自动删除时间设为 ${duration}`, kind };
+    return { label: str('sm_auto_delete_set', who, duration), kind };
   }
   if (type === 'messageChatJoinByRequest') {
     return {
       label: ((message['is_outgoing'] as boolean | undefined) ?? false)
-        ? '您已加入此群组' : `${who} 的入群请求已通过`,
+        ? str('cp_joined_group') : str('sm_join_request_approved', who),
       kind
     };
   }
   if (type === 'messageChatUpgradeTo' || type === 'messageChatUpgradeFrom') {
-    return { label: '群组已升级为超级群组', kind };
+    return { label: str('sm_upgraded_supergroup'), kind };
   }
   if (type === 'messagePinMessage') {
-    return { label: `${who} 置顶了一条消息`, kind };
+    return { label: str('sm_pinned_message', who), kind };
   }
   if (type === 'messageBasicGroupChatCreate' || type === 'messageSupergroupChatCreate') {
     const title = ((content['title'] as string | undefined) ?? '').trim();
-    return { label: title !== '' ? `${who} 创建了群组“${title}”` : `${who} 创建了群组`, kind };
+    return { label: title !== '' ? str('sm_created_group_named', who, title) : str('sm_created_group', who), kind };
   }
   if (type === 'messageContactRegistered') {
-    return { label: `${who} 加入了 Telegram`, kind };
+    return { label: str('sm_joined_telegram', who), kind };
   }
   if (type === 'messageChatSetTheme') {
     const themeName = ((content['theme_name'] as string | undefined) ?? '').trim();
     return {
-      label: themeName !== '' ? `${who} 将聊天主题设为“${themeName}”` : `${who} 关闭了聊天主题`,
+      label: themeName !== '' ? str('sm_set_theme', who, themeName) : str('sm_theme_off', who),
       kind
     };
   }
   if (type === 'messageChatSetBackground') {
-    return { label: `${who} 更改了聊天背景`, kind };
+    return { label: str('sm_changed_background', who), kind };
   }
   if (type === 'messageScreenshotTaken') {
-    return { label: `${who} 截取了屏幕截图`, kind };
+    return { label: str('sm_screenshot', who), kind };
   }
   if (type === 'messageChatHasProtectedContentDisableRequested') {
-    return { label: `${who} 请求关闭内容保护`, kind };
+    return { label: str('sm_protection_request', who), kind };
   }
   if (type === 'messageChatHasProtectedContentToggled') {
     const oldProtected = (content['old_has_protected_content'] as boolean | undefined) ?? false;
     const newProtected = (content['new_has_protected_content'] as boolean | undefined) ?? false;
     const requestId = (content['request_message_id'] as number | undefined) ?? 0;
     if (requestId !== 0 && oldProtected === newProtected) {
-      return { label: '关闭内容保护的请求未获批准', kind };
+      return { label: str('sm_protection_request_denied'), kind };
     }
-    return { label: `${who}${newProtected ? '开启' : '关闭'}了内容保护`, kind };
+    return { label: str('sm_protection_toggled', who, newProtected ? str('sm_turned_on') : str('sm_turned_off')), kind };
   }
   if (type === 'messageChatBoost') {
     const count = Math.max(0, (content['boost_count'] as number | undefined) ?? 0);
     return {
-      label: count > 1 ? `${who} 为频道助力了 ${count} 次` : `${who} 为频道助力`,
+      label: count > 1 ? str('sm_boosted_n', who, count) : str('sm_boosted', who),
       kind: 'payment'
     };
   }
   if (type === 'messageForumTopicCreated') {
     const name = ((content['name'] as string | undefined) ?? '').trim();
-    return { label: name !== '' ? `${who} 创建了话题“${name}”` : `${who} 创建了话题`, kind };
+    return { label: name !== '' ? str('sm_created_topic_named', who, name) : str('sm_created_topic', who), kind };
   }
   if (type === 'messageForumTopicEdited') {
     const name = ((content['name'] as string | undefined) ?? '').trim();
     return {
-      label: name !== '' ? `${who} 将话题改名为“${name}”` : `${who} 更改了话题图标`,
+      label: name !== '' ? str('sm_renamed_topic', who, name) : str('sm_changed_topic_icon', who),
       kind
     };
   }
   if (type === 'messageForumTopicIsClosedToggled') {
     const closed = (content['is_closed'] as boolean | undefined) ?? false;
-    return { label: `${who}${closed ? '关闭' : '重新打开'}了话题`, kind };
+    return { label: str('sm_topic_toggled', who, closed ? str('sm_closed_word') : str('sm_reopened_word')), kind };
   }
   if (type === 'messageForumTopicIsHiddenToggled') {
     const hidden = (content['is_hidden'] as boolean | undefined) ?? false;
-    return { label: `${who}${hidden ? '隐藏' : '显示'}了通用话题`, kind };
+    return { label: str('sm_general_topic_toggled', who, hidden ? str('sm_hid_word') : str('sm_showed_word')), kind };
   }
   if (type === 'messageVideoChatScheduled') {
     const scheduled = scheduledDateLabel((content['start_date'] as number | undefined) ?? 0);
     return {
-      label: scheduled !== '' ? `${who} 安排了视频通话 · ${scheduled}` : `${who} 安排了视频通话`,
+      label: scheduled !== '' ? str('sm_scheduled_call_at', who, scheduled) : str('sm_scheduled_call', who),
       kind
     };
   }
   if (type === 'messageVideoChatStarted') {
-    return { label: `${who} 发起了视频通话`, kind };
+    return { label: str('sm_started_call', who), kind };
   }
   if (type === 'messageVideoChatEnded') {
     const duration = (content['duration'] as number | undefined) ?? 0;
     return {
-      label: duration > 0 ? `视频通话已结束 · ${compactDuration(duration)}` : '视频通话已结束',
+      label: duration > 0 ? str('sm_call_ended_after', compactDuration(duration)) : str('sm_call_ended'),
       kind
     };
   }
   if (type === 'messageInviteVideoChatParticipants') {
     const names = userNames((content['user_ids'] as number[] | undefined) ?? [], users);
     return {
-      label: names !== '' ? `${who} 邀请 ${names} 加入视频通话` : `${who} 邀请成员加入视频通话`,
+      label: names !== '' ? str('sm_invited_to_call_names', who, names) : str('sm_invited_to_call', who),
       kind
     };
   }
@@ -718,14 +726,14 @@ function systemMessageInfo(message: TdObject, users: UserStore): SystemMessageIn
     const video = (content['is_video'] as boolean | undefined) ?? false;
     const reason = content['discard_reason'] as TdObject | undefined;
     const reasonType = reason !== undefined ? ((reason['@type'] as string | undefined) ?? '') : '';
-    const callLabel = video ? '视频通话' : '语音通话';
+    const callLabel = video ? str('sm_video_call') : str('sm_voice_call');
     if (duration > 0) {
       return { label: `${callLabel} · ${compactDuration(duration)}`, kind };
     }
     if (reasonType === 'callDiscardReasonMissed' || reasonType === 'callDiscardReasonDeclined') {
       return {
         label: ((message['is_outgoing'] as boolean | undefined) ?? false)
-          ? `未接通的${callLabel}` : `未接${video ? '视频来电' : '来电'}`,
+          ? str('sm_call_not_answered', callLabel) : str('sm_missed_call', video ? str('sm_video_call_word') : str('sm_call_word')),
         kind
       };
     }
@@ -737,20 +745,22 @@ function systemMessageInfo(message: TdObject, users: UserStore): SystemMessageIn
     const distance = Math.max(0, (content['distance'] as number | undefined) ?? 0);
     if (traveler !== '' && watcher !== '') {
       return {
-        label: `${traveler} 距离 ${watcher} ${distance > 0 ? `${distance} 米` : '很近'}`,
+        label: str('sm_proximity', traveler, watcher,
+          distance > 0 ? plural('sm_proximity_metres', distance, distance)
+            : str('sm_proximity_near')),
         kind: 'people'
       };
     }
-    return { label: '触发了附近提醒', kind: 'people' };
+    return { label: str('sm_proximity_triggered'), kind: 'people' };
   }
   if (type === 'messageCustomServiceAction') {
     const text = ((content['text'] as string | undefined) ?? '').trim();
-    return { label: text !== '' ? text : '聊天状态已更新', kind };
+    return { label: text !== '' ? text : str('preview_chat_state_updated'), kind };
   }
   if (type === 'messagePaidMessagePriceChanged') {
     const stars = Math.max(0, (content['paid_message_star_count'] as number | undefined) ?? 0);
     return {
-      label: stars > 0 ? `每条消息需支付 ${stars} 颗星星` : '已关闭付费消息',
+      label: stars > 0 ? plural('sm_paid_per_message', stars, stars) : str('sm_paid_messages_off'),
       kind
     };
   }
@@ -758,9 +768,9 @@ function systemMessageInfo(message: TdObject, users: UserStore): SystemMessageIn
     const count = Math.max(0, (content['message_count'] as number | undefined) ?? 0);
     const stars = Math.max(0, (content['star_count'] as number | undefined) ?? 0);
     if (count > 0 && stars > 0) {
-      return { label: `${count} 条付费消息已退款 · ${stars} 颗星星`, kind };
+      return { label: str('sm_paid_refunded_n', count, stars), kind };
     }
-    return { label: stars > 0 ? `已退还 ${stars} 颗星星` : '付费消息已退款', kind };
+    return { label: stars > 0 ? plural('sm_refunded_stars', stars, stars) : str('sm_paid_refunded'), kind };
   }
   // Channel direct-message (paid DM) settings — show the concrete star price /
   // enabled state, matching the official client's wording.
@@ -768,18 +778,18 @@ function systemMessageInfo(message: TdObject, users: UserStore): SystemMessageIn
     const enabled = (content['is_enabled'] as boolean | undefined) ?? false;
     const stars = (content['paid_message_star_count'] as number | undefined) ?? 0;
     if (!enabled) {
-      return { label: '频道已关闭私信', kind };
+      return { label: str('sm_channel_dm_off'), kind };
     }
     return {
-      label: stars > 0 ? `此频道允许每条 ${stars} 颗星星的私信` : '频道已启用私信',
+      label: stars > 0 ? plural('sm_channel_dm_price', stars, stars) : str('sm_channel_dm_on'),
       kind
     };
   }
   // Fallback for other service messages (video chats, gifts, giveaways, forum
   // topics, payments, …) → shown as a centered pill.
-  const svc: string | undefined = SERVICE_LABELS[type];
-  if (svc !== undefined) {
-    return { label: svc, kind };
+  const svcKey: string | undefined = SERVICE_LABEL_KEYS[type];
+  if (svcKey !== undefined) {
+    return { label: str(svcKey), kind };
   }
   return emptySystemMessage();
 }

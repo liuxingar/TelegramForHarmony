@@ -7,6 +7,7 @@ import { systemCallUi } from './SystemCallUi';
 import {
   KEY_NOTIFY_PRIVATE, KEY_NOTIFY_GROUP, KEY_NOTIFY_CHANNEL
 } from '../store/AppSettings';
+import { str } from '../util/strings';
 
 // 来电通知固定 id（TDLib notification id 为正整数，取远离区间的常量）。
 export const CALL_NOTIFICATION_ID: number = 999001;
@@ -168,27 +169,27 @@ export class NotificationService {
     const typeName: string = type !== undefined
       ? ((type['@type'] as string | undefined) ?? '') : '';
     const entry = this.chats.entryOf(chatId);
-    const title: string = entry !== undefined && entry.title !== '' ? entry.title : '新消息';
+    const title: string = entry !== undefined && entry.title !== '' ? entry.title : str('ns_new_message');
     if (typeName === 'notificationTypeNewMessage') {
       const message = type!['message'] as TdObject | undefined;
       const text: string = formatPreview(message ?? null);
       return {
         id: id, groupId: groupId, chatId: chatId,
-        title: title, text: text !== '' ? text : '你收到一条新消息', isCall: false,
+        title: title, text: text !== '' ? text : str('ns_new_message_body'), isCall: false,
         avatarPath: entry !== undefined ? entry.avatarPath : ''
       };
     }
     if (typeName === 'notificationTypeNewCall') {
       return {
         id: id, groupId: groupId, chatId: chatId,
-        title: title, text: '来电', isCall: true,
+        title: title, text: str('ns_incoming_call'), isCall: true,
         avatarPath: entry !== undefined ? entry.avatarPath : ''
       };
     }
     if (typeName === 'notificationTypeNewSecretChat') {
       return {
         id: id, groupId: groupId, chatId: chatId,
-        title: title, text: '新的秘密聊天', isCall: false,
+        title: title, text: str('ns_new_secret_chat'), isCall: false,
         avatarPath: entry !== undefined ? entry.avatarPath : ''
       };
     }
@@ -295,7 +296,7 @@ export class NotificationService {
       id: noticeId,
       groupId: 0,
       chatId: chatId,
-      title: entry !== undefined && entry.title !== '' ? entry.title : '新消息',
+      title: entry !== undefined && entry.title !== '' ? entry.title : str('ns_new_message'),
       text: formatPreview(message),
       isCall: false,
       avatarPath: entry !== undefined ? entry.avatarPath : ''
@@ -320,8 +321,8 @@ export class NotificationService {
       const caller = this.chats.entryOf(s.peerUserId);
       this.publisher.publish({
         id: CALL_NOTIFICATION_ID, groupId: 0, chatId: s.peerUserId,
-        title: s.peerName !== '' ? s.peerName : '来电',
-        text: s.isVideo ? '视频来电' : '语音来电', isCall: true,
+        title: s.peerName !== '' ? s.peerName : str('ns_incoming_call'),
+        text: s.isVideo ? str('ns_incoming_video_call') : str('ns_incoming_voice_call'), isCall: true,
         avatarPath: caller !== undefined ? caller.avatarPath : ''
       });
       return;

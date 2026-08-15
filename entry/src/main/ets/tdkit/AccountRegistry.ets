@@ -1,5 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
+import { str } from '../util/strings';
 
 const STORE_NAME: string = 'td_accounts';
 const KEY_ACTIVE_SLOT: string = 'active_slot';
@@ -30,7 +31,7 @@ function primaryAccount(): TdAccountSummary {
   return {
     slotId: PRIMARY_SLOT,
     userId: 0,
-    name: '当前账号',
+    name: str('settings_current_account'),
     phone: '',
     username: '',
     avatarPath: '',
@@ -126,7 +127,7 @@ class AccountRegistry {
     const account: TdAccountSummary = {
       slotId,
       userId: 0,
-      name: '新账号',
+      name: str('ar_new_account'),
       phone: '',
       username: '',
       avatarPath: '',
@@ -221,7 +222,7 @@ class AccountRegistry {
     copy[index] = {
       slotId: current.slotId,
       userId: 0,
-      name: '新账号',
+      name: str('ar_new_account'),
       phone: '',
       username: '',
       avatarPath: '',

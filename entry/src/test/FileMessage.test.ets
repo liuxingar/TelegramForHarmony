@@ -18,24 +18,24 @@ export default function fileMessageTest() {
       expect(fileTypeVisual('', 'audio/ogg').label).assertEqual('AUDIO');
       expect(fileTypeVisual('backup.xyz', '').label).assertEqual('XYZ');
       expect(fileTypeVisual('', '').label).assertEqual('FILE');
-      expect(displayFileName('')).assertEqual('未命名文件');
+      expect(displayFileName('')).assertEqual('file_unnamed');
       expect(fileOpenMimeType('manual.pdf', '')).assertEqual('application/pdf');
       expect(fileOpenMimeType('voice.mp3', 'application/octet-stream')).assertEqual('audio/mpeg');
       expect(fileOpenMimeType('anything.bin', 'application/x-custom'))
         .assertEqual('application/x-custom');
     });
     it('describes_every_download_state', 0, () => {
-      expect(fileStatusText(0, '', 0, false, 0, false)).assertEqual('文件不可用');
+      expect(fileStatusText(0, '', 0, false, 0, false)).assertEqual('file_unavailable');
       expect(fileStatusText(7, '', 0, false, 0, false))
-        .assertEqual('未知大小 · 点击下载');
+        .assertEqual('file_tap_download(file_unknown_size)');
       expect(fileStatusText(7, '', 1024, true, 0, false))
-        .assertEqual('1.0 KB · 正在下载');
+        .assertEqual('file_downloading(size_kb(1.0))');
       expect(fileStatusText(7, '', 1024, true, 53, false))
-        .assertEqual('1.0 KB · 正在下载 53%');
+        .assertEqual('file_downloading_pct(size_kb(1.0),53)');
       expect(fileStatusText(7, '', 1024, false, 0, true))
-        .assertEqual('下载失败 · 点按重试');
+        .assertEqual('file_download_failed');
       expect(fileStatusText(7, '/data/a.bin', 1024, false, 100, false))
-        .assertEqual('1.0 KB · 点击打开');
+        .assertEqual('file_tap_open(size_kb(1.0))');
     });
   });
 }

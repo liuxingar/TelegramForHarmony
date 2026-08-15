@@ -19,7 +19,7 @@ export default function privacyApiTest() {
       expect(value.allowExceptions).assertEqual(2);
       expect(value.restrictExceptions).assertEqual(1);
       expect(value.extra.length).assertEqual(2);
-      expect(ruleLabel(value)).assertEqual('我的联系人 · +2 / −1');
+      expect(ruleLabel(value)).assertEqual('privacy_contacts · +2 / −1');
     });
 
     it('preserves_all_future_non_base_rules', 0, (): void => {

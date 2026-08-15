@@ -1,6 +1,7 @@
 import { getVoicePlayback, VoiceState } from '../../services/VoicePlayback';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
 import { formatVoiceDuration, voiceWaveformBars } from '../../util/voiceWaveform';
+import { str } from '../../util/strings';
 
 const WAVEFORM_BAR_COUNT: number = 34;
 const WAVEFORM_WIDTH: number = 132;
@@ -150,20 +151,20 @@ export struct VoiceBubble {
 
   private timeLabel(): string {
     if (this.sourceUnavailable()) {
-      return '语音不可用';
+      return str('voice_unavailable');
     }
     if (this.downloadFailed) {
-      return '下载失败 · 点按重试';
+      return str('download_failed_tap');
     }
     if (this.downloading()) {
       return this.downloadProgress > 0
-        ? `正在下载 ${this.downloadProgress}%` : '正在加载语音';
+        ? str('downloading_pct', this.downloadProgress) : str('voice_loading');
     }
     if (this.playbackFailed) {
-      return '播放失败 · 点按重试';
+      return str('play_failed_tap');
     }
     if (this.loadingPlayback()) {
-      return '正在打开';
+      return str('opening');
     }
     const duration: number = this.resolvedDuration();
     const total: string = duration > 0 ? formatVoiceDuration(duration) : '—:—';
@@ -250,7 +251,7 @@ export struct VoiceBubble {
     if (this.speechState === 'pending') {
       Row({ space: 6 }) {
         LoadingProgress().width(13).height(13).color(this.accent());
-        Text(this.speechText !== '' ? this.speechText : '正在转文字…')
+        Text(this.speechText !== '' ? this.speechText : $r('app.string.voice_transcribing'))
           .fontSize(13).fontColor(this.speechSecondaryColor())
           .maxLines(4).textOverflow({ overflow: TextOverflow.Ellipsis });
       }.width(WAVEFORM_WIDTH).alignItems(VerticalAlign.Top);
@@ -260,16 +261,16 @@ export struct VoiceBubble {
         .width(WAVEFORM_WIDTH)
         .textAlign(TextAlign.Start);
     } else if (this.speechState === 'error') {
-      Text(this.speechText !== '' ? this.speechText : '转文字失败')
+      Text(this.speechText !== '' ? this.speechText : $r('app.string.voice_transcribe_failed'))
         .fontSize(12.5).fontColor('#FF3B30').width(WAVEFORM_WIDTH);
     } else {
       Row({ space: 4 }) {
         SymbolGlyph($r('sys.symbol.character_square')).fontSize(13)
           .fontColor([this.speechSecondaryColor()]);
-        Text('转文字').fontSize(12.5).fontColor(this.speechSecondaryColor());
+        Text($r('app.string.voice_transcribe')).fontSize(12.5).fontColor(this.speechSecondaryColor());
       }
       .padding({ top: 3, bottom: 3, right: 8 })
-      .accessibilityText('把这条语音转成文字')
+      .accessibilityText($r('app.string.voice_transcribe_sub'))
       .onClick((): void => { this.onRecognizeTap(); });
     }
   }
@@ -316,7 +317,7 @@ export struct VoiceBubble {
                 pressed: this.speedPressedStyle
               })
               .animation({ duration: 100, curve: Curve.EaseOut })
-              .accessibilityText(`播放速度 ${this.speedLabel()}，点击切换`)
+              .accessibilityText(str('voice_speed_a11y', this.speedLabel()))
               .onClick((): void => {
                 this.onSpeedTap();
               });

@@ -1,3 +1,17 @@
+import { plural, str } from './strings';
+
+// The header used to work out which of these it was by substring-matching the
+// Chinese sentence in mediaStatus. That was wrong twice over: it misfired on
+// unrelated text ("摄像头首帧等待超时，请重试" contains 重试, so a camera
+// timeout was presented as a connection recovery, pulse and all), and it would
+// have stopped matching altogether — silently, with no error — the moment those
+// pages were translated. The pages now declare the phase where they set the
+// text, so the two cannot drift apart.
+export const LIVE_PHASE_NONE = 'none';
+export const LIVE_PHASE_RECOVERING = 'recovering';
+export const LIVE_PHASE_WAITING = 'waiting';
+export const LIVE_PHASE_AUDIO = 'audio';
+
 export interface LiveViewerHeaderInput {
   valid: boolean;
   resolved: boolean;
@@ -12,7 +26,7 @@ export interface LiveViewerHeaderInput {
   retrySeconds: number;
   canMinimize: boolean;
   participantCount: number;
-  mediaStatus: string;
+  mediaPhase: string;
 }
 
 export interface LiveViewerHeaderPresentation {
@@ -24,83 +38,76 @@ export interface LiveViewerHeaderPresentation {
   actionsEnabled: boolean;
 }
 
-function containsAny(value: string, parts: string[]): boolean {
-  for (const part of parts) {
-    if (value.includes(part)) { return true; }
-  }
-  return false;
-}
-
 export function liveViewerHeaderPresentation(
   input: LiveViewerHeaderInput
 ): LiveViewerHeaderPresentation {
   if (!input.valid) {
     return {
-      kind: 'invalid', statusText: '无法打开直播', fullscreenText: '无法打开',
+      kind: 'invalid', statusText: str('live_status_invalid'), fullscreenText: str('live_short_invalid'),
       pulse: false, retryable: false, actionsEnabled: false
     };
   }
   if (input.ending) {
     return {
-      kind: 'ending', statusText: '正在结束直播…', fullscreenText: '结束中',
+      kind: 'ending', statusText: str('live_status_ending'), fullscreenText: str('live_short_ending'),
       pulse: false, retryable: false, actionsEnabled: false
     };
   }
   if (input.resolved && !input.active) {
     return {
-      kind: 'ended', statusText: '直播已结束', fullscreenText: '已结束',
+      kind: 'ended', statusText: str('live_status_ended'), fullscreenText: str('live_short_ended'),
       pulse: false, retryable: false, actionsEnabled: false
     };
   }
   if (input.terminalError) {
     return {
-      kind: 'error', statusText: '直播模式已变化', fullscreenText: '需要返回',
+      kind: 'error', statusText: str('live_status_mode_changed'), fullscreenText: str('live_short_go_back'),
       pulse: false, retryable: false, actionsEnabled: false
     };
   }
   if (input.queryFailed && !input.joinedOnce && !input.joined) {
     return {
-      kind: 'error', statusText: '连接失败 · 轻触重试', fullscreenText: '连接失败',
+      kind: 'error', statusText: str('live_status_connect_failed'), fullscreenText: str('live_short_connect_failed'),
       pulse: false, retryable: true, actionsEnabled: input.canMinimize
     };
   }
-  if (input.recovering || containsAny(input.mediaStatus, ['恢复', '重试', '中断', '续播', '重新同步'])) {
+  if (input.recovering || input.mediaPhase === LIVE_PHASE_RECOVERING) {
     const retryText = input.retrySeconds > 0
-      ? `${input.retrySeconds} 秒后重试 · 轻触立即重试`
-      : (input.reconnectAttempt > 0 ? '正在重新连接直播…' : '正在恢复直播…');
+      ? str('live_status_retry_in', input.retrySeconds)
+      : str(input.reconnectAttempt > 0 ? 'live_status_reconnecting' : 'live_status_recovering');
     return {
-      kind: 'recovering', statusText: retryText, fullscreenText: '重连中',
+      kind: 'recovering', statusText: retryText, fullscreenText: str('live_short_reconnecting'),
       pulse: true, retryable: true, actionsEnabled: input.canMinimize
     };
   }
   if (!input.resolved && !input.joinedOnce && !input.joined) {
     return {
-      kind: 'connecting', statusText: '正在连接直播…', fullscreenText: '连接中',
+      kind: 'connecting', statusText: str('live_status_connecting'), fullscreenText: str('live_short_connecting'),
       pulse: true, retryable: false, actionsEnabled: input.canMinimize
     };
   }
-  if (containsAny(input.mediaStatus, ['等待主播', '等待开播', '等待推流'])) {
+  if (input.mediaPhase === LIVE_PHASE_WAITING) {
     return {
-      kind: 'waiting', statusText: '等待主播开始推流', fullscreenText: '等待开播',
+      kind: 'waiting', statusText: str('live_status_waiting_host'), fullscreenText: str('live_short_waiting'),
       pulse: false, retryable: false, actionsEnabled: input.canMinimize
     };
   }
-  if (input.mediaStatus.includes('音频')) {
+  if (input.mediaPhase === LIVE_PHASE_AUDIO) {
     return {
-      kind: 'audio', statusText: '直播音频播放中', fullscreenText: '音频直播',
+      kind: 'audio', statusText: str('live_status_audio'), fullscreenText: str('live_short_audio'),
       pulse: true, retryable: false, actionsEnabled: input.canMinimize
     };
   }
   if (!input.joined && !input.joinedOnce) {
     return {
-      kind: 'joining', statusText: '正在加入直播…', fullscreenText: '加入中',
+      kind: 'joining', statusText: str('live_status_joining'), fullscreenText: str('live_short_joining'),
       pulse: true, retryable: false, actionsEnabled: input.canMinimize
     };
   }
   return {
     kind: 'live',
     statusText: input.participantCount > 0
-      ? `${input.participantCount} 人正在观看` : '直播中',
+      ? plural('live_status_watching', input.participantCount, input.participantCount) : str('live_status_live'),
     fullscreenText: 'LIVE', pulse: true, retryable: false, actionsEnabled: input.canMinimize
   };
 }

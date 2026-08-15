@@ -28,6 +28,7 @@ import {
   KEY_POWER_CALL_ANIMATIONS, powerAnimationDuration, powerFeatureEnabled
 } from '../../store/AppSettings';
 import {
+  LIVE_PHASE_AUDIO, LIVE_PHASE_NONE, LIVE_PHASE_RECOVERING,
   LiveViewerHeaderPresentation, liveViewerHeaderPresentation
 } from '../../util/liveViewerHeaderPresentation';
 import {
@@ -38,6 +39,7 @@ import {
   liveInteractionPresentation, mergeLiveInteractions
 } from '../../util/liveInteractionPresentation';
 import { LiveInteractionBubble } from './LiveInteractionBubble';
+import { plural, str } from '../../util/strings';
 
 const CALL_BACKGROUND: string = '#0D141B';
 const CALL_PANEL: string = '#141E27';
@@ -157,7 +159,7 @@ struct LiveVideoTile {
       if (this.source.isPaused) {
         Column({ space: 7 }) {
           SymbolGlyph($r('sys.symbol.camera')).fontSize(28).fontColor([Color.White]);
-          Text('视频已暂停').fontSize(12).fontColor(Color.White);
+          Text($r('app.string.lv_video_paused')).fontSize(12).fontColor(Color.White);
         }
         .width('100%').height('100%').justifyContent(FlexAlign.Center)
         .backgroundColor('#8A0A1117')
@@ -184,7 +186,7 @@ struct LiveVideoTile {
           }
           .width(20).height(20);
           Text(this.source.name !== '' ? this.source.name :
-            (this.source.isScreenSharing ? '屏幕共享' : '直播画面'))
+            (this.source.isScreenSharing ? $r('app.string.lv_screen_share') : $r('app.string.lv_stream_video')))
             .fontSize(12).fontColor(Color.White).fontWeight(FontWeight.Medium)
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
         }
@@ -210,7 +212,7 @@ struct LiveVideoTile {
             }
             .width(40).height(40).padding(0).backgroundColor('#A617222B')
             .border({ width: 1, color: '#42FFFFFF' })
-            .accessibilityText(this.fullscreen ? '退出全屏' : '进入全屏')
+            .accessibilityText(this.fullscreen ? $r('app.string.lv_exit_fullscreen') : $r('app.string.lv_enter_fullscreen'))
             .onClick((): void => this.onFullscreenToggle());
           }.width('100%');
         }
@@ -301,7 +303,7 @@ struct LocalVideoPreviewTile {
         Blank();
         Row({ space: 5 }) {
           Circle({ width: 7, height: 7 }).fill(CALL_GREEN);
-          Text(this.mode === 1 ? '你 · 前置' : '你 · 后置')
+          Text(this.mode === 1 ? $r('app.string.lv_you_front') : $r('app.string.lv_you_rear'))
             .fontSize(this.compact ? 10 : 12)
             .fontColor(Color.White).fontWeight(FontWeight.Medium);
         }
@@ -330,7 +332,7 @@ struct LocalVideoPreviewTile {
             }
             .width(40).height(40).padding(0).backgroundColor('#A617222B')
             .border({ width: 1, color: '#42FFFFFF' })
-            .accessibilityText(this.fullscreen ? '退出全屏' : '进入全屏')
+            .accessibilityText(this.fullscreen ? $r('app.string.lv_exit_fullscreen') : $r('app.string.lv_enter_fullscreen'))
             .onClick((): void => this.onFullscreenToggle());
           }.width('100%');
         }
@@ -360,7 +362,8 @@ struct LiveStreamViewerPage {
   @StorageProp('cutoutRightSafeWidth') cutoutRightSafe: number = 0;
   @StorageProp('appForegroundEpoch') @Watch('onAppForegroundEpoch') appForegroundEpoch: number = 0;
   @State state: LiveStreamState = emptyLiveStreamState();
-  @State mediaStatus: string = '正在加入直播…';
+  @State mediaStatus: string = str('lv_joining');
+  @State mediaPhase: string = LIVE_PHASE_NONE;
   @State participants: GroupCallParticipantInfo[] = [];
   @State videoSources: GroupCallVideoSource[] = [];
   @State isMuted: boolean = true;
@@ -468,7 +471,7 @@ struct LiveStreamViewerPage {
     this.initialParticipantCount = params !== undefined
       ? ((params['initialParticipantCount'] as number | undefined) ?? 0) : 0;
     if (this.groupCallId <= 0) {
-      this.mediaStatus = '无效的直播间';
+      this.setMediaStatus(str('lv_invalid_room'));
       return;
     }
     this.startPulseAnimation();
@@ -496,8 +499,8 @@ struct LiveStreamViewerPage {
     }
     liveStreamBackgroundTask.start(context, !this.isMuted);
     this.startHealthMonitor();
-    if (handoff === null) { this.replaceSession('首次加入'); }
-    this.refreshGroupCall('首次查询');
+    if (handoff === null) { this.replaceSession('首次加入'); } // i18n-exempt: diagnostic trace tag, console only
+    this.refreshGroupCall('首次查询'); // i18n-exempt: diagnostic trace tag, console only
   }
 
   private adoptSeamlessSession(
@@ -555,9 +558,13 @@ struct LiveStreamViewerPage {
       );
     }
     session.resumeMedia();
-    this.mediaStatus = handoff.mediaConnected
-      ? (this.videoSources.length > 0 ? '直播音视频已连接' : '直播音频已连接')
-      : '网络波动，正在恢复媒体连接…';
+    if (!handoff.mediaConnected) {
+      this.setMediaStatus(str('lv_media_recovering'), LIVE_PHASE_RECOVERING);
+    } else if (this.videoSources.length > 0) {
+      this.setMediaStatus(str('lv_av_connected'));
+    } else {
+      this.setMediaStatus(str('lv_audio_connected'), LIVE_PHASE_AUDIO);
+    }
     this.participantStore?.load(100).catch((caught: Error): void => {
       console.error(`LiveStreamViewer.adopt load participants failed: ${caught.message}`);
     });
@@ -587,16 +594,16 @@ struct LiveStreamViewerPage {
     if (this.hasJoinedOnce && this.headerStateResolved && !value.isActive) {
       this.clearRecoveryTimer();
       this.clearRecoveryUi();
-      this.mediaStatus = '直播已结束';
+      this.setMediaStatus(str('lfw_ended'));
       setLiveStreamKeepScreenOn(getContext(this) as common.UIAbilityContext, false);
       return;
     }
     if (value.needRejoin) {
       this.showRecoveryUi(0);
-      this.scheduleRecovery(0, 'TDLib 要求重新加入');
+      this.scheduleRecovery(0, 'TDLib 要求重新加入'); // i18n-exempt: diagnostic trace tag, console only
     } else if (this.hasJoinedOnce && value.isActive && !value.isJoined) {
       this.showRecoveryUi(0);
-      this.scheduleRecovery(500, '直播成员状态已断开');
+      this.scheduleRecovery(500, '直播成员状态已断开'); // i18n-exempt: diagnostic trace tag, console only
     }
   }
 
@@ -703,7 +710,7 @@ struct LiveStreamViewerPage {
     store.send(value).then((): void => {
       if (text === undefined) { this.interactionDraft = ''; }
     }).catch((caught: Error): void => {
-      this.interactionSendError = `发送失败：${caught.message}`;
+      this.interactionSendError = str('lv_send_failed', caught.message);
     }).finally((): void => {
       this.interactionSending = false;
     });
@@ -740,7 +747,11 @@ struct LiveStreamViewerPage {
     this.videoAspectRatios.clear();
     this.primaryVideoAspectRatio = 0;
     this.onParticipants(this.participants);
-    this.mediaStatus = this.hasJoinedOnce ? '正在恢复直播连接…' : '正在加入直播…';
+    if (this.hasJoinedOnce) {
+      this.setMediaStatus(str('lv_restoring_connection'), LIVE_PHASE_RECOVERING);
+    } else {
+      this.setMediaStatus(str('lv_joining'));
+    }
 
     const client = getTdClient();
     const session = new TgcallsGroupSession(
@@ -777,9 +788,9 @@ struct LiveStreamViewerPage {
         streams: result.streams,
         error: ''
       };
-      this.mediaStatus = result.isBroadcast
-        ? (result.isUnifiedBroadcast ? 'RTMP 直播已连接' : '直播音视频已连接')
-        : '正在建立媒体连接…';
+      this.setMediaStatus(result.isBroadcast
+        ? (result.isUnifiedBroadcast ? str('lv_rtmp_connected') : str('lv_av_connected'))
+        : str('lv_connecting_media'));
       const unifiedVideoIds: number[] = [];
       const seenUnifiedVideoIds: Set<number> = new Set();
       for (const stream of result.streams) {
@@ -792,7 +803,7 @@ struct LiveStreamViewerPage {
         this.unifiedSource = {
           endpointId: 'unified',
           participantKey: 'unified',
-          name: this.state.title !== '' ? this.state.title : '直播主画面',
+          name: this.state.title !== '' ? this.state.title : str('lv_main_video'),
           audioSourceId: 0,
           sourceGroups: `SIM=${unifiedVideoIds.join(',')}`,
           isPaused: false,
@@ -810,14 +821,14 @@ struct LiveStreamViewerPage {
       session.resumeMedia();
       this.restoreLocalVideo(session, result);
       if (!this.mediaConnected && !result.isBroadcast) {
-        this.scheduleRecovery(MEDIA_RECONNECT_GRACE_MS, '加入后媒体连接超时');
+        this.scheduleRecovery(MEDIA_RECONNECT_GRACE_MS, '加入后媒体连接超时'); // i18n-exempt: diagnostic trace tag, console only
       }
-      this.refreshGroupCall('加入完成');
+      this.refreshGroupCall('加入完成'); // i18n-exempt: diagnostic trace tag, console only
     }).catch((error: Error): void => {
       if (!this.pageActive || this.tgcallsSession !== session || sequence !== this.sessionSequence) { return; }
       session.stop();
       this.tgcallsSession = null;
-      this.mediaStatus = '直播连接中断，正在重试…';
+      this.setMediaStatus(str('lv_reconnecting'), LIVE_PHASE_RECOVERING);
       this.connectionError = error.message;
       if (!this.hasJoinedOnce) { this.headerQueryFailed = true; }
       this.showRecoveryUi(0);
@@ -835,7 +846,7 @@ struct LiveStreamViewerPage {
       };
       this.reconnectAttempt += 1;
       const delay = Math.min(30000, 1000 * Math.pow(2, Math.min(this.reconnectAttempt - 1, 5)));
-      this.scheduleRecovery(delay, `加入失败：${error.message}`);
+      this.scheduleRecovery(delay, str('lv_join_failed', error.message));
     }).finally((): void => {
       if (sequence === this.sessionSequence) { this.recoveryInFlight = false; }
     });
@@ -849,14 +860,14 @@ struct LiveStreamViewerPage {
       this.clearRecoveryTimer();
       this.clearRecoveryUi();
       this.connectionError = '';
-      this.mediaStatus = '直播音视频已连接';
+      this.setMediaStatus(str('lv_av_connected'));
       session.resumeMedia();
       this.restoreSurfaceBindings();
       return;
     }
-    this.mediaStatus = '网络波动，正在恢复媒体连接…';
+    this.setMediaStatus(str('lv_media_recovering'), LIVE_PHASE_RECOVERING);
     this.showRecoveryUi(700);
-    this.scheduleRecovery(MEDIA_RECONNECT_GRACE_MS, '媒体连接超时');
+    this.scheduleRecovery(MEDIA_RECONNECT_GRACE_MS, '媒体连接超时'); // i18n-exempt: diagnostic trace tag, console only
   }
 
   private onRemoteAudioActivity(
@@ -890,9 +901,9 @@ struct LiveStreamViewerPage {
         this.screenShareDesired = true;
         this.screenShareActive = true;
         this.screenShareBusy = false;
-        this.mediaStatus = this.localVideoActive
-          ? '摄像头与屏幕共享同时直播中'
-          : '正在共享本机屏幕';
+        this.setMediaStatus(this.localVideoActive
+          ? str('lv_camera_and_screen')
+          : str('lv_sharing_screen'));
         return;
       }
       if (!this.screenShareDesired) { return; }
@@ -903,9 +914,9 @@ struct LiveStreamViewerPage {
       session.stopScreenSharing().catch((caught: Error): void => {
         console.error(`[LiveStreamViewer] screen-share cleanup failed: ${caught.message}`);
       });
-      this.mediaStatus = error !== 0
-        ? '录屏未开始，请在系统弹窗中允许共享'
-        : (this.localVideoActive ? '屏幕共享已关闭，摄像头仍在直播' : '屏幕共享已关闭');
+      this.setMediaStatus(error !== 0
+        ? str('lv_screen_not_started')
+        : (this.localVideoActive ? str('lv_screen_off_camera_on') : str('lv_screen_off')));
       return;
     }
     if (active) {
@@ -920,9 +931,9 @@ struct LiveStreamViewerPage {
       this.localVideoActive = true;
       this.localVideoBusy = false;
       this.refreshPrimaryVideoAspect();
-      this.mediaStatus = this.screenShareActive
-        ? '摄像头与屏幕共享同时直播中'
-        : (mode === 1 ? '前置摄像头直播中' : '后置摄像头直播中');
+      this.setMediaStatus(this.screenShareActive
+        ? str('lv_camera_and_screen')
+        : (mode === 1 ? str('lv_front_camera_live') : str('lv_rear_camera_live')));
       return;
     }
     // Switching front/back stops the old capturer after the new one has been
@@ -938,11 +949,11 @@ struct LiveStreamViewerPage {
       console.error(`[LiveStreamViewer] camera cleanup failed: ${caught.message}`);
     });
     if (error !== 0) {
-      this.mediaStatus = '摄像头启动失败，请检查权限或是否被占用';
+      this.setMediaStatus(str('lv_camera_start_failed'));
     } else {
-      this.mediaStatus = this.screenShareActive
-        ? '摄像头已关闭，屏幕仍在共享'
-        : '摄像头已关闭';
+      this.setMediaStatus(this.screenShareActive
+        ? str('lv_camera_off_screen_on')
+        : str('lv_camera_off'));
     }
   }
 
@@ -1002,7 +1013,7 @@ struct LiveStreamViewerPage {
       this.screenShareActive = false;
       this.screenShareBusy = false;
       this.screenShareDesired = false;
-      this.mediaStatus = '单向 RTMP 直播需使用主播推流入口';
+      this.setMediaStatus(str('lv_rtmp_one_way'));
       return;
     }
     if (cameraMode === 1 || cameraMode === 2) {
@@ -1090,7 +1101,7 @@ struct LiveStreamViewerPage {
   private startHealthMonitor(): void {
     if (this.healthTimer !== -1) { return; }
     this.healthTimer = setInterval((): void => {
-      this.refreshGroupCall('定时健康检查');
+      this.refreshGroupCall('定时健康检查'); // i18n-exempt: diagnostic trace tag, console only
     }, MEDIA_HEALTH_INTERVAL_MS);
   }
 
@@ -1127,7 +1138,7 @@ struct LiveStreamViewerPage {
       } else {
         this.onLiveState(next);
       }
-      if (!next.isActive) { this.mediaStatus = '直播已结束'; }
+      if (!next.isActive) { this.setMediaStatus(str('lfw_ended')); }
       console.info(
         `[LiveStreamViewer] health reason=${reason} active=${next.isActive} ` +
         `joined=${next.isJoined} needRejoin=${next.needRejoin} media=${this.mediaConnected} ` +
@@ -1152,9 +1163,9 @@ struct LiveStreamViewerPage {
       this.applyVideoSources(this.videoSources);
       this.restoreSurfaceBindings();
     }
-    this.refreshGroupCall('回到前台');
+    this.refreshGroupCall('回到前台'); // i18n-exempt: diagnostic trace tag, console only
     if (this.hasJoinedOnce && !this.mediaConnected) {
-      this.scheduleRecovery(3000, '前台恢复后媒体未连接');
+      this.scheduleRecovery(3000, '前台恢复后媒体未连接'); // i18n-exempt: diagnostic trace tag, console only
     }
   }
 
@@ -1295,7 +1306,7 @@ struct LiveStreamViewerPage {
       const result = await manager.requestPermissionsFromUser(context, [MICROPHONE_PERMISSION]);
       const granted = result.authResults.length > 0 && result.authResults[0] === 0;
       if (!granted) {
-        this.mediaStatus = '需要麦克风权限才能开麦';
+        this.setMediaStatus(str('lv_needs_mic'));
         return;
       }
       if (this.selfParticipantId !== null) {
@@ -1307,10 +1318,10 @@ struct LiveStreamViewerPage {
         this.isMuted = false;
         liveStreamBackgroundTask.setRecording(true);
       } else {
-        this.mediaStatus = '麦克风启动失败';
+        this.setMediaStatus(str('lv_mic_start_failed'));
       }
     } catch (error) {
-      this.mediaStatus = `麦克风不可用：${error}`;
+      this.setMediaStatus(str('lv_mic_unavailable', error));
     }
   }
 
@@ -1339,14 +1350,14 @@ struct LiveStreamViewerPage {
     try {
       const stopped = session !== null && await session.stopCamera();
       if (!stopped) {
-        this.mediaStatus = '摄像头关闭失败';
+        this.setMediaStatus(str('lv_camera_stop_failed'));
         return;
       }
-      this.mediaStatus = this.screenShareActive
-        ? '摄像头已关闭，屏幕仍在共享'
-        : '摄像头已关闭';
+      this.setMediaStatus(this.screenShareActive
+        ? str('lv_camera_off_screen_on')
+        : str('lv_camera_off'));
     } catch (caught) {
-      this.mediaStatus = `摄像头关闭失败：${caught}`;
+      this.setMediaStatus(str('lv_camera_stop_failed_msg', caught));
     } finally {
       this.localVideoBusy = false;
     }
@@ -1361,14 +1372,14 @@ struct LiveStreamViewerPage {
     try {
       const stopped = session !== null && await session.stopScreenSharing();
       if (!stopped) {
-        this.mediaStatus = '屏幕共享关闭失败';
+        this.setMediaStatus(str('lv_screen_stop_failed'));
         return;
       }
-      this.mediaStatus = this.localVideoActive
-        ? '屏幕共享已关闭，摄像头仍在直播'
-        : '屏幕共享已关闭';
+      this.setMediaStatus(this.localVideoActive
+        ? str('lv_screen_off_camera_on')
+        : str('lv_screen_off'));
     } catch (caught) {
-      this.mediaStatus = `屏幕共享关闭失败：${caught}`;
+      this.setMediaStatus(str('lv_screen_stop_failed_msg', caught));
     } finally {
       this.screenShareBusy = false;
     }
@@ -1388,18 +1399,18 @@ struct LiveStreamViewerPage {
       );
       const granted = result.authResults.length > 0 && result.authResults[0] === 0;
       if (!granted) {
-        this.mediaStatus = '需要摄像头权限才能开启视频';
+        this.setMediaStatus(str('lv_needs_camera'));
         return;
       }
       await this.startCameraVideo(1);
     } catch (caught) {
-      this.mediaStatus = `摄像头不可用：${caught}`;
+      this.setMediaStatus(str('lv_camera_unavailable', caught));
     }
   }
 
   private async switchCamera(): Promise<void> {
     if (this.desiredLocalVideoMode !== 1 && this.desiredLocalVideoMode !== 2) {
-      this.mediaStatus = '请先开启摄像头';
+      this.setMediaStatus(str('lv_enable_camera_first'));
       return;
     }
     await this.startCameraVideo(this.desiredLocalVideoMode === 1 ? 2 : 1);
@@ -1416,7 +1427,7 @@ struct LiveStreamViewerPage {
   private async startCameraVideo(mode: number): Promise<void> {
     const session = this.tgcallsSession;
     if (session === null || !this.hasJoinedOnce || (mode !== 1 && mode !== 2)) {
-      this.mediaStatus = '请等待直播连接完成';
+      this.setMediaStatus(str('lv_wait_for_connection'));
       return;
     }
     const size = this.captureSize(mode);
@@ -1425,7 +1436,7 @@ struct LiveStreamViewerPage {
     this.localVideoMode = mode;
     this.localVideoActive = false;
     this.localVideoBusy = true;
-    this.mediaStatus = '正在启动摄像头…';
+    this.setMediaStatus(str('lv_starting_camera'));
     setTimeout((): void => {
       if (!this.pageActive || this.tgcallsSession !== session ||
         operationSequence !== this.localVideoOperationSequence ||
@@ -1437,7 +1448,7 @@ struct LiveStreamViewerPage {
       this.localVideoMode = 0;
       this.localVideoActive = false;
       this.localVideoBusy = false;
-      this.mediaStatus = '摄像头首帧等待超时，请重试';
+      this.setMediaStatus(str('lv_camera_first_frame_timeout'));
       session.stopCamera().catch((caught: Error): void => {
         console.error(`[LiveStreamViewer] timed-out camera cleanup failed: ${caught.message}`);
       });
@@ -1449,21 +1460,21 @@ struct LiveStreamViewerPage {
       this.desiredLocalVideoMode = 0;
       this.localVideoMode = 0;
       this.localVideoBusy = false;
-      this.mediaStatus = '当前直播模式不支持本机推流';
+      this.setMediaStatus(str('lv_no_local_stream'));
     } catch (caught) {
       if (operationSequence !== this.localVideoOperationSequence) { return; }
       this.desiredLocalVideoMode = 0;
       this.localVideoMode = 0;
       this.localVideoActive = false;
       this.localVideoBusy = false;
-      this.mediaStatus = `摄像头推流启动失败：${caught}`;
+      this.setMediaStatus(str('lv_camera_stream_failed', caught));
     }
   }
 
   private async startScreenShareVideo(): Promise<void> {
     const session = this.tgcallsSession;
     if (session === null || !this.hasJoinedOnce) {
-      this.mediaStatus = '请等待直播连接完成';
+      this.setMediaStatus(str('lv_wait_for_connection'));
       return;
     }
     const size = this.captureSize(3);
@@ -1471,7 +1482,7 @@ struct LiveStreamViewerPage {
     this.screenShareDesired = true;
     this.screenShareActive = false;
     this.screenShareBusy = true;
-    this.mediaStatus = '正在请求录屏授权…';
+    this.setMediaStatus(str('lv_requesting_screen'));
     setTimeout((): void => {
       if (!this.pageActive || this.tgcallsSession !== session ||
         operationSequence !== this.screenShareOperationSequence ||
@@ -1482,7 +1493,7 @@ struct LiveStreamViewerPage {
       this.screenShareDesired = false;
       this.screenShareActive = false;
       this.screenShareBusy = false;
-      this.mediaStatus = '录屏授权或首帧等待超时，请重试';
+      this.setMediaStatus(str('lv_screen_timeout'));
       session.stopScreenSharing().catch((caught: Error): void => {
         console.error(`[LiveStreamViewer] timed-out screen-share cleanup failed: ${caught.message}`);
       });
@@ -1494,13 +1505,13 @@ struct LiveStreamViewerPage {
       this.screenShareDesired = false;
       this.screenShareActive = false;
       this.screenShareBusy = false;
-      this.mediaStatus = '当前直播模式不支持屏幕共享';
+      this.setMediaStatus(str('lv_no_screen_share'));
     } catch (caught) {
       if (operationSequence !== this.screenShareOperationSequence) { return; }
       this.screenShareDesired = false;
       this.screenShareActive = false;
       this.screenShareBusy = false;
-      this.mediaStatus = `录屏共享启动失败：${caught}`;
+      this.setMediaStatus(str('lv_screen_stream_failed', caught));
     }
   }
 
@@ -1527,11 +1538,11 @@ struct LiveStreamViewerPage {
     toggleGroupCallParticipantIsMuted(
       getTdClient(), this.groupCallId, sender, nextMuted
     ).then((): void => {
-      this.mediaStatus = nextMuted
-        ? `已将 ${participant.name} 静音`
-        : `已允许 ${participant.name} 发言`;
+      this.setMediaStatus(nextMuted
+        ? str('lv_muted_participant', participant.name)
+        : str('lv_unmuted_participant', participant.name));
     }).catch((error: Error): void => {
-      this.mediaStatus = `成员麦克风管理失败：${error.message}`;
+      this.setMediaStatus(str('lv_participant_mic_failed', error.message));
     });
   }
 
@@ -1559,13 +1570,13 @@ struct LiveStreamViewerPage {
   private endLiveForEveryone(): void {
     if (this.endingLive || this.groupCallId <= 0) { return; }
     this.endingLive = true;
-    this.mediaStatus = '正在结束直播…';
+    this.setMediaStatus(str('lv_ending'));
     endGroupCall(getTdClient(), this.groupCallId).then((): void => {
-      this.mediaStatus = '直播已结束';
+      this.setMediaStatus(str('lfw_ended'));
       this.leaveNow();
     }).catch((error: Error): void => {
       this.endingLive = false;
-      this.mediaStatus = `结束直播失败：${error.message}`;
+      this.setMediaStatus(str('lv_end_failed', error.message));
     });
   }
 
@@ -1581,7 +1592,7 @@ struct LiveStreamViewerPage {
   private minimizeToFloating(): void {
     const session = this.tgcallsSession;
     if (session === null) {
-      this.mediaStatus = '直播连接尚未就绪，请稍后再试';
+      this.setMediaStatus(str('lv_not_ready'));
       return;
     }
     if (this.minimizeInProgress || this.leaveDialogOpen || this.endingLive ||
@@ -1616,7 +1627,7 @@ struct LiveStreamViewerPage {
     );
     if (!shown) {
       this.minimizeInProgress = false;
-      this.mediaStatus = '无法创建悬浮窗，直播仍在当前页面';
+      this.setMediaStatus(str('lv_no_floating_window'));
       return;
     }
     if (this.localVideoActive) { session.setLocalVideoSurface('0'); }
@@ -1645,7 +1656,7 @@ struct LiveStreamViewerPage {
     this.fullscreenPanelOpen = false;
     this.interactionDrawerOpen = false;
     this.fullscreenTransitioning = true;
-    this.fullscreenTransitionLabel = next ? '正在进入全屏…' : '正在退出全屏…';
+    this.fullscreenTransitionLabel = next ? str('lv_entering_fullscreen') : str('lv_exiting_fullscreen');
     this.isFullscreen = next;
     setLiveStreamFullscreen(
       getContext(this) as common.UIAbilityContext, next,
@@ -1665,7 +1676,16 @@ struct LiveStreamViewerPage {
   private displayTitle(): string {
     if (this.state.title !== '') { return this.state.title; }
     if (this.initialTitle !== '') { return this.initialTitle; }
-    return this.groupCallId > 0 ? '直播' : '无法打开直播';
+    return this.groupCallId > 0 ? str('lv_stream') : str('lv_cannot_open');
+  }
+
+  // Text and phase are set together and only here, so the two cannot drift
+  // apart. The header classifies state from the phase; before this it matched
+  // substrings of the sentence, which both misfired and would have broken
+  // silently once this page was translated.
+  private setMediaStatus(text: string, phase: string = LIVE_PHASE_NONE): void {
+    this.mediaStatus = text;
+    this.mediaPhase = phase;
   }
 
   private displayParticipantCount(): number {
@@ -1689,7 +1709,7 @@ struct LiveStreamViewerPage {
       retrySeconds: this.retrySeconds,
       canMinimize: this.tgcallsSession !== null,
       participantCount: this.displayParticipantCount(),
-      mediaStatus: this.mediaStatus
+      mediaPhase: this.mediaPhase
     });
   }
 
@@ -1710,7 +1730,7 @@ struct LiveStreamViewerPage {
       hasVideo: this.videoSources.length > 0 || this.isLocalCameraActive(),
       visualReady: true,
       participantCount: Math.max(this.participants.length, this.displayParticipantCount()),
-      mediaStatus: this.mediaStatus,
+      mediaPhase: this.mediaPhase,
       error: this.connectionError !== '' ? this.connectionError : this.state.error
     });
   }
@@ -1760,20 +1780,20 @@ struct LiveStreamViewerPage {
       this.connectionError === '' && !this.recoveryUiVisible;
     this.headerQueryFailed = false;
     this.connectionError = '';
-    this.refreshGroupCall('顶部状态手动重试');
+    this.refreshGroupCall('顶部状态手动重试'); // i18n-exempt: diagnostic trace tag, console only
     if (queryOnly || this.recoveryInFlight) { return; }
     this.clearRecoveryTimer();
     this.showRecoveryUi(this.hasJoinedOnce ? 0 : 700);
-    this.replaceSession('用户手动重试');
+    this.replaceSession('用户手动重试'); // i18n-exempt: diagnostic trace tag, console only
   }
 
   @Builder
   headerMoreMenu() {
     Menu() {
-      MenuItem({ content: '最小化到悬浮窗' })
+      MenuItem({ content: $r('app.string.lv_minimise') })
         .enabled(this.headerPresentation().actionsEnabled && !this.minimizeInProgress)
         .onClick((): void => this.minimizeToFloating());
-      MenuItem({ content: this.canManageLive ? '管理或退出直播' : '退出直播' })
+      MenuItem({ content: this.canManageLive ? $r('app.string.lv_manage_or_leave') : $r('app.string.lv_leave') })
         .enabled(!this.leaveDialogOpen && !this.endingLive)
         .onClick((): void => this.leave());
     }
@@ -1934,7 +1954,7 @@ struct LiveStreamViewerPage {
       .animation({
         duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 110), curve: Curve.EaseOut
       })
-      .accessibilityText('退出直播')
+      .accessibilityText($r('app.string.lv_leave'))
       .onClick((): void => this.leave());
       Column({ space: 2 }) {
         Text(this.displayTitle())
@@ -1953,7 +1973,7 @@ struct LiveStreamViewerPage {
             )
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
           if (this.canManageLive) {
-            Text('管理员')
+            Text($r('app.string.ga_admin'))
               .fontSize(10).fontWeight(FontWeight.Medium).fontColor(CALL_GREEN)
               .padding({ left: 7, right: 7, top: 2, bottom: 2 })
               .backgroundColor('#2639D98A').borderRadius(8);
@@ -1973,7 +1993,7 @@ struct LiveStreamViewerPage {
       })
       .enabled(this.headerPresentation().actionsEnabled && !this.minimizeInProgress &&
         !this.leaveDialogOpen)
-      .accessibilityText(this.minimizeInProgress ? '正在最小化直播' : '最小化到悬浮窗')
+      .accessibilityText(this.minimizeInProgress ? $r('app.string.lv_minimising') : $r('app.string.lv_minimise'))
       .onClick((): void => this.minimizeToFloating());
       Row() {
         SymbolGlyph($r('sys.symbol.more')).fontSize(22).fontColor([CALL_TEXT]);
@@ -1985,7 +2005,7 @@ struct LiveStreamViewerPage {
         duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 110), curve: Curve.EaseOut
       })
       .enabled(this.groupCallId > 0 && !this.minimizeInProgress)
-      .accessibilityText('直播更多操作')
+      .accessibilityText($r('app.string.lv_more_actions'))
       .bindMenu(this.headerMoreMenu());
     }
     .width('100%').height(64).padding({ left: 8, right: 10 })
@@ -2020,7 +2040,7 @@ struct LiveStreamViewerPage {
           Text(this.audioStageName())
             .fontSize(16).fontWeight(FontWeight.Bold).fontColor(CALL_TEXT)
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
-          Text(this.activeAudioSpeaker() !== null ? '正在发言' : this.mediaPresentation().detail)
+          Text(this.activeAudioSpeaker() !== null ? $r('app.string.lv_speaking') : this.mediaPresentation().detail)
             .fontSize(12).fontColor(CALL_SUBTEXT);
         }
       } else {
@@ -2216,7 +2236,7 @@ struct LiveStreamViewerPage {
                   });
                 }
                 .width('100%').height(132)
-                .accessibilityText(`切换到${source.name !== '' ? source.name : '该直播画面'}`)
+                .accessibilityText(str('lv_switch_to', source.name !== '' ? source.name : str('lv_this_video')))
                 .onClick((): void => this.selectPrimaryVideo(source.endpointId));
               }
             },
@@ -2243,12 +2263,12 @@ struct LiveStreamViewerPage {
               Column({ space: 5 }) {
                 Text(`+${this.hiddenVideoSourceCount()}`)
                   .fontSize(24).fontWeight(FontWeight.Bold).fontColor(Color.White);
-                Text('更多画面').fontSize(11).fontColor(CALL_SUBTEXT);
+                Text($r('app.string.lv_more_feeds')).fontSize(11).fontColor(CALL_SUBTEXT);
               }
               .width('100%').height(132).justifyContent(FlexAlign.Center)
               .backgroundColor('#16232D').borderRadius(8);
             }
-            .accessibilityText(`还有${this.hiddenVideoSourceCount()}路画面`);
+            .accessibilityText(plural('lv_more_sources', this.hiddenVideoSourceCount(), this.hiddenVideoSourceCount()));
           }
         }
         .columnsTemplate('1fr 1fr').columnsGap(3).rowsGap(3)
@@ -2277,15 +2297,15 @@ struct LiveStreamViewerPage {
       }
       .width(42).height(42);
       Column() {
-        Text(participant.isCurrentUser ? `${participant.name}（你）` : participant.name)
+        Text(participant.isCurrentUser ? str('lv_participant_you', participant.name) : participant.name)
           .fontSize(15).fontWeight(FontWeight.Medium).fontColor(CALL_TEXT)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
-        Text(participant.isSpeaking ? '正在发言' :
+        Text(participant.isSpeaking ? $r('app.string.lv_speaking') :
           (participant.isMuted
             ? (this.canManageLive && !participant.isCurrentUser
-              ? '麦克风已关闭 · 点击允许发言' : '麦克风已关闭')
+              ? $r('app.string.lv_mic_off_tap_allow') : $r('app.string.lfw_mic_off'))
             : (this.canManageLive && !participant.isCurrentUser
-              ? '可以发言 · 点击可静音' : '正在收听')))
+              ? $r('app.string.lv_can_speak_tap_mute') : $r('app.string.lv_listening'))))
           .fontSize(12).fontColor(participant.isSpeaking ? CALL_GREEN : CALL_SUBTEXT).margin({ top: 3 });
       }
       .layoutWeight(1).alignItems(HorizontalAlign.Start);
@@ -2318,10 +2338,10 @@ struct LiveStreamViewerPage {
   }
 
   private interactionPreviewText(): string {
-    if (this.interactionUnreadCount > 0) { return `${this.interactionUnreadCount} 条新互动`; }
+    if (this.interactionUnreadCount > 0) { return plural('lv_new_interactions', this.interactionUnreadCount, this.interactionUnreadCount); }
     if (this.interactionMessages.length === 0) { return this.callInteractionPresentation().subtitle; }
     const latest = this.interactionMessages[this.interactionMessages.length - 1];
-    return `${latest.senderName}：${latest.text !== '' ? latest.text : '分享了媒体'}`;
+    return str('lv_latest_message', latest.senderName, latest.text !== '' ? latest.text : str('lv_shared_media'));
   }
 
   @Builder
@@ -2339,7 +2359,7 @@ struct LiveStreamViewerPage {
         }
       }.width(38).height(38);
       Column({ space: 3 }) {
-        Text('直播互动').fontSize(14).fontWeight(FontWeight.Bold).fontColor(CALL_TEXT);
+        Text($r('app.string.lv_interactions')).fontSize(14).fontWeight(FontWeight.Bold).fontColor(CALL_TEXT);
         Text(this.interactionPreviewText())
           .fontSize(10).fontColor(this.interactionUnreadCount > 0 ? '#8FC2FF' : CALL_SUBTEXT)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
@@ -2362,7 +2382,7 @@ struct LiveStreamViewerPage {
       duration: powerAnimationDuration(KEY_POWER_CALL_ANIMATIONS, 140), curve: Curve.EaseOut
     })
     .accessibilityText(this.interactionUnreadCount > 0
-      ? `打开直播互动，有 ${this.interactionUnreadCount} 条新消息` : '打开直播互动')
+      ? plural('lv_open_chat_unread', this.interactionUnreadCount, this.interactionUnreadCount) : str('lv_open_chat'))
     .onClick((): void => this.openInteractionDrawer());
   }
 
@@ -2407,7 +2427,7 @@ struct LiveStreamViewerPage {
       if (this.interactionUnreadCount > 0) {
         Row({ space: 6 }) {
           SymbolGlyph($r('sys.symbol.arrow_down')).fontSize(13).fontColor([Color.White]);
-          Text(`${this.interactionUnreadCount} 条新互动`)
+          Text(plural('lv_new_interactions', this.interactionUnreadCount, this.interactionUnreadCount))
             .fontSize(11).fontWeight(FontWeight.Medium).fontColor(Color.White);
         }
         .height(32).padding({ left: 11, right: 12 }).margin({ bottom: 10 })
@@ -2434,7 +2454,7 @@ struct LiveStreamViewerPage {
           }, (emoji: string): string => emoji)
         }.width('100%');
         Row({ space: 9 }) {
-          TextInput({ text: this.interactionDraft, placeholder: '说点什么…' })
+          TextInput({ text: this.interactionDraft, placeholder: $r('app.string.lv_say_something') })
             .layoutWeight(1).height(42).fontSize(14).fontColor(CALL_TEXT)
             .placeholderColor(CALL_SUBTEXT).backgroundColor('#1B2A35').borderRadius(21)
             .padding({ left: 15, right: 15 }).enterKeyType(EnterKeyType.Send)
@@ -2459,7 +2479,7 @@ struct LiveStreamViewerPage {
           Row({ space: 6 }) {
             Text(this.interactionSendError).fontSize(10).fontColor('#FF9AA6')
               .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1);
-            Text('重试').fontSize(10).fontColor('#64A8FF')
+            Text($r('app.string.settings_retry')).fontSize(10).fontColor('#64A8FF')
               .height(26).padding({ left: 6, right: 6 })
               .onClick((): void => this.retryInteractionSend());
           }.width('100%');
@@ -2491,8 +2511,8 @@ struct LiveStreamViewerPage {
           Rect({ width: 38, height: 4, radius: 2 }).fill('#53616C');
           Row({ space: 10 }) {
             Column({ space: 2 }) {
-              Text('直播互动').fontSize(17).fontWeight(FontWeight.Bold).fontColor(CALL_TEXT);
-              Text(`${this.interactionMessages.length} 条 · ${this.callInteractionPresentation().statusText}`)
+              Text($r('app.string.lv_interactions')).fontSize(17).fontWeight(FontWeight.Bold).fontColor(CALL_TEXT);
+              Text(str('lv_count_and_status', this.interactionMessages.length, this.callInteractionPresentation().statusText))
                 .fontSize(11).fontColor(CALL_SUBTEXT);
             }.layoutWeight(1).alignItems(HorizontalAlign.Start);
             Button({ type: ButtonType.Circle }) {
@@ -2583,7 +2603,7 @@ struct LiveStreamViewerPage {
       })
       .enabled(!this.localVideoBusy)
       .onClick((): void => { this.toggleCamera(); });
-      Text(this.localVideoBusy ? '处理中' : '摄像头')
+      Text(this.localVideoBusy ? $r('app.string.processing_short') : $r('app.string.lv_camera'))
         .fontSize(10)
         .fontColor(this.localVideoActive ? CALL_GREEN :
           (this.localVideoBusy ? '#91B7AA' : CALL_SUBTEXT));
@@ -2615,7 +2635,7 @@ struct LiveStreamViewerPage {
       })
       .enabled(!this.screenShareBusy)
       .onClick((): void => { this.toggleScreenShare(); });
-      Text(this.screenShareBusy ? '处理中' : '共享屏幕')
+      Text(this.screenShareBusy ? $r('app.string.processing_short') : $r('app.string.lv_share_screen'))
         .fontSize(10)
         .fontColor(this.screenShareActive ? CALL_GREEN :
           (this.screenShareBusy ? '#91B7AA' : CALL_SUBTEXT));
@@ -2642,7 +2662,7 @@ struct LiveStreamViewerPage {
         (this.desiredLocalVideoMode === 1 || this.desiredLocalVideoMode === 2)
       )
       .onClick((): void => { this.switchCamera(); });
-      Text(this.desiredLocalVideoMode === 2 ? '切前置' : '切后置')
+      Text(this.desiredLocalVideoMode === 2 ? $r('app.string.lv_to_front') : $r('app.string.lv_to_rear'))
         .fontSize(10).fontColor(CALL_SUBTEXT);
     }
     .width(52).alignItems(HorizontalAlign.Center);
@@ -2677,19 +2697,19 @@ struct LiveStreamViewerPage {
         .onClick((): void => { this.toggleMuted(); });
         this.switchCameraButton();
         this.localMediaButton(
-          $r('sys.symbol.phone_fill'), this.canManageLive ? '管理' : '退出', false, CALL_RED,
+          $r('sys.symbol.phone_fill'), this.canManageLive ? str('lv_manage_short') : str('lv_leave_short'), false, CALL_RED,
           (): void => this.leave()
         );
       }
       .width('100%').justifyContent(FlexAlign.SpaceAround).alignItems(VerticalAlign.Center);
-      Text(this.localVideoBusy && this.screenShareBusy ? '正在启动摄像头和屏幕共享…' :
-        (this.localVideoBusy ? '正在启动摄像头…' :
-          (this.screenShareBusy ? '正在启动屏幕共享…' :
+      Text(this.localVideoBusy && this.screenShareBusy ? $r('app.string.lv_starting_both') :
+        (this.localVideoBusy ? $r('app.string.lv_starting_camera') :
+          (this.screenShareBusy ? $r('app.string.lv_starting_screen') :
             (this.localVideoActive && this.screenShareActive
-              ? '摄像头和屏幕共享同时直播中'
-              : (this.screenShareActive ? '正在共享本机屏幕' :
-                (this.localVideoActive ? '摄像头直播中，可随时切换前后镜头' :
-                  (this.isMuted ? '点击麦克风开始说话' : '麦克风已开启，你正在发言')))))))
+              ? $r('app.string.lv_both_live')
+              : (this.screenShareActive ? $r('app.string.lv_sharing_screen') :
+                (this.localVideoActive ? $r('app.string.lv_camera_live_switchable') :
+                  (this.isMuted ? $r('app.string.lv_tap_mic_to_speak') : $r('app.string.lv_mic_on_speaking'))))))))
         .fontSize(13).fontWeight(FontWeight.Medium)
         .fontColor((!this.isMuted || this.localVideoActive || this.screenShareActive)
           ? CALL_GREEN : CALL_TEXT)
@@ -2711,8 +2731,8 @@ struct LiveStreamViewerPage {
       Column() {
         Row({ space: 10 }) {
           Column({ space: 2 }) {
-            Text('语音成员').fontSize(17).fontWeight(FontWeight.Bold).fontColor(CALL_TEXT);
-            Text(`${this.participants.length} 人 · 发言状态实时更新`)
+            Text($r('app.string.lv_voice_members')).fontSize(17).fontWeight(FontWeight.Bold).fontColor(CALL_TEXT);
+            Text(str('lv_participants_live', this.participants.length))
               .fontSize(11).fontColor(CALL_SUBTEXT);
           }.alignItems(HorizontalAlign.Start).layoutWeight(1);
           Button({ type: ButtonType.Circle }) {
@@ -2725,7 +2745,7 @@ struct LiveStreamViewerPage {
         if (this.participants.length === 0) {
           Column({ space: 8 }) {
             SymbolGlyph($r('sys.symbol.person_2')).fontSize(32).fontColor([CALL_SUBTEXT]);
-            Text('暂无成员信息').fontSize(14).fontWeight(FontWeight.Medium).fontColor(CALL_TEXT);
+            Text($r('app.string.lv_no_members')).fontSize(14).fontWeight(FontWeight.Medium).fontColor(CALL_TEXT);
             Text(this.headerPresentation().statusText)
               .fontSize(11).fontColor(CALL_SUBTEXT).textAlign(TextAlign.Center);
           }
@@ -2846,7 +2866,7 @@ struct LiveStreamViewerPage {
           .border({ width: 1, color: '#42FFFFFF' })
           .enabled(!this.fullscreenTransitioning)
           .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
-          .accessibilityText('退出全屏')
+          .accessibilityText($r('app.string.lv_exit_fullscreen'))
           .onClick((): void => this.toggleFullscreen());
           Button({ type: ButtonType.Circle }) {
             Stack({ alignContent: Alignment.Center }) {
@@ -2858,7 +2878,7 @@ struct LiveStreamViewerPage {
           }
           .width(42).height(42).backgroundColor(this.isMuted ? '#8A40505A' : '#C539D98A')
           .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
-          .accessibilityText(this.isMuted ? '打开麦克风' : '关闭麦克风')
+          .accessibilityText(this.isMuted ? $r('app.string.lv_mic_on_action') : $r('app.string.lv_mic_off_action'))
           .onClick((): void => { this.toggleMuted(); });
           Button({ type: ButtonType.Circle }) {
             SymbolGlyph($r('sys.symbol.camera')).fontSize(20).fontColor([
@@ -2872,7 +2892,7 @@ struct LiveStreamViewerPage {
           )
           .enabled(!this.localVideoBusy)
           .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
-          .accessibilityText(this.localVideoActive ? '关闭摄像头' : '打开摄像头')
+          .accessibilityText(this.localVideoActive ? $r('app.string.lv_camera_off_action') : $r('app.string.lv_camera_on_action'))
           .onClick((): void => { this.toggleCamera(); });
           Button({ type: ButtonType.Circle }) {
             SymbolGlyph($r('sys.symbol.computer')).fontSize(20).fontColor([
@@ -2886,26 +2906,26 @@ struct LiveStreamViewerPage {
           )
           .enabled(!this.screenShareBusy)
           .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
-          .accessibilityText(this.screenShareActive ? '停止屏幕共享' : '开始屏幕共享')
+          .accessibilityText(this.screenShareActive ? $r('app.string.lv_stop_screen') : $r('app.string.lv_start_screen'))
           .onClick((): void => { this.toggleScreenShare(); });
           Button({ type: ButtonType.Circle }) {
             SymbolGlyph($r('sys.symbol.phone_fill')).fontSize(21).fontColor([Color.White]);
           }
           .width(42).height(42).backgroundColor('#D9D94B55')
           .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
-          .accessibilityText(this.canManageLive ? '管理或退出直播' : '退出直播')
+          .accessibilityText(this.canManageLive ? $r('app.string.lv_manage_or_leave') : $r('app.string.lv_leave'))
           .onClick((): void => this.leave());
           Blank();
           Button() {
             Row({ space: 6 }) {
               SymbolGlyph($r('sys.symbol.person_2')).fontSize(17).fontColor([Color.White]);
-              Text(`成员 ${this.participants.length}`).fontSize(13).fontColor(Color.White);
+              Text(str('lv_members_n', this.participants.length)).fontSize(13).fontColor(Color.White);
             }
           }
           .height(40).padding({ left: 12, right: 12 })
           .backgroundColor('#A617222B').borderRadius(20)
           .stateStyles({ normal: this.topActionNormalStyle, pressed: this.topActionPressedStyle })
-          .accessibilityText(`查看 ${this.participants.length} 名成员`)
+          .accessibilityText(plural('lv_view_members', this.participants.length, this.participants.length))
           .onClick((): void => { this.fullscreenPanelOpen = true; });
         }
         .width('100%');
@@ -2931,7 +2951,7 @@ struct LiveStreamViewerPage {
               .opacity(this.pulseExpanded ? 1 : 0.52);
             Text(`${this.participants.find(
               (participant: GroupCallParticipantInfo): boolean => participant.isSpeaking
-            )?.name ?? '成员'} 正在发言`)
+            )?.name ?? $r('app.string.ng_members')} 正在发言`)
               .fontSize(12).fontColor(Color.White).maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis });
           }

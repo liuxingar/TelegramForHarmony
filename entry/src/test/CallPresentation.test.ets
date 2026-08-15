@@ -6,10 +6,10 @@ import {
 export default function callPresentationTest() {
   describe('CallPresentation', () => {
     it('phase_labels', 0, () => {
-      expect(callPhaseLabel('dialing', false)).assertEqual('正在呼叫…');
-      expect(callPhaseLabel('ringing', false)).assertEqual('语音来电');
-      expect(callPhaseLabel('ringing', true)).assertEqual('视频来电');
-      expect(callPhaseLabel('connecting', false)).assertEqual('连接中…');
+      expect(callPhaseLabel('dialing', false)).assertEqual('call_state_dialing');
+      expect(callPhaseLabel('ringing', false)).assertEqual('call_state_incoming_voice');
+      expect(callPhaseLabel('ringing', true)).assertEqual('call_state_incoming_video');
+      expect(callPhaseLabel('connecting', false)).assertEqual('call_state_connecting');
       expect(callPhaseLabel('active', false)).assertEqual('');
       expect(callPhaseLabel('idle', false)).assertEqual('');
     });
@@ -21,12 +21,12 @@ export default function callPresentationTest() {
       expect(callDurationLabel(0, 5000)).assertEqual('');
     });
     it('end_labels', 0, () => {
-      expect(callEndLabel('hangup', '')).assertEqual('通话已结束');
-      expect(callEndLabel('declined', '')).assertEqual('对方已拒绝');
-      expect(callEndLabel('missed', '')).assertEqual('未接听');
-      expect(callEndLabel('busy', '')).assertEqual('对方忙线中');
+      expect(callEndLabel('hangup', '')).assertEqual('call_ended_normal');
+      expect(callEndLabel('declined', '')).assertEqual('call_ended_declined');
+      expect(callEndLabel('missed', '')).assertEqual('call_ended_missed');
+      expect(callEndLabel('busy', '')).assertEqual('call_ended_busy');
       expect(callEndLabel('error', '连接失败')).assertEqual('连接失败');
-      expect(callEndLabel('error', '')).assertEqual('通话失败');
+      expect(callEndLabel('error', '')).assertEqual('call_ended_failed');
     });
   });
 }

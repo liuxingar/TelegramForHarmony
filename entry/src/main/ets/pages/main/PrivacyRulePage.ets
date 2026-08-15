@@ -8,6 +8,7 @@ import {
   COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE,
   COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
+import { str } from '../../util/strings';
 
 const CARD_RADIUS: number = 16;
 
@@ -29,9 +30,9 @@ interface RuleOption {
 }
 
 const ALL_OPTIONS: RuleOption[] = [
-  { label: '所有人', value: RULE_EVERYBODY },
-  { label: '我的联系人', value: RULE_CONTACTS },
-  { label: '没有人', value: RULE_NOBODY }
+  { label: str('privacy_everybody'), value: RULE_EVERYBODY },
+  { label: str('privacy_contacts'), value: RULE_CONTACTS },
+  { label: str('privacy_nobody'), value: RULE_NOBODY }
 ];
 
 @Entry
@@ -118,7 +119,7 @@ struct PrivacyRulePage {
       if (!this.active) { return; }
       this.base = previous;
       this.saving = false;
-      promptAction.showToast({ message: '保存失败，已恢复原设置', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.privacy_save_failed'), duration: 1800 });
     });
   }
 
@@ -126,7 +127,7 @@ struct PrivacyRulePage {
     if (this.loadState !== 'ready' || this.saving) { return; }
     const params: PrivacyExceptionsParams = { setting: this.setting, title: this.title };
     router.pushUrl({ url: 'pages/main/PrivacyExceptionsPage', params }).catch((): void => {
-      promptAction.showToast({ message: '例外名单打开失败', duration: 1600 });
+      promptAction.showToast({ message: $r('app.string.privacy_exceptions_open_failed'), duration: 1600 });
     });
   }
 
@@ -154,9 +155,9 @@ struct PrivacyRulePage {
   loadError() {
     Column({ space: 12 }) {
       SymbolGlyph($r('sys.symbol.exclamationmark_circle')).fontSize(46).fontColor([COLOR_TEXT_SECONDARY]);
-      Text('无法读取这项隐私规则').fontSize(17).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-      Text('页面不会用默认选项覆盖服务器状态。').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
-      Button('重新加载').height(42).borderRadius(21).fontColor(Color.White).backgroundColor(COLOR_PRIMARY)
+      Text($r('app.string.privacy_rule_unreadable')).fontSize(17).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+      Text($r('app.string.privacy_rule_no_overwrite')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+      Button($r('app.string.settings_reload')).height(42).borderRadius(21).fontColor(Color.White).backgroundColor(COLOR_PRIMARY)
         .onClick((): void => { this.load(); });
     }
     .layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
@@ -168,7 +169,7 @@ struct PrivacyRulePage {
       if (this.loadState === 'loading') {
         Column({ space: 10 }) {
           LoadingProgress().width(34).height(34).color(COLOR_PRIMARY);
-          Text('正在读取隐私规则…').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.privacy_rule_loading')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else if (this.loadState === 'error') {
         this.loadError();
@@ -176,7 +177,7 @@ struct PrivacyRulePage {
         Scroll() {
           Column({ space: 12 }) {
             Column() {
-              Text('谁可以访问').fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
+              Text($r('app.string.privacy_who_can')).fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
                 .width('100%').padding({ left: 16, top: 13, bottom: 5 });
               ForEach(this.options(), (option: RuleOption, index: number) => {
                 if (index > 0) { this.divider(); }
@@ -198,12 +199,12 @@ struct PrivacyRulePage {
               .width('100%').padding({ left: 16, right: 16 });
 
             Column() {
-              Text('例外').fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
+              Text($r('app.string.privacy_exceptions')).fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
                 .width('100%').padding({ left: 16, top: 13, bottom: 5 });
               Row({ space: 9 }) {
                 Column({ space: 2 }) {
-                  Text('始终允许').fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
-                  Text('即使总规则不允许，也对这些用户生效').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+                  Text($r('app.string.privacy_always_allow')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
+                  Text($r('app.string.privacy_always_allow_sub')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
                 }.layoutWeight(1).alignItems(HorizontalAlign.Start);
                 Text(`${this.allowExceptions}`).fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
                 SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(16).fontColor([COLOR_TEXT_SECONDARY]);
@@ -213,8 +214,8 @@ struct PrivacyRulePage {
               this.divider();
               Row({ space: 9 }) {
                 Column({ space: 2 }) {
-                  Text('永不允许').fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
-                  Text('即使总规则允许，也对这些用户生效').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+                  Text($r('app.string.privacy_never_allow')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
+                  Text($r('app.string.privacy_never_allow_sub')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
                 }.layoutWeight(1).alignItems(HorizontalAlign.Start);
                 Text(`${this.restrictExceptions}`).fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
                 SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(16).fontColor([COLOR_TEXT_SECONDARY]);
@@ -224,7 +225,7 @@ struct PrivacyRulePage {
             }
             .width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS).padding({ bottom: 5 });
 
-            Text('例外规则优先于上方总规则；保存总规则不会删除服务器已有的机器人、Premium、联系人或群组规则。')
+            Text($r('app.string.privacy_exceptions_note'))
               .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).lineHeight(18)
               .width('100%').padding({ left: 16, right: 16 });
           }

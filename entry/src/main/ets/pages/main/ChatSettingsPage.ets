@@ -9,6 +9,7 @@ import {
 import {
   COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY, COLOR_BUBBLE_IN, COLOR_BUBBLE_OUT
 } from '../../util/theme';
+import { str } from '../../util/strings';
 
 const CARD_BG: ResourceColor = $r('app.color.surface');
 const CARD_RADIUS: number = 14;
@@ -19,9 +20,9 @@ interface NightOption {
 }
 
 const NIGHT_OPTIONS: NightOption[] = [
-  { label: '跟随系统', value: NIGHT_SYSTEM },
-  { label: '始终开启', value: NIGHT_DARK },
-  { label: '始终关闭', value: NIGHT_LIGHT }
+  { label: str('night_system'), value: NIGHT_SYSTEM },
+  { label: str('night_always_on'), value: NIGHT_DARK },
+  { label: str('night_always_off'), value: NIGHT_LIGHT }
 ];
 
 // 聊天设置. Deliberately limited to settings the app actually honours — the
@@ -112,9 +113,9 @@ struct ChatSettingsPage {
         pressed: this.actionPressedStyle
       })
       .enabled(!this.leavingPage)
-      .accessibilityText('返回设置')
+      .accessibilityText($r('app.string.back_to_settings'))
       .onClick((): void => { this.leavePage(); });
-      Text('聊天设置').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
+      Text($r('app.string.settings_chat')).fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
         .layoutWeight(1);
     }
     .width('100%').height(56).padding({ left: 8, right: 16 })
@@ -122,7 +123,7 @@ struct ChatSettingsPage {
   }
 
   @Builder
-  cardTitle(text: string) {
+  cardTitle(text: ResourceStr) {
     Text(text).fontSize(15).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
       .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 4 });
   }
@@ -133,14 +134,14 @@ struct ChatSettingsPage {
   preview() {
     Column({ space: 8 }) {
       Row() {
-        Text('早上好！现在几点了？')
+        Text($r('app.string.chat_settings_preview_in'))
           .fontSize(this.textSize).fontColor(COLOR_TEXT_PRIMARY)
           .padding({ left: 12, right: 12, top: 8, bottom: 8 })
           .backgroundColor(COLOR_BUBBLE_IN)
           .borderRadius(this.bubbleRadius);
       }.width('100%').justifyContent(FlexAlign.Start);
       Row() {
-        Text('东京现在是早上 😄')
+        Text($r('app.string.chat_settings_preview_out'))
           .fontSize(this.textSize).fontColor(COLOR_TEXT_PRIMARY)
           .padding({ left: 12, right: 12, top: 8, bottom: 8 })
           .backgroundColor(COLOR_BUBBLE_OUT)
@@ -183,7 +184,7 @@ struct ChatSettingsPage {
         normal: this.optionNormalStyle,
         pressed: this.optionPressedStyle
       })
-      .accessibilityText(`${title}，${this.booleanValue(key) ? '已开启' : '已关闭'}`)
+      .accessibilityText(str('a11y_toggle_state', title, this.booleanValue(key) ? str('state_on') : str('state_off')))
       .onClick((): void => { setBoolean(key, !this.booleanValue(key)); });
       Toggle({ type: ToggleType.Switch, isOn: this.booleanValue(key) })
         .selectedColor(COLOR_PRIMARY)
@@ -198,10 +199,10 @@ struct ChatSettingsPage {
   @Builder
   chatListView() {
     Column() {
-      this.cardTitle('聊天列表视图');
+      this.cardTitle($r('app.string.chat_settings_list_view'));
       Row({ space: 12 }) {
-        this.densityOption('两行', false);
-        this.densityOption('三行', true);
+        this.densityOption(str('chat_settings_two_lines'), false);
+        this.densityOption(str('chat_settings_three_lines'), true);
       }.width('100%').padding({ left: 16, right: 16, top: 4, bottom: 12 });
     }.width('100%');
   }
@@ -239,7 +240,7 @@ struct ChatSettingsPage {
       normal: this.optionNormalStyle,
       pressed: this.optionPressedStyle
     })
-    .accessibilityText(`${label}聊天列表视图${this.threeLines === isThree ? '，已选中' : ''}`)
+    .accessibilityText(str('a11y_chat_list_view', label, this.threeLines === isThree ? str('a11y_selected') : ''))
     .onClick((): void => {
       if (this.threeLines !== isThree) {
         setBoolean(KEY_THREE_LINES, isThree);
@@ -250,7 +251,7 @@ struct ChatSettingsPage {
   @Builder
   nightModeCard() {
     Column() {
-      this.cardTitle('夜间模式');
+      this.cardTitle($r('app.string.chat_settings_night_mode'));
       ForEach(NIGHT_OPTIONS, (opt: NightOption, idx: number) => {
         if (idx > 0) {
           Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 16 });
@@ -266,7 +267,7 @@ struct ChatSettingsPage {
           normal: this.optionNormalStyle,
           pressed: this.optionPressedStyle
         })
-        .accessibilityText(`${opt.label}${this.nightMode === opt.value ? '，已选中' : ''}`)
+        .accessibilityText(str('a11y_option_state', opt.label, this.nightMode === opt.value ? str('a11y_selected') : ''))
         .onClick((): void => {
           if (this.nightMode !== opt.value) {
             setNightMode(opt.value);
@@ -283,16 +284,16 @@ struct ChatSettingsPage {
         Column({ space: 14 }) {
           // 字号 + 圆角, with the preview they drive.
           Column() {
-            this.sliderRow('消息字号', KEY_TEXT_SIZE, TEXT_SIZE_MIN, TEXT_SIZE_MAX);
+            this.sliderRow(str('chat_settings_text_size'), KEY_TEXT_SIZE, TEXT_SIZE_MIN, TEXT_SIZE_MAX);
             this.preview();
             Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 16, right: 16 });
-            this.sliderRow('消息圆角', KEY_BUBBLE_RADIUS, RADIUS_MIN, RADIUS_MAX);
+            this.sliderRow(str('chat_settings_corner'), KEY_BUBBLE_RADIUS, RADIUS_MIN, RADIUS_MAX);
           }
           .width('100%').backgroundColor(CARD_BG).borderRadius(CARD_RADIUS);
 
           Row({ space: 12 }) {
             SymbolGlyph($r('sys.symbol.picture')).fontSize(20).fontColor([COLOR_PRIMARY]);
-            Text('聊天背景').fontSize(16).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
+            Text($r('app.string.chat_settings_background')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
             SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(16)
               .fontColor([COLOR_TEXT_SECONDARY]);
           }
@@ -314,9 +315,9 @@ struct ChatSettingsPage {
           }.width('100%').backgroundColor(CARD_BG).borderRadius(CARD_RADIUS).padding({ bottom: 4 });
 
           Column() {
-            this.toggleRow('减弱动态效果', '不再自动播放动画贴纸与表情，省电', KEY_REDUCE_ANIM);
+            this.toggleRow(str('chat_settings_reduce_anim'), str('chat_settings_reduce_anim_sub'), KEY_REDUCE_ANIM);
             Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 16 });
-            this.toggleRow('回车键发送', '开启后回车直接发送，换行用输入法的换行键', KEY_SEND_BY_ENTER);
+            this.toggleRow(str('chat_settings_send_by_enter'), str('chat_settings_send_by_enter_sub'), KEY_SEND_BY_ENTER);
           }
           .width('100%').backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
           .padding({ top: 4, bottom: 4 });

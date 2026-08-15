@@ -99,7 +99,7 @@ export struct MainTabBody {
       SymbolGlyph(this.archiveLoadFailed
         ? $r('sys.symbol.exclamationmark_circle') : $r('sys.symbol.archivebox'))
         .fontSize(22).fontColor([COLOR_TEXT_SECONDARY]).margin({ right: 12 });
-      Text(this.archiveLoadFailed ? '归档加载失败，点击重试' : '已归档的聊天')
+      Text(this.archiveLoadFailed ? $r('app.string.cl_archive_failed_tap') : $r('app.string.ap_title'))
         .fontSize(16).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
     }
     .width('100%').height(ARCHIVE_ROW_HEIGHT).padding({ left: 14, right: 14 })

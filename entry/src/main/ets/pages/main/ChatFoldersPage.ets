@@ -18,6 +18,7 @@ import {
   COLOR_DIVIDER, COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE,
   COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
+import { plural, str } from '../../util/strings';
 
 const CARD_RADIUS: number = 14;
 const DANGER: string = '#E64646';
@@ -156,7 +157,7 @@ struct ChatFoldersPage {
 
   private countLabel(id: number): string {
     const value = this.counts.get(id);
-    return value === undefined ? '正在统计…' : `约 ${value} 个聊天`;
+    return value === undefined ? str('counting') : plural('cf_about_chats', value, value);
   }
 
   private openEditor(id: number): void {
@@ -215,7 +216,7 @@ struct ChatFoldersPage {
       this.folders = previous;
       getFolderStore().applyLocalOrder(previous.map((folder: FolderInfo): number => folder.id),
         getFolderStore().getMainChatListPosition());
-      promptAction.showToast({ message: '排序失败，已恢复原顺序', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.cf_reorder_failed'), duration: 1800 });
       console.error(`ChatFoldersPage.reorder failed: ${error.message}`);
     });
   }
@@ -231,7 +232,7 @@ struct ChatFoldersPage {
       if (!this.active) { return; }
       this.tagsEnabled = previous;
       this.operationKey = '';
-      promptAction.showToast({ message: '文件夹标签设置失败', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.cf_tags_failed'), duration: 1800 });
       console.error(`ChatFoldersPage.tags failed: ${error.message}`);
     });
   }
@@ -266,11 +267,11 @@ struct ChatFoldersPage {
 
   private confirmSimpleDelete(folder: FolderInfo): void {
     promptAction.showDialog({
-      title: '删除文件夹',
-      message: `确定删除「${folder.title}」吗？聊天本身会保留。`,
+      title: $r('app.string.cf_delete'),
+      message: str('cf_delete_confirm', folder.title),
       buttons: [
-        { text: '取消', color: COLOR_TEXT_SECONDARY as string },
-        { text: '删除', color: DANGER }
+        { text: $r('app.string.cancel'), color: COLOR_TEXT_SECONDARY as string },
+        { text: $r('app.string.delete'), color: DANGER }
       ]
     }).then((result: promptAction.ShowDialogSuccessResponse): void => {
       if (result.index === 1) { this.deleteNow(folder.id, []); }
@@ -290,11 +291,11 @@ struct ChatFoldersPage {
       if (!this.active) { return; }
       this.operationKey = '';
       this.deleteSheetOpen = false;
-      promptAction.showToast({ message: '文件夹已删除', duration: 1500 });
+      promptAction.showToast({ message: $r('app.string.cf_deleted'), duration: 1500 });
     }).catch((error: TdError): void => {
       if (!this.active) { return; }
       this.operationKey = '';
-      promptAction.showToast({ message: '删除失败，请重试', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.delete_failed_retry'), duration: 1800 });
       console.error(`ChatFoldersPage.delete failed: ${error.message}`);
     });
   }
@@ -318,11 +319,11 @@ struct ChatFoldersPage {
     saveFolder(next).then((): void => {
       if (!this.active) { return; }
       this.operationKey = '';
-      promptAction.showToast({ message: `已创建「${next.name}」`, duration: 1600 });
+      promptAction.showToast({ message: str('cf_created', next.name), duration: 1600 });
     }).catch((error: TdError): void => {
       if (!this.active) { return; }
       this.operationKey = '';
-      promptAction.showToast({ message: '创建失败，请重试', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.create_failed_retry'), duration: 1800 });
       console.error(`ChatFoldersPage.addRecommendation failed: ${error.message}`);
     });
   }
@@ -335,8 +336,8 @@ struct ChatFoldersPage {
         .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
         .onClick((): void => router.back());
       Column({ space: 1 }) {
-        Text('聊天文件夹').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
-        Text(this.loading ? '正在同步…' : `${this.folders.length}/${this.limits.folderCount} 个文件夹`)
+        Text($r('app.string.settings_folders')).fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
+        Text(this.loading ? $r('app.string.syncing') : str('cf_folder_quota', this.folders.length, this.limits.folderCount))
           .fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
       if (this.operationKey !== '') {
@@ -364,9 +365,9 @@ struct ChatFoldersPage {
   errorState() {
     Column({ space: 12 }) {
       Text('📁').fontSize(44);
-      Text('文件夹暂时无法同步').fontSize(18).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-      Text('网络恢复后可以重试，现有聊天不会受影响').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
-      Text('重新加载').fontSize(15).fontColor(Color.White).fontWeight(FontWeight.Medium)
+      Text($r('app.string.cf_sync_failed')).fontSize(18).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+      Text($r('app.string.cf_sync_failed_sub')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+      Text($r('app.string.settings_reload')).fontSize(15).fontColor(Color.White).fontWeight(FontWeight.Medium)
         .padding({ left: 22, right: 22, top: 10, bottom: 10 })
         .backgroundColor(COLOR_PRIMARY).borderRadius(18)
         .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
@@ -388,12 +389,12 @@ struct ChatFoldersPage {
   @Builder
   folderMenu(folder: FolderInfo, index: number) {
     Menu() {
-      MenuItem({ content: '编辑文件夹' }).onClick((): void => this.openEditor(folder.id));
-      MenuItem({ content: '上移' }).enabled(index > 0)
+      MenuItem({ content: $r('app.string.cf_edit') }).onClick((): void => this.openEditor(folder.id));
+      MenuItem({ content: $r('app.string.move_up') }).enabled(index > 0)
         .onClick((): void => this.moveFolder(index, index - 1));
-      MenuItem({ content: '下移' }).enabled(index < this.folders.length - 1)
+      MenuItem({ content: $r('app.string.move_down') }).enabled(index < this.folders.length - 1)
         .onClick((): void => this.moveFolder(index, index + 1));
-      MenuItem({ content: '删除文件夹' }).onClick((): void => this.prepareDelete(folder));
+      MenuItem({ content: $r('app.string.cf_delete') }).onClick((): void => this.prepareDelete(folder));
     }
   }
 
@@ -406,7 +407,7 @@ struct ChatFoldersPage {
           Text(folder.title).fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY)
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
           if (folder.isShareable) {
-            Text('共享').fontSize(10).fontColor(COLOR_PRIMARY)
+            Text($r('app.string.share')).fontSize(10).fontColor(COLOR_PRIMARY)
               .padding({ left: 6, right: 6, top: 2, bottom: 2 })
               .backgroundColor('#185B8FF9').borderRadius(7);
           }
@@ -430,10 +431,10 @@ struct ChatFoldersPage {
         Row() { Text('💬').fontSize(20); }.width(42).height(42).borderRadius(14)
           .justifyContent(FlexAlign.Center).backgroundColor($r('app.color.surface_alt'));
         Column({ space: 2 }) {
-          Text('全部聊天').fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-          Text('系统默认列表').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.cf_all_chats')).fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+          Text($r('app.string.cf_default_list')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
         }.layoutWeight(1).alignItems(HorizontalAlign.Start);
-        Text('默认').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+        Text($r('app.string.cf_default')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
       }.width('100%').height(ROW_HEIGHT).padding({ left: 14, right: 14 });
       ForEach(this.folders, (folder: FolderInfo, index: number) => {
         Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 68 });
@@ -480,7 +481,7 @@ struct ChatFoldersPage {
       Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
       Row({ space: 10 }) {
         SymbolGlyph($r('sys.symbol.plus_circle')).fontSize(20).fontColor([COLOR_PRIMARY]);
-        Text(this.folders.length >= this.limits.folderCount ? '已达到文件夹数量上限' : '创建新文件夹')
+        Text(this.folders.length >= this.limits.folderCount ? $r('app.string.cf_limit_reached') : $r('app.string.cf_create'))
           .fontSize(16).fontColor(this.folders.length >= this.limits.folderCount ? COLOR_TEXT_SECONDARY : COLOR_PRIMARY)
           .layoutWeight(1);
       }.width('100%').height(54).padding({ left: 16, right: 16 })
@@ -496,8 +497,8 @@ struct ChatFoldersPage {
       Row() { Text('🏷️').fontSize(20); }.width(42).height(42).borderRadius(14)
         .justifyContent(FlexAlign.Center).backgroundColor('#169270CA');
       Column({ space: 3 }) {
-        Text('文件夹标签').fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-        Text('在聊天列表中显示所属文件夹').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+        Text(str('cf_tags')).fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+        Text(str('cf_tags_sub')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
       Toggle({ type: ToggleType.Switch, isOn: this.tagsEnabled }).selectedColor(COLOR_PRIMARY)
         .enabled(this.operationKey === '')
@@ -520,7 +521,7 @@ struct ChatFoldersPage {
       if (this.operationKey === `recommend_${index}`) {
         LoadingProgress().width(18).height(18).color(COLOR_PRIMARY);
       } else {
-        Text('添加').fontSize(14).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
+        Text($r('app.string.add')).fontSize(14).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
           .padding({ left: 12, right: 12, top: 7, bottom: 7 }).borderRadius(14)
           .backgroundColor('#145B8FF9').stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
           .onClick((): void => this.addRecommendation(index));
@@ -532,20 +533,20 @@ struct ChatFoldersPage {
   content() {
     Scroll() {
       Column({ space: 14 }) {
-        Text('把聊天按用途整理，首页顶部会实时同步这些文件夹。')
+        Text($r('app.string.cf_note'))
           .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).width('100%')
           .textAlign(TextAlign.Center).padding({ left: 18, right: 18, top: 2 });
         this.folderCard();
         this.tagsCard();
         if (this.folders.length === 0) {
           Column({ space: 5 }) {
-            Text('还没有自定义文件夹').fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-            Text('可以从推荐模板开始，也可以自己设置包含与排除规则。')
+            Text($r('app.string.cf_empty')).fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+            Text($r('app.string.cf_empty_sub'))
               .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center);
           }.width('100%').padding({ top: 8, bottom: 2 });
         }
         if (this.recommendationState === 'ready') {
-          Text('推荐文件夹').fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_SECONDARY)
+          Text($r('app.string.cf_suggested')).fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_SECONDARY)
             .width('100%').padding({ left: 4, top: 2 });
           ForEach(this.recommendations, (row: RecommendedFolder, index: number) => {
             if (!this.folders.some((folder: FolderInfo): boolean => folder.title === row.folder.name)) {
@@ -554,8 +555,8 @@ struct ChatFoldersPage {
           }, (row: RecommendedFolder, index: number): string => `recommended_${index}_${row.folder.name}`);
         } else if (this.recommendationState === 'error') {
           Row({ space: 8 }) {
-            Text('推荐模板暂时加载失败').fontSize(12).fontColor(COLOR_TEXT_SECONDARY).layoutWeight(1);
-            Text('重试').fontSize(13).fontColor(COLOR_PRIMARY).onClick((): void => this.loadRecommendations());
+            Text($r('app.string.cf_suggested_failed')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY).layoutWeight(1);
+            Text($r('app.string.settings_retry')).fontSize(13).fontColor(COLOR_PRIMARY).onClick((): void => this.loadRecommendations());
           }.width('100%').padding(14).backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
         }
       }.width('100%').padding({ left: 12, right: 12, top: 6, bottom: this.bottomSafe + 24 });
@@ -565,9 +566,9 @@ struct ChatFoldersPage {
   @Builder
   leaveSheet() {
     Column() {
-      Text('删除文件夹').fontSize(19).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
+      Text($r('app.string.cf_delete')).fontSize(19).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
         .padding({ top: 14, bottom: 4 });
-      Text(`「${this.deleteTargetTitle}」中的聊天会保留。需要同时退出的聊天可在下面选择。`)
+      Text(str('cf_delete_note', this.deleteTargetTitle))
         .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center)
         .padding({ left: 24, right: 24, bottom: 8 });
       List() {
@@ -583,7 +584,7 @@ struct ChatFoldersPage {
           }
         }, (chat: FolderChatSummary): string => `leave_${chat.id}`);
       }.layoutWeight(1).width('100%').scrollBar(BarState.Off);
-      Text(this.leaveSelected.length > 0 ? `删除并退出 ${this.leaveSelected.length} 个聊天` : '只删除文件夹')
+      Text(this.leaveSelected.length > 0 ? plural('cf_delete_and_leave', this.leaveSelected.length, this.leaveSelected.length) : $r('app.string.cf_delete_only'))
         .fontSize(16).fontWeight(FontWeight.Medium).fontColor(Color.White).textAlign(TextAlign.Center)
         .width('100%').padding({ top: 12, bottom: 12 }).backgroundColor(DANGER).borderRadius(12)
         .margin({ left: 16, right: 16, top: 8, bottom: this.bottomSafe + 10 })

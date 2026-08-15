@@ -1,3 +1,4 @@
+import { str } from './strings';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { fileIo as fs, fileUri, picker } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
@@ -42,10 +43,10 @@ export async function saveMediaToGallery(context: common.UIAbilityContext, srcPa
       return; // user declined the system dialog
     }
     copyToUri(srcPath, uris[0]);
-    promptAction.showToast({ message: '已保存到相册', duration: 2000 });
+    promptAction.showToast({ message: str('media_saved_gallery'), duration: 2000 });
   } catch (e) {
     console.error(`saveMediaToGallery(${srcPath}) failed: ${e}`);
-    promptAction.showToast({ message: '保存失败', duration: 2000 });
+    promptAction.showToast({ message: str('media_save_failed'), duration: 2000 });
   }
 }
 
@@ -53,7 +54,7 @@ export async function saveMediaToGallery(context: common.UIAbilityContext, srcPa
 // location, e.g. Downloads — a silent sandbox copy would be unreachable).
 export function saveFileToLocal(context: common.UIAbilityContext, srcPath: string, fileName: string): void {
   if (srcPath === '' || context === undefined) {
-    promptAction.showToast({ message: '文件不可用', duration: 1800 });
+    promptAction.showToast({ message: str('media_file_unavailable'), duration: 1800 });
     return;
   }
   const suppliedName: string = fileName.trim();
@@ -65,7 +66,7 @@ export function saveFileToLocal(context: common.UIAbilityContext, srcPath: strin
     ? suppliedName.substring(suppliedSlash + 1) : suppliedName;
   const pathName: string = srcPath.substring(srcPath.lastIndexOf('/') + 1);
   const saveName: string = safeSuppliedName !== ''
-    ? safeSuppliedName : (pathName !== '' ? pathName : '文件');
+    ? safeSuppliedName : (pathName !== '' ? pathName : str('media_kind_file'));
   const docPicker = new picker.DocumentViewPicker(context);
   const opts = new picker.DocumentSaveOptions();
   opts.newFileNames = [saveName];
@@ -75,13 +76,13 @@ export function saveFileToLocal(context: common.UIAbilityContext, srcPath: strin
     }
     try {
       copyToUri(srcPath, uris[0]);
-      promptAction.showToast({ message: '已保存', duration: 2000 });
+      promptAction.showToast({ message: str('media_saved'), duration: 2000 });
     } catch (e) {
       console.error(`saveFileToLocal copy failed: ${e}`);
-      promptAction.showToast({ message: '保存失败', duration: 2000 });
+      promptAction.showToast({ message: str('media_save_failed'), duration: 2000 });
     }
   }).catch((e: Object) => {
     console.error(`saveFileToLocal picker failed: ${JSON.stringify(e)}`);
-    promptAction.showToast({ message: '无法打开保存位置', duration: 1800 });
+    promptAction.showToast({ message: str('media_cannot_open_location'), duration: 1800 });
   });
 }

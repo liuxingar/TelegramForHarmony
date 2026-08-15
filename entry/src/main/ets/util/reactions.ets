@@ -1,3 +1,4 @@
+import { str } from './strings';
 import { TdObject } from '../tdkit/TdTypes';
 
 // 反应在 UI 层（气泡 chip、面板、长按详情）统一用一个字符串 key 传递：
@@ -58,7 +59,7 @@ export function reactionTypeOf(key: string): TdObject {
 // 长按 chip 的详情弹窗标题：自定义 emoji 没有可显示的字符，退化成文字说明。
 export function reactionDisplayLabel(key: string): string {
   const parsed: ReactionKey = parseReactionKey(key);
-  return parsed.customEmojiId !== '' ? '自定义表情' : parsed.emoji;
+  return parsed.customEmojiId !== '' ? str('reactions_custom_emoji') : parsed.emoji;
 }
 
 export function parseAvailableReactions(result: TdObject): AvailableReactionSet {

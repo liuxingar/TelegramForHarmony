@@ -125,7 +125,7 @@ export default function customEmojiReactionsTest() {
       expect(parsedStandard.customEmojiId).assertEqual('');
       expect(reactionKeyFrom('👍', '')).assertEqual('👍');
       expect(reactionKeyFrom('', '42')).assertEqual('ce:42');
-      expect(reactionDisplayLabel('ce:42')).assertEqual('自定义表情');
+      expect(reactionDisplayLabel('ce:42')).assertEqual('reactions_custom_emoji');
       expect(reactionDisplayLabel('👍')).assertEqual('👍');
     });
 

@@ -31,7 +31,7 @@ export struct ExpandableText {
       constraintWidth: `${this.measuredW}vp`
     });
     const oneLine = MeasureText.measureTextSize({
-      textContent: '简',
+      textContent: '简', // i18n-exempt: measurement sample glyph, not shown
       fontSize: `${FONT_SIZE}vp`
     });
     const fullH = full.height as number;
@@ -69,7 +69,7 @@ export struct ExpandableText {
         }
       });
       if (this.needsExpand) {
-        Text(this.expanded ? ' 收起' : ' 展开')
+        Text(this.expanded ? $r('app.string.et_collapse') : $r('app.string.et_expand'))
           .fontSize(13).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
           .backgroundColor($r('app.color.surface'))
           .padding({ left: 8, top: 2 })

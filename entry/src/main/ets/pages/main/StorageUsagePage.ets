@@ -11,6 +11,7 @@ import {
   COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
+import { plural, str } from '../../util/strings';
 
 const CARD_RADIUS: number = 14;
 const DANGER: string = '#E64646';
@@ -78,20 +79,20 @@ struct StorageUsagePage {
       if (!this.active || current !== this.sequence) { return; }
       this.loading = false;
       this.refreshing = false;
-      if (this.usage === null) { this.loadError = '无法读取详细存储统计'; }
-      else { this.syncWarning = '刷新失败，当前显示的是上次统计'; }
+      if (this.usage === null) { this.loadError = str('storage_unreadable'); }
+      else { this.syncWarning = str('storage_refresh_failed'); }
       console.error(`StorageUsagePage.load failed: ${error.message}`);
     });
   }
 
   private titleOf(chatId: number): string {
-    if (chatId === 0) { return '其他会话'; }
+    if (chatId === 0) { return str('storage_other_chats'); }
     const entry: ChatEntry | undefined = getChatStore().entryOf(chatId);
-    return entry !== undefined && entry.title !== '' ? entry.title : '未命名会话';
+    return entry !== undefined && entry.title !== '' ? entry.title : str('storage_untitled_chat');
   }
 
   private initialsOf(chatId: number): string {
-    if (chatId === 0) { return '其'; }
+    if (chatId === 0) { return str('storage_other_initials'); }
     const entry: ChatEntry | undefined = getChatStore().entryOf(chatId);
     return entry !== undefined ? entry.initials : '?';
   }
@@ -107,20 +108,20 @@ struct StorageUsagePage {
     promptAction.showDialog({
       title, message,
       buttons: [
-        { text: '取消', color: COLOR_TEXT_SECONDARY as string },
-        { text: '清理', color: DANGER }
+        { text: $r('app.string.cancel'), color: COLOR_TEXT_SECONDARY as string },
+        { text: $r('app.string.clear'), color: DANGER }
       ]
     }).then((result: promptAction.ShowDialogSuccessResponse): void => {
       if (result.index !== 1 || this.actionKey !== '') { return; }
       this.actionKey = key;
       clearCacheSelection(category, chatId).then((): void => {
         this.actionKey = '';
-        promptAction.showToast({ message: '缓存清理完成', duration: 1500 });
+        promptAction.showToast({ message: $r('app.string.storage_clear_done'), duration: 1500 });
         this.load(false);
       }).catch((error: TdError): void => {
         this.actionKey = '';
         console.error(`StorageUsagePage.clear failed: ${error.message}`);
-        promptAction.showToast({ message: '清理失败，请重试', duration: 1700 });
+        promptAction.showToast({ message: $r('app.string.clear_failed_retry'), duration: 1700 });
       });
     });
   }
@@ -133,7 +134,7 @@ struct StorageUsagePage {
       }.width(44).height(44).borderRadius(22).justifyContent(FlexAlign.Center)
       .stateStyles({ normal: this.actionNormalStyle, pressed: this.actionPressedStyle })
       .onClick((): void => router.back());
-      Text('存储使用情况').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
+      Text($r('app.string.storage_title')).fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
         .layoutWeight(1);
       Row() {
         if (this.refreshing) { LoadingProgress().width(18).height(18).color(COLOR_PRIMARY); }
@@ -149,8 +150,8 @@ struct StorageUsagePage {
   loadingState() {
     Column({ space: 12 }) {
       LoadingProgress().width(34).height(34).color(COLOR_PRIMARY);
-      Text('正在分析媒体缓存…').fontSize(15).fontColor(COLOR_TEXT_PRIMARY);
-      Text('详细统计会比首页概览稍慢').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+      Text($r('app.string.storage_loading')).fontSize(15).fontColor(COLOR_TEXT_PRIMARY);
+      Text($r('app.string.storage_loading_sub')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
     }.width('100%').padding({ top: 72, bottom: 72 }).backgroundColor(COLOR_SURFACE)
       .borderRadius(CARD_RADIUS);
   }
@@ -159,9 +160,9 @@ struct StorageUsagePage {
   errorState() {
     Column({ space: 10 }) {
       SymbolGlyph($r('sys.symbol.exclamationmark_circle')).fontSize(34).fontColor([DANGER]);
-      Text('详细统计加载失败').fontSize(18).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+      Text($r('app.string.storage_load_failed')).fontSize(18).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
       Text(this.loadError).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
-      Text('重新加载').fontSize(14).fontColor(Color.White).padding({ left: 17, right: 17, top: 10, bottom: 10 })
+      Text($r('app.string.settings_reload')).fontSize(14).fontColor(Color.White).padding({ left: 17, right: 17, top: 10, bottom: 10 })
         .backgroundColor(COLOR_PRIMARY).borderRadius(20).onClick((): void => this.load(true));
     }.width('100%').padding({ top: 54, bottom: 54 }).backgroundColor(COLOR_SURFACE)
       .borderRadius(CARD_RADIUS);
@@ -172,14 +173,14 @@ struct StorageUsagePage {
     Column({ space: 12 }) {
       Row() {
         Column({ space: 3 }) {
-          Text('可清理媒体').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.storage_clearable')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
           Text(this.usage !== null ? formatBytes(this.usage.size) : '—')
             .fontSize(30).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
         }.layoutWeight(1).alignItems(HorizontalAlign.Start);
-        Text(this.usage !== null ? `${this.usage.count} 个文件` : '')
+        Text(this.usage !== null ? plural('storage_file_count', this.usage.count, this.usage.count) : '')
           .fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
       }.width('100%');
-      Text('分类统计为精确结果；清理后云端消息和文件仍然保留。')
+      Text($r('app.string.storage_note'))
         .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).width('100%');
     }.width('100%').padding(16).backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
   }
@@ -193,26 +194,26 @@ struct StorageUsagePage {
           LoadingProgress().width(17).height(17).color(COLOR_PRIMARY).margin({ right: 10 });
         }
         Text(formatBytes(item.size)).fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
-        Text('清理').fontSize(13).fontColor(COLOR_PRIMARY).margin({ left: 12 });
+        Text($r('app.string.clear')).fontSize(13).fontColor(COLOR_PRIMARY).margin({ left: 12 });
       }.width('100%');
       Stack({ alignContent: Alignment.Start }) {
         Row().width('100%').height(5).borderRadius(3).backgroundColor($r('app.color.surface_alt'));
         Row().width(`${Math.round(this.share(item.size) * 100)}%`).height(5).borderRadius(3)
           .backgroundColor(COLOR_PRIMARY);
       }.width('100%').height(5);
-      Text(`${item.count} 个文件`).fontSize(11).fontColor(COLOR_TEXT_SECONDARY).width('100%');
+      Text(plural('storage_file_count', item.count, item.count)).fontSize(11).fontColor(COLOR_TEXT_SECONDARY).width('100%');
     }
     .width('100%').padding({ left: 14, right: 14, top: 11, bottom: 11 })
     .enabled(this.actionKey === '')
     .stateStyles({ normal: this.rowNormalStyle, pressed: this.rowPressedStyle })
-    .onClick((): void => this.confirmClear(`category_${item.key}`, `清理${item.label}缓存`,
-      `将删除 ${formatBytes(item.size)} 的${item.label}缓存，需要时可以重新下载。`, item.key, 0));
+    .onClick((): void => this.confirmClear(`category_${item.key}`, str('storage_clear_category', item.label),
+      str('storage_clear_category_confirm', formatBytes(item.size), item.label), item.key, 0));
   }
 
   @Builder
   categoriesCard() {
     Column() {
-      Text('按类型').fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
+      Text($r('app.string.network_by_type')).fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
         .width('100%').padding({ left: 14, right: 14, top: 12, bottom: 6 });
       if (this.usage !== null) {
         ForEach(this.usage.categories, (item: StorageCategory, index: number) => {
@@ -233,7 +234,7 @@ struct StorageUsagePage {
       Column({ space: 3 }) {
         Text(this.titleOf(item.chatId)).fontSize(15).fontColor(COLOR_TEXT_PRIMARY).maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
-        Text(`${item.count} 个文件`).fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
+        Text(plural('storage_file_count', item.count, item.count)).fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
       if (this.actionKey === `chat_${item.chatId}`) {
         LoadingProgress().width(17).height(17).color(COLOR_PRIMARY);
@@ -247,8 +248,8 @@ struct StorageUsagePage {
     .stateStyles({ normal: this.rowNormalStyle, pressed: this.rowPressedStyle })
     .onClick((): void => {
       if (item.chatId !== 0) {
-        this.confirmClear(`chat_${item.chatId}`, `清理“${this.titleOf(item.chatId)}”缓存`,
-          `将删除此会话中的 ${formatBytes(item.size)} 媒体缓存。`, '', item.chatId);
+        this.confirmClear(`chat_${item.chatId}`, str('storage_clear_chat', this.titleOf(item.chatId)),
+          str('storage_clear_chat_confirm', formatBytes(item.size)), '', item.chatId);
       }
     });
   }
@@ -256,7 +257,7 @@ struct StorageUsagePage {
   @Builder
   chatsCard() {
     Column() {
-      Text('按会话').fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
+      Text($r('app.string.storage_by_chat')).fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
         .width('100%').padding({ left: 14, right: 14, top: 12, bottom: 6 });
       if (this.usage !== null) {
         ForEach(this.usage.chats, (item: ChatStorageUsage, index: number) => {
@@ -271,8 +272,8 @@ struct StorageUsagePage {
   emptyState() {
     Column({ space: 9 }) {
       SymbolGlyph($r('sys.symbol.checkmark_circle')).fontSize(38).fontColor([COLOR_PRIMARY]);
-      Text('暂无可清理缓存').fontSize(18).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-      Text('浏览图片、视频和文件后，占用会显示在这里。')
+      Text($r('app.string.storage_empty')).fontSize(18).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+      Text($r('app.string.storage_empty_sub'))
         .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).textAlign(TextAlign.Center);
     }.width('100%').padding({ top: 52, bottom: 52 }).backgroundColor(COLOR_SURFACE)
       .borderRadius(CARD_RADIUS);

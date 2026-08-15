@@ -4,6 +4,7 @@ import { AvatarView } from '../chatlist/AvatarView';
 import {
   COLOR_SURFACE, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
+import { str } from '../../util/strings';
 
 export interface PickedContact {
   userId: number;
@@ -53,7 +54,7 @@ export struct ContactPickerSheet {
         const name: string = `${first} ${last}`.trim();
         return {
           userId: (user['id'] as number | undefined) ?? 0,
-          name: name !== '' ? name : '联系人',
+          name: name !== '' ? name : str('tab_contacts'),
           firstName: first,
           lastName: last,
           phone: (user['phone_number'] as string | undefined) ?? '',
@@ -72,14 +73,14 @@ export struct ContactPickerSheet {
       Column().layoutWeight(1).onClick((): void => this.onClose());
       Column({ space: 10 }) {
         Row().width(40).height(4).borderRadius(2).backgroundColor('#D0D0D0');
-        Text('发送名片').fontSize(17).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+        Text($r('app.string.cp_send_contact')).fontSize(17).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
         if (this.loadState === 'loading') {
           LoadingProgress().width(28).height(28).margin({ top: 30, bottom: 30 });
         } else if (this.loadState === 'error') {
-          Text('联系人加载失败').fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
+          Text($r('app.string.contacts_load_failed')).fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
             .margin({ top: 30, bottom: 30 });
         } else if (this.rows.length === 0) {
-          Text('还没有联系人').fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
+          Text($r('app.string.cp_no_contacts')).fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
             .margin({ top: 30, bottom: 30 });
         } else {
           List() {

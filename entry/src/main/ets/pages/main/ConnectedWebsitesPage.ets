@@ -7,6 +7,7 @@ import {
   COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE,
   COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
+import { plural, str } from '../../util/strings';
 
 const CARD_RADIUS: number = 16;
 const COLOR_DANGER: string = '#E5484D';
@@ -48,7 +49,7 @@ struct ConnectedWebsitesPage {
   }
 
   private dateLabel(seconds: number): string {
-    if (seconds <= 0) { return '未知时间'; }
+    if (seconds <= 0) { return str('cw_unknown_time'); }
     const date = new Date(seconds * 1000);
     const month = `${date.getMonth() + 1}`.padStart(2, '0');
     const day = `${date.getDate()}`.padStart(2, '0');
@@ -60,11 +61,11 @@ struct ConnectedWebsitesPage {
   private remove(row: ConnectedWebsite): void {
     if (this.actionKey !== '') { return; }
     promptAction.showDialog({
-      title: '断开网站连接',
-      message: `断开 ${row.domain !== '' ? row.domain : '该网站'} 后，需要重新使用 Telegram 登录。`,
+      title: $r('app.string.cw_disconnect_title'),
+      message: str('cw_disconnect_confirm', row.domain !== '' ? row.domain : str('cw_this_site')),
       buttons: [
-        { text: '取消', color: COLOR_TEXT_SECONDARY as string },
-        { text: '断开', color: COLOR_DANGER }
+        { text: $r('app.string.cancel'), color: COLOR_TEXT_SECONDARY as string },
+        { text: $r('app.string.cw_disconnect'), color: COLOR_DANGER }
       ]
     }).then((result: promptAction.ShowDialogSuccessResponse): void => {
       if (!this.active || result.index !== 1 || this.actionKey !== '') { return; }
@@ -79,7 +80,7 @@ struct ConnectedWebsitesPage {
         if (!this.active) { return; }
         this.websites = before;
         this.actionKey = '';
-        promptAction.showToast({ message: '断开失败，连接已恢复', duration: 1800 });
+        promptAction.showToast({ message: $r('app.string.cw_disconnect_failed'), duration: 1800 });
       });
     }).catch((): void => {});
   }
@@ -87,11 +88,11 @@ struct ConnectedWebsitesPage {
   private removeAll(): void {
     if (this.actionKey !== '' || this.websites.length === 0) { return; }
     promptAction.showDialog({
-      title: '断开所有网站',
-      message: `将断开 ${this.websites.length} 个网站上的 Telegram 登录。`,
+      title: $r('app.string.cw_disconnect_all'),
+      message: plural('cw_disconnect_all_confirm', this.websites.length, this.websites.length),
       buttons: [
-        { text: '取消', color: COLOR_TEXT_SECONDARY as string },
-        { text: '全部断开', color: COLOR_DANGER }
+        { text: $r('app.string.cancel'), color: COLOR_TEXT_SECONDARY as string },
+        { text: $r('app.string.cw_disconnect_all_confirm_button'), color: COLOR_DANGER }
       ]
     }).then((result: promptAction.ShowDialogSuccessResponse): void => {
       if (!this.active || result.index !== 1 || this.actionKey !== '') { return; }
@@ -106,7 +107,7 @@ struct ConnectedWebsitesPage {
         if (!this.active) { return; }
         this.websites = before;
         this.actionKey = '';
-        promptAction.showToast({ message: '断开失败，连接已恢复', duration: 1800 });
+        promptAction.showToast({ message: $r('app.string.cw_disconnect_failed'), duration: 1800 });
       });
     }).catch((): void => {});
   }
@@ -118,7 +119,7 @@ struct ConnectedWebsitesPage {
         SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(24).fontColor([COLOR_TEXT_PRIMARY]);
       }.width(40).height(40).borderRadius(20).backgroundColor(Color.Transparent)
       .onClick((): void => { router.back(); });
-      Text('已连接的网站').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
+      Text($r('app.string.cw_title')).fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
         .layoutWeight(1);
       if (this.actionKey !== '') { LoadingProgress().width(20).height(20).color(COLOR_PRIMARY); }
     }.width('100%').height(52).padding({ left: 8, right: 16 }).alignItems(VerticalAlign.Center);
@@ -132,16 +133,18 @@ struct ConnectedWebsitesPage {
           .fontSize(20).fontWeight(FontWeight.Bold).fontColor(Color.White);
       }.width(46).height(46).borderRadius(23).backgroundColor(COLOR_PRIMARY);
       Column({ space: 3 }) {
-        Text(row.domain !== '' ? row.domain : '未知网站').fontSize(16).fontWeight(FontWeight.Medium)
+        Text(row.domain !== '' ? row.domain : $r('app.string.cw_unknown_site')).fontSize(16).fontWeight(FontWeight.Medium)
           .fontColor(COLOR_TEXT_PRIMARY).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
         Text(`${row.browser}${row.platform !== '' ? ` · ${row.platform}` : ''}`)
           .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
-        Text(`最后活动 ${this.dateLabel(row.lastActiveDate)}${row.location !== '' ? ` · ${row.location}` : ''}`)
+        Text(row.location !== ''
+          ? str('cw_last_active_at', this.dateLabel(row.lastActiveDate), row.location)
+          : str('cw_last_active', this.dateLabel(row.lastActiveDate)))
           .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
-      Button('断开').height(36).fontSize(13).fontColor(COLOR_DANGER).backgroundColor(Color.Transparent)
+      Button($r('app.string.cw_disconnect')).height(36).fontSize(13).fontColor(COLOR_DANGER).backgroundColor(Color.Transparent)
         .enabled(this.actionKey === '').onClick((): void => { this.remove(row); });
     }
     .width('100%').constraintSize({ minHeight: 72 }).padding({ left: 12, right: 8, top: 8, bottom: 8 });
@@ -153,18 +156,18 @@ struct ConnectedWebsitesPage {
       if (this.loadState === 'loading') {
         Column({ space: 9 }) {
           LoadingProgress().width(34).height(34).color(COLOR_PRIMARY);
-          Text('正在检查网站授权…').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.cw_loading')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else if (this.loadState === 'error') {
         Column({ space: 10 }) {
-          Text('网站授权加载失败').fontSize(17).fontColor(COLOR_TEXT_PRIMARY);
-          Button('重新加载').onClick((): void => { this.load(); });
+          Text($r('app.string.cw_load_failed')).fontSize(17).fontColor(COLOR_TEXT_PRIMARY);
+          Button($r('app.string.settings_reload')).onClick((): void => { this.load(); });
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else if (this.websites.length === 0) {
         Column({ space: 9 }) {
           SymbolGlyph($r('sys.symbol.link')).fontSize(50).fontColor([COLOR_TEXT_SECONDARY]);
-          Text('没有已连接的网站').fontSize(18).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-          Text('通过 Telegram 登录的网站会显示在这里。').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.cw_empty')).fontSize(18).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+          Text($r('app.string.cw_empty_sub')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else {
         Scroll() {
@@ -178,11 +181,11 @@ struct ConnectedWebsitesPage {
               }, (row: ConnectedWebsite): string => `website_${row.id}`);
             }.width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS).padding(4);
 
-            Button('断开所有网站').width('100%').height(48).borderRadius(24)
+            Button($r('app.string.cw_disconnect_all')).width('100%').height(48).borderRadius(24)
               .fontSize(16).fontColor(COLOR_DANGER).backgroundColor(COLOR_SURFACE)
               .enabled(this.actionKey === '').onClick((): void => { this.removeAll(); });
 
-            Text('网站授权与设备会话彼此独立。断开网站不会退出本机或其他 Telegram 客户端。')
+            Text($r('app.string.cw_note'))
               .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).lineHeight(18)
               .width('100%').padding({ left: 16, right: 16 });
           }.width('100%').padding({ left: 12, right: 12, top: 6, bottom: this.bottomSafe + 24 });

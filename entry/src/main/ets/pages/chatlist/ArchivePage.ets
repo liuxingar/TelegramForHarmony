@@ -4,6 +4,7 @@ import { CHAT_LIST_NOW } from './ChatListFreeze';
 import { ChatEntry } from '../../store/ChatEntry';
 import { getChatStore, getUnreadCountStore } from '../../tdkit/Globals';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import { plural, str } from '../../util/strings';
 
 @Entry
 @Preview
@@ -55,11 +56,11 @@ struct ArchivePage {
   }
 
   private archiveSummary(): string {
-    if (this.archivedCount === 0) { return '与首页分开整理暂时不看的聊天'; }
+    if (this.archivedCount === 0) { return str('ap_subtitle'); }
     if (this.unreadCount > 0) {
-      return `${this.archivedCount} 个聊天 · ${this.unreadCount} 个未读`;
+      return str('ap_chats_and_unread', this.archivedCount, this.unreadCount);
     }
-    return `${this.archivedCount} 个聊天`;
+    return plural('ap_chats_n', this.archivedCount, this.archivedCount);
   }
 
   build() {
@@ -76,7 +77,7 @@ struct ArchivePage {
         })
         .onClick(() => { router.back(); });
         Column({ space: 1 }) {
-          Text('已归档的聊天')
+          Text($r('app.string.ap_title'))
             .fontSize(20).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
           Text(this.archiveSummary())
             .fontSize(11).fontColor(this.unreadCount > 0 ? COLOR_PRIMARY : COLOR_TEXT_SECONDARY)

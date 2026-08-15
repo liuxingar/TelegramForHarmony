@@ -7,6 +7,7 @@ import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../u
 import {
   KEY_POWER_EFFECT_REPLY, KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration
 } from '../../store/AppSettings';
+import { plural, str } from '../../util/strings';
 
 // "Forward to…" chat picker, extracted from ChatPage.
 //
@@ -152,7 +153,7 @@ export struct ForwardSheet {
       this.close();
       this.onSent();
       promptAction.showToast({
-        message: count > 1 ? `已转发 ${count} 条消息` : `已转发到 ${chat.title}`,
+        message: count > 1 ? plural('fw_forwarded_n', count, count) : str('fw_forwarded_to', chat.title),
         duration: 1500
       });
     }).catch((e: TdError): void => {
@@ -161,7 +162,7 @@ export struct ForwardSheet {
       }
       this.sendingChatId = 0;
       console.error(`ForwardSheet.forwardMessages failed: ${e.message}`);
-      promptAction.showToast({ message: '转发失败，请选择其他会话或稍后重试', duration: 2000 });
+      promptAction.showToast({ message: $r('app.string.fw_failed'), duration: 2000 });
     });
   }
 
@@ -191,10 +192,10 @@ export struct ForwardSheet {
         Row() {
           Column({ space: 2 }) {
             Text(this.messageIds.length > 1
-              ? `转发 ${this.messageIds.length} 条消息`
-              : '转发消息')
+              ? plural('fw_forward_n', this.messageIds.length, this.messageIds.length)
+              : $r('app.string.fw_title'))
               .fontSize(17).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
-            Text('选择接收会话').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+            Text($r('app.string.fw_pick_chat')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
           }
           .alignItems(HorizontalAlign.Start).layoutWeight(1);
           Row() {
@@ -209,7 +210,7 @@ export struct ForwardSheet {
           .onClick(() => { this.close(); });
         }
         .width('100%');
-        TextInput({ text: this.query, placeholder: '搜索聊天' })
+        TextInput({ text: this.query, placeholder: $r('app.string.fw_search') })
           .width('100%').height(40)
           .padding({ left: 14, right: 14 })
           .backgroundColor($r('app.color.surface_alt')).borderRadius(20)
@@ -217,15 +218,15 @@ export struct ForwardSheet {
         if (this.loadState === 'loading') {
           Column({ space: 10 }) {
             LoadingProgress().width(26).height(26).color(COLOR_PRIMARY);
-            Text('正在加载会话').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+            Text($r('app.string.fw_loading')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
           }
           .layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
         } else if (this.loadState === 'error') {
           Column({ space: 10 }) {
             SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
               .fontSize(28).fontColor([COLOR_TEXT_SECONDARY]);
-            Text('会话列表加载失败').fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
-            Button('重试')
+            Text($r('app.string.fw_load_failed')).fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
+            Button($r('app.string.settings_retry'))
               .fontSize(14).fontColor(Color.White)
               .height(36).padding({ left: 20, right: 20 })
               .backgroundColor(COLOR_PRIMARY).borderRadius(18)
@@ -236,7 +237,7 @@ export struct ForwardSheet {
           Column({ space: 8 }) {
             SymbolGlyph($r('sys.symbol.magnifyingglass'))
               .fontSize(28).fontColor([COLOR_TEXT_SECONDARY]);
-            Text(this.query.trim() === '' ? '暂无可转发的会话' : '没有匹配的聊天')
+            Text(this.query.trim() === '' ? $r('app.string.fw_empty') : $r('app.string.fw_no_match'))
               .fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
           }
           .layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
@@ -255,8 +256,8 @@ export struct ForwardSheet {
                     Text(chat.title).fontSize(15).fontWeight(FontWeight.Medium)
                       .fontColor(COLOR_TEXT_PRIMARY).maxLines(1)
                       .textOverflow({ overflow: TextOverflow.Ellipsis });
-                    Text(chat.id === this.sourceChatId ? '当前聊天' :
-                      (chat.lastMessageText !== '' ? chat.lastMessageText : '点击转发'))
+                    Text(chat.id === this.sourceChatId ? $r('app.string.fw_current_chat') :
+                      (chat.lastMessageText !== '' ? chat.lastMessageText : $r('app.string.fw_tap_forward')))
                       .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).maxLines(1)
                       .textOverflow({ overflow: TextOverflow.Ellipsis });
                   }

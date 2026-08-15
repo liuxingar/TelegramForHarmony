@@ -10,6 +10,8 @@ import {
   sessionDeviceType, sessionWaitText
 } from '../../util/ActiveSessionPresentation';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import { plural, str } from '../../util/strings';
+import { clockTime, fullDate, monthDayTime } from '../../util/intlFormat';
 
 const CARD_RADIUS: number = 16;
 const DANGER: string = '#EF5B5B';
@@ -95,25 +97,32 @@ function twoDigits(value: number): string {
   return value < 10 ? `0${value}` : `${value}`;
 }
 
+// Dates and clock times go through Intl, not through resource strings: only
+// the "today" wrapper is copy, and even the month/day order belongs to the
+// locale.
 function formatClock(seconds: number): string {
   if (seconds <= 0) { return ''; }
   const date = new Date(seconds * 1000);
   const now = new Date();
-  const clock = `${twoDigits(date.getHours())}:${twoDigits(date.getMinutes())}`;
-  if (sameDay(date, now)) { return `今天 ${clock}`; }
-  if (date.getFullYear() === now.getFullYear()) {
-    return `${date.getMonth() + 1}月${date.getDate()}日 ${clock}`;
-  }
-  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+  if (sameDay(date, now)) { return str('as_today_at', clockTime(date)); }
+  if (date.getFullYear() === now.getFullYear()) { return monthDayTime(date); }
+  return fullDate(date);
 }
 
 function formatLastActive(seconds: number, isCurrent: boolean): string {
-  if (isCurrent) { return '在线'; }
+  if (isCurrent) { return str('status_online'); }
   const now = Math.floor(Date.now() / 1000);
   const diff = Math.max(0, now - seconds);
-  if (diff < 60) { return '刚刚在线'; }
-  if (diff < 3600) { return `${Math.floor(diff / 60)} 分钟前`; }
-  if (diff < 86400) { return `${Math.floor(diff / 3600)} 小时前`; }
+  if (diff < 60) { return str('as_just_now'); }
+  // The same plural keys the contact list already uses for "N 分钟前".
+  if (diff < 3600) {
+    const minutes = Math.floor(diff / 60);
+    return plural('user_status_minutes_ago', minutes, minutes);
+  }
+  if (diff < 86400) {
+    const hours = Math.floor(diff / 3600);
+    return plural('user_status_hours_ago', hours, hours);
+  }
   return formatClock(seconds);
 }
 
@@ -237,9 +246,9 @@ struct ActiveSessionsPage {
       if (!this.active || sequence !== this.loadSequence) { return; }
       const error = caught as Error;
       console.error(`ActiveSessionsPage.getActiveSessions failed: ${error.message}`);
-      const presentation = activeSessionError(error.message, '读取登录设备失败，请重试');
+      const presentation = activeSessionError(error.message, str('as_load_failed_retry'));
       const message = error.message === 'CURRENT_SESSION_MISSING'
-        ? '会话信息不完整，请刷新后重试'
+        ? str('as_incomplete')
         : presentation.text;
       if (hasVisibleData) {
         this.loadState = 'ready';
@@ -256,7 +265,7 @@ struct ActiveSessionsPage {
   private titleFor(row: SessionRow): string {
     if (row.deviceModel !== '') { return row.deviceModel; }
     if (row.applicationName !== '') { return row.applicationName; }
-    return '未知设备';
+    return str('as_unknown_device');
   }
 
   private applicationFor(row: SessionRow): string {
@@ -292,7 +301,7 @@ struct ActiveSessionsPage {
 
   private showFreshRestriction(): void {
     promptAction.showToast({
-      message: `Telegram 安全限制：新登录设备需等待 24 小时，预计${this.freshWaitText()}可操作`,
+      message: str('as_fresh_limit', this.freshWaitText()),
       duration: 3000
     });
   }
@@ -370,20 +379,20 @@ struct ActiveSessionsPage {
       );
       const link = result.originalValue.trim();
       if (link === '') {
-        promptAction.showToast({ message: '没有识别到二维码内容', duration: 1800 });
+        promptAction.showToast({ message: $r('app.string.as_no_qr'), duration: 1800 });
         return;
       }
       const request: TdRequest = { '@type': 'confirmQrCodeAuthentication' };
       request['link'] = link;
       await getTdClient().send(request);
       if (!this.active) { return; }
-      promptAction.showToast({ message: '桌面设备已连接', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.as_desktop_connected'), duration: 1800 });
       await this.load(false);
     } catch (caught) {
       const error = caught as BusinessError;
       if (error.code !== 1000500002) {
         console.error(`ActiveSessionsPage.linkDesktopDevice failed: ${error.message}`);
-        const presentation = activeSessionError(error.message, '连接设备失败，请重试');
+        const presentation = activeSessionError(error.message, str('as_connect_failed'));
         promptAction.showToast({
           message: presentation.text,
           duration: 2600
@@ -398,11 +407,11 @@ struct ActiveSessionsPage {
     if (this.others.length === 0 || this.actionKey !== '') { return; }
     if (this.guardSessionTermination()) { return; }
     promptAction.showDialog({
-      title: '退出其他所有设备',
-      message: '除当前设备外，其他设备都将退出登录。确定继续吗？',
+      title: $r('app.string.as_terminate_others'),
+      message: $r('app.string.as_terminate_others_confirm'),
       buttons: [
-        { text: '取消', color: COLOR_TEXT_SECONDARY as string },
-        { text: '全部退出', color: DANGER }
+        { text: $r('app.string.cancel'), color: COLOR_TEXT_SECONDARY as string },
+        { text: $r('app.string.as_log_out_all'), color: DANGER }
       ]
     }).then((result: promptAction.ShowDialogSuccessResponse): void => {
       if (result.index === 1) { this.terminateAllOtherSessions(); }
@@ -415,12 +424,12 @@ struct ActiveSessionsPage {
       await getTdClient().send({ '@type': 'terminateAllOtherSessions' } as TdRequest);
       this.others = [];
       this.detailOpen = false;
-      promptAction.showToast({ message: '其他设备已全部退出', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.as_others_terminated'), duration: 1800 });
       await this.load(false);
     } catch (caught) {
       const error = caught as TdError;
       console.error(`ActiveSessionsPage.terminateAll failed: ${error.message}`);
-      this.showMutationError(error, '操作失败，请重试');
+      this.showMutationError(error, str('action_failed_retry'));
     } finally {
       this.actionKey = '';
     }
@@ -430,11 +439,11 @@ struct ActiveSessionsPage {
     if (row.isCurrent || this.actionKey !== '') { return; }
     if (this.guardSessionTermination()) { return; }
     promptAction.showDialog({
-      title: '终止会话',
-      message: `确定让“${this.titleFor(row)}”退出登录吗？`,
+      title: $r('app.string.as_terminate'),
+      message: str('as_terminate_confirm', this.titleFor(row)),
       buttons: [
-        { text: '取消', color: COLOR_TEXT_SECONDARY as string },
-        { text: '终止', color: DANGER }
+        { text: $r('app.string.cancel'), color: COLOR_TEXT_SECONDARY as string },
+        { text: $r('app.string.as_terminate_button'), color: DANGER }
       ]
     }).then((result: promptAction.ShowDialogSuccessResponse): void => {
       if (result.index === 1) { this.terminateSession(row); }
@@ -452,12 +461,12 @@ struct ActiveSessionsPage {
         (current: SessionRow): boolean => current.id !== row.id
       );
       this.detailOpen = false;
-      promptAction.showToast({ message: '该设备已退出', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.as_terminated'), duration: 1800 });
     } catch (caught) {
       const error = caught as TdError;
       console.error(`ActiveSessionsPage.terminateSession failed: ${error.message}`);
       this.others = before;
-      this.showMutationError(error, '终止会话失败，请重试');
+      this.showMutationError(error, str('as_terminate_failed'));
     } finally {
       this.actionKey = '';
     }
@@ -479,7 +488,7 @@ struct ActiveSessionsPage {
       const error = caught as TdError;
       console.error(`ActiveSessionsPage.toggleSecretChats failed: ${error.message}`);
       this.replaceSession(before);
-      this.showMutationError(error, '设置私密聊天失败');
+      this.showMutationError(error, str('as_secret_chats_failed'));
     } finally {
       this.actionKey = '';
     }
@@ -501,7 +510,7 @@ struct ActiveSessionsPage {
       const error = caught as TdError;
       console.error(`ActiveSessionsPage.toggleCalls failed: ${error.message}`);
       this.replaceSession(before);
-      this.showMutationError(error, '设置接听通话失败');
+      this.showMutationError(error, str('as_calls_failed'));
     } finally {
       this.actionKey = '';
     }
@@ -517,11 +526,11 @@ struct ActiveSessionsPage {
       const next = copySession(row);
       next.isUnconfirmed = false;
       this.replaceSession(next);
-      promptAction.showToast({ message: '登录设备已确认', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.as_device_confirmed'), duration: 1800 });
     } catch (caught) {
       const error = caught as TdError;
       console.error(`ActiveSessionsPage.confirmSession failed: ${error.message}`);
-      this.showMutationError(error, '确认设备失败，请重试');
+      this.showMutationError(error, str('as_confirm_failed'));
     } finally {
       this.actionKey = '';
     }
@@ -530,26 +539,26 @@ struct ActiveSessionsPage {
   private showTtlMenu(): void {
     if (this.actionKey !== '') { return; }
     promptAction.showActionMenu({
-      title: '自动退出不活跃会话',
+      title: $r('app.string.as_inactive_ttl'),
       buttons: [
         {
-          text: this.inactiveTtlDays === 7 ? '✓ 1 周' : '1 周',
+          text: this.inactiveTtlDays === 7 ? str('menu_selected', str('ps_1_week')) : str('ps_1_week'),
           color: COLOR_TEXT_PRIMARY as string
         },
         {
-          text: this.inactiveTtlDays === 30 ? '✓ 1 个月' : '1 个月',
+          text: this.inactiveTtlDays === 30 ? str('menu_selected', str('ps_1_month')) : str('ps_1_month'),
           color: COLOR_TEXT_PRIMARY as string
         },
         {
-          text: this.inactiveTtlDays === 90 ? '✓ 3 个月' : '3 个月',
+          text: this.inactiveTtlDays === 90 ? str('menu_selected', str('ps_3_months')) : str('ps_3_months'),
           color: COLOR_TEXT_PRIMARY as string
         },
         {
-          text: this.inactiveTtlDays === 180 ? '✓ 6 个月' : '6 个月',
+          text: this.inactiveTtlDays === 180 ? str('menu_selected', str('ps_6_months')) : str('ps_6_months'),
           color: COLOR_TEXT_PRIMARY as string
         },
         {
-          text: this.inactiveTtlDays >= 365 ? '✓ 1 年' : '1 年',
+          text: this.inactiveTtlDays >= 365 ? str('menu_selected', str('as_1_year')) : str('as_1_year'),
           color: COLOR_TEXT_PRIMARY as string
         }
       ]
@@ -570,13 +579,13 @@ struct ActiveSessionsPage {
       request['inactive_session_ttl_days'] = days;
       await getTdClient().send(request);
       promptAction.showToast({
-        message: `已设置为 ${inactiveSessionTtlLabel(days)}`, duration: 1600
+        message: str('as_ttl_set', inactiveSessionTtlLabel(days)), duration: 1600
       });
     } catch (caught) {
       const error = caught as TdError;
       console.error(`ActiveSessionsPage.setInactiveTtl failed: ${error.message}`);
       this.inactiveTtlDays = previous;
-      this.showMutationError(error, '保存自动退出期限失败');
+      this.showMutationError(error, str('as_ttl_failed'));
     } finally {
       this.actionKey = '';
     }
@@ -592,7 +601,7 @@ struct ActiveSessionsPage {
       .width(40).height(40).borderRadius(20)
       .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
       .onClick((): void => { router.back(); });
-      Text('设备与会话')
+      Text($r('app.string.as_title'))
         .fontSize(24).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
         .layoutWeight(1);
       Stack({ alignContent: Alignment.Center }) {
@@ -634,9 +643,9 @@ struct ActiveSessionsPage {
       }
       .width(46).height(46).borderRadius(14).backgroundColor(COLOR_PRIMARY);
       Column({ space: 3 }) {
-        Text(this.linking ? '正在连接设备…' : '连接桌面设备')
+        Text(this.linking ? $r('app.string.as_connecting') : $r('app.string.as_connect_desktop'))
           .fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-        Text('扫描 Telegram 桌面端或网页版二维码')
+        Text($r('app.string.as_scan_qr'))
           .fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
       }
@@ -678,7 +687,7 @@ struct ActiveSessionsPage {
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
             .layoutWeight(1);
           if (row.isCurrent) {
-            Text('当前')
+            Text($r('app.string.as_current_short'))
               .fontSize(11).fontColor(COLOR_PRIMARY)
               .padding({ left: 7, right: 7, top: 2, bottom: 2 })
               .backgroundColor('#164CB5E8').borderRadius(8);
@@ -689,13 +698,13 @@ struct ActiveSessionsPage {
           .fontSize(13).fontColor(COLOR_TEXT_PRIMARY)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
         Row({ space: 5 }) {
-          Text(row.location !== '' ? row.location : '未知位置')
+          Text(row.location !== '' ? row.location : $r('app.string.as_unknown_location'))
             .fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
             .layoutWeight(1);
           Text('·').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
           Text(row.isUnconfirmed
-            ? '等待确认'
+            ? $r('app.string.as_awaiting_confirmation')
             : formatLastActive(row.lastActiveDate, row.isCurrent))
             .fontSize(12)
             .fontColor(row.isCurrent ? ONLINE : (row.isUnconfirmed ? DANGER : COLOR_TEXT_SECONDARY));
@@ -716,7 +725,7 @@ struct ActiveSessionsPage {
   @Builder
   currentSessionCard() {
     Column() {
-      this.sectionTitle('当前会话');
+      this.sectionTitle(str('as_current_session'));
       if (this.current !== null) {
         this.sessionRow(this.current as SessionRow);
       }
@@ -727,11 +736,11 @@ struct ActiveSessionsPage {
             .fontSize(22).fontColor([DANGER]);
         }.width(34).height(34);
         Column({ space: 2 }) {
-          Text('退出其他所有设备')
+          Text($r('app.string.as_terminate_others'))
             .fontSize(16)
             .fontColor(this.others.length > 0 ? DANGER : COLOR_TEXT_SECONDARY);
           if (this.isFreshRestricted()) {
-            Text(`安全保护中，${this.freshWaitText()}可用`)
+            Text(str('as_protected_until', this.freshWaitText()))
               .fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
           }
         }
@@ -788,9 +797,9 @@ struct ActiveSessionsPage {
         .width(36).height(36).borderRadius(10)
         .backgroundColor('#8E8E93');
         Column({ space: 2 }) {
-          Text('自动退出不活跃会话')
+          Text($r('app.string.as_inactive_ttl'))
             .fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
-          Text('超过期限未上线的设备将自动退出')
+          Text($r('app.string.as_inactive_ttl_sub'))
             .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
         }
         .alignItems(HorizontalAlign.Start).layoutWeight(1);
@@ -845,31 +854,31 @@ struct ActiveSessionsPage {
             .fontSize(24).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
             .margin({ top: 8 });
-          Text(`${this.selected.isCurrent ? '当前设备 · ' : ''}${formatClock(
-            this.selected.lastActiveDate
-          )}`)
+          Text(this.selected.isCurrent
+            ? str('as_current_device_at', formatClock(this.selected.lastActiveDate))
+            : formatClock(this.selected.lastActiveDate))
             .fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
             .margin({ bottom: 7 });
           Row({ space: 6 }) {
             if (this.selected.isOfficialApplication) {
-              Text('官方应用')
+              Text($r('app.string.as_official_app'))
                 .fontSize(11).fontColor(COLOR_PRIMARY)
                 .padding({ left: 8, right: 8, top: 3, bottom: 3 })
                 .backgroundColor('#164CB5E8').borderRadius(9);
             } else {
-              Text('第三方应用')
+              Text($r('app.string.as_third_party_app'))
                 .fontSize(11).fontColor(WARNING)
                 .padding({ left: 8, right: 8, top: 3, bottom: 3 })
                 .backgroundColor('#16F29A2E').borderRadius(9);
             }
             if (this.selected.isUnconfirmed) {
-              Text('等待确认')
+              Text($r('app.string.as_awaiting_confirmation'))
                 .fontSize(11).fontColor(DANGER)
                 .padding({ left: 8, right: 8, top: 3, bottom: 3 })
                 .backgroundColor('#16EF5B5B').borderRadius(9);
             }
             if (this.selected.isPasswordPending) {
-              Text('待完成两步验证')
+              Text($r('app.string.as_pending_2fa'))
                 .fontSize(11).fontColor(WARNING)
                 .padding({ left: 8, right: 8, top: 3, bottom: 3 })
                 .backgroundColor('#16F29A2E').borderRadius(9);
@@ -881,24 +890,24 @@ struct ActiveSessionsPage {
             'sys.symbol.computer',
             this.applicationFor(this.selected) !== ''
               ? this.applicationFor(this.selected)
-              : '未知应用',
-            '应用与系统'
+              : str('as_unknown_app'),
+            str('as_app_and_system')
           );
           Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 62 });
           this.detailInfoRow(
             'sys.symbol.info_circle',
             this.locationFor(this.selected) !== ''
               ? this.locationFor(this.selected)
-              : '未知位置',
-            '根据 IP 地址估算的位置'
+              : str('as_unknown_location'),
+            str('as_location_note')
           );
           Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 62 });
           this.detailInfoRow(
             'sys.symbol.clock',
             formatClock(this.selected.loginDate) !== ''
               ? formatClock(this.selected.loginDate)
-              : '时间未知',
-            '首次登录时间'
+              : str('as_time_unknown'),
+            str('as_first_login')
           );
           Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 62 });
 
@@ -906,8 +915,8 @@ struct ActiveSessionsPage {
             SymbolGlyph($r('sys.symbol.lock_fill'))
               .width(30).fontSize(23).fontColor([COLOR_TEXT_PRIMARY]);
             Column({ space: 3 }) {
-              Text('接受私密聊天').fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
-              Text('允许在此设备接收新的私密聊天')
+              Text($r('app.string.as_accept_secret')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
+              Text($r('app.string.as_accept_secret_sub'))
                 .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
             }
             .alignItems(HorizontalAlign.Start).layoutWeight(1);
@@ -935,8 +944,8 @@ struct ActiveSessionsPage {
             SymbolGlyph($r('sys.symbol.phone'))
               .width(30).fontSize(23).fontColor([COLOR_TEXT_PRIMARY]);
             Column({ space: 3 }) {
-              Text('接听通话').fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
-              Text('允许在此设备接听 Telegram 通话')
+              Text($r('app.string.as_accept_calls')).fontSize(16).fontColor(COLOR_TEXT_PRIMARY);
+              Text($r('app.string.as_accept_calls_sub'))
                 .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
             }
             .alignItems(HorizontalAlign.Start).layoutWeight(1);
@@ -962,7 +971,7 @@ struct ActiveSessionsPage {
             Row({ space: 8 }) {
               SymbolGlyph($r('sys.symbol.info_circle'))
                 .fontSize(18).fontColor([COLOR_PRIMARY]);
-              Text(`当前会话刚登录，预计${this.freshWaitText()}可终止其他会话；其余设备设置不受影响`)
+              Text(str('as_fresh_note', this.freshWaitText()))
                 .fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
                 .lineHeight(18).layoutWeight(1);
             }
@@ -974,15 +983,15 @@ struct ActiveSessionsPage {
           }
 
           if (this.selected.isPasswordPending) {
-            Text('此设备还需要输入两步验证密码才能完成登录。')
+            Text($r('app.string.as_needs_2fa'))
               .width('100%').fontSize(13).fontColor('#FF9500')
               .padding({ left: 18, right: 18, top: 10 });
           }
 
           if (this.selected.isUnconfirmed) {
             Button(this.actionKey === `confirm_${this.selected.id}`
-              ? '正在确认…'
-              : '确认此设备登录')
+              ? $r('app.string.as_confirming')
+              : $r('app.string.as_confirm_device'))
               .width('calc(100% - 32vp)').height(50)
               .fontSize(16).fontColor(Color.White)
               .backgroundColor(COLOR_PRIMARY).borderRadius(25)
@@ -995,10 +1004,10 @@ struct ActiveSessionsPage {
 
           if (!this.selected.isCurrent) {
             Button(this.isFreshRestricted()
-              ? `${this.freshWaitText()}可终止`
+              ? str('as_terminable_in', this.freshWaitText())
               : (this.actionKey === `terminate_${this.selected.id}`
-                ? '正在终止…'
-                : '终止此会话'))
+                ? $r('app.string.as_terminating')
+                : $r('app.string.as_terminate_this')))
               .width('calc(100% - 32vp)').height(50)
               .fontSize(16).fontWeight(FontWeight.Medium).fontColor(Color.White)
               .backgroundColor(this.isFreshRestricted() ? '#A0A0A5' : DANGER).borderRadius(25)
@@ -1006,7 +1015,7 @@ struct ActiveSessionsPage {
               .enabled(this.actionKey === '' && !this.isFreshRestricted())
               .onClick((): void => this.confirmTerminate(this.selected));
           } else {
-            Text('这是你当前正在使用的设备')
+            Text($r('app.string.as_this_device'))
               .width('100%').fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
               .textAlign(TextAlign.Center)
               .padding({ top: 18, bottom: 18 });
@@ -1068,12 +1077,12 @@ struct ActiveSessionsPage {
           .fontSize(31).fontColor([WARNING]);
       }
       .width(64).height(64).borderRadius(22).backgroundColor('#16F29A2E');
-      Text('设备列表加载失败')
+      Text($r('app.string.as_load_failed'))
         .fontSize(19).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-      Text(this.loadError !== '' ? this.loadError : '暂时无法读取登录设备，请稍后重试')
+      Text(this.loadError !== '' ? this.loadError : $r('app.string.as_unreadable'))
         .fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
         .lineHeight(19).textAlign(TextAlign.Center).width('78%');
-      Button('重新加载')
+      Button($r('app.string.settings_reload'))
         .height(42).padding({ left: 24, right: 24 })
         .fontSize(15).fontColor(Color.White).backgroundColor(COLOR_PRIMARY).borderRadius(21)
         .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
@@ -1093,7 +1102,7 @@ struct ActiveSessionsPage {
         .fontSize(17).fontColor([WARNING]);
       Text(this.syncError)
         .fontSize(12).fontColor(COLOR_TEXT_PRIMARY).lineHeight(18).layoutWeight(1);
-      Text('重试').fontSize(13).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
+      Text($r('app.string.settings_retry')).fontSize(13).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
         .padding({ left: 8, right: 8, top: 6, bottom: 6 })
         .stateStyles({ normal: this.pressNormal, pressed: this.pressDown })
         .onClick((): void => { this.load(false); });
@@ -1114,11 +1123,11 @@ struct ActiveSessionsPage {
         SymbolGlyph($r('sys.symbol.lock_fill')).fontSize(18).fontColor([COLOR_PRIMARY]);
       }.width(34).height(34).borderRadius(11).backgroundColor('#164CB5E8');
       Column({ space: 3 }) {
-        Text('新设备安全保护')
+        Text($r('app.string.as_fresh_protection'))
           .fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
         Text(this.isFreshRestricted()
-          ? `预计${this.freshWaitText()}可终止其他会话；设置与设备确认仍可使用`
-          : 'Telegram 暂时拒绝从此设备终止较早的会话，请稍后重试')
+          ? str('as_fresh_banner', this.freshWaitText())
+          : $r('app.string.as_fresh_rejected'))
           .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).lineHeight(18);
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
     }
@@ -1134,9 +1143,9 @@ struct ActiveSessionsPage {
           .fontSize(25).fontColor([ONLINE]);
       }.width(44).height(44).borderRadius(14).backgroundColor('#1634C759');
       Column({ space: 3 }) {
-        Text('没有其他活跃会话')
+        Text($r('app.string.as_no_others'))
           .fontSize(15).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-        Text('目前只有这台设备登录了你的账号')
+        Text($r('app.string.as_no_others_sub'))
           .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
     }
@@ -1158,7 +1167,7 @@ struct ActiveSessionsPage {
             this.linkDeviceCard();
             if (this.current !== null) {
               this.currentSessionCard();
-              Text('退出其他设备后，它们必须重新登录才能访问你的账号。')
+              Text($r('app.string.as_note'))
                 .width('100%').fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
                 .padding({ left: 16, right: 16 });
               if (this.isFreshRestricted() || this.serverFreshRestricted) {
@@ -1166,10 +1175,10 @@ struct ActiveSessionsPage {
               }
             }
             if (this.unconfirmedSessions().length > 0) {
-              this.sessionGroupCard('需要确认', this.unconfirmedSessions(), true);
+              this.sessionGroupCard(str('as_needs_confirmation'), this.unconfirmedSessions(), true);
             }
             if (this.confirmedSessions().length > 0) {
-              this.sessionGroupCard('其他活跃会话', this.confirmedSessions(), false);
+              this.sessionGroupCard(str('as_other_sessions'), this.confirmedSessions(), false);
             }
             if (this.others.length === 0) {
               this.noOtherSessionsCard();

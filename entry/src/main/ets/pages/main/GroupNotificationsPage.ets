@@ -9,6 +9,7 @@ import { AvatarView } from '../chatlist/AvatarView';
 import {
   COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
+import { str } from '../../util/strings';
 
 const CARD_RADIUS: number = 14;
 const UNDO_VISIBLE_MS: number = 10000;
@@ -143,7 +144,7 @@ struct GroupNotificationsPage {
         return;
       }
       promptAction.showToast({
-        message: '改得太快被服务端限流了，等一会儿再试这个会话', duration: 2600
+        message: $r('app.string.gn_rate_limited'), duration: 2600
       });
     }, MUTE_VERIFY_MS);
   }
@@ -187,7 +188,7 @@ struct GroupNotificationsPage {
       Column({ space: 3 }) {
         Text(entry.title).fontSize(15).fontColor(COLOR_TEXT_PRIMARY)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
-        Text(entry.kind === 'channel' ? '频道' : '群组')
+        Text(entry.kind === 'channel' ? $r('app.string.gn_channel') : $r('app.string.gn_group'))
           .fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
       }.alignItems(HorizontalAlign.Start).layoutWeight(1);
       // 图标带底色圆角块，点击目标更明确，也让两种状态一眼可分。
@@ -201,7 +202,7 @@ struct GroupNotificationsPage {
       .backgroundColor(muted ? COLOR_PAGE_BG : COLOR_PRIMARY);
     }
     .width('100%').height(62).padding({ left: 14, right: 14 })
-    .accessibilityText(`${entry.title}，${muted ? '已静音，点击开启通知' : '通知已开启，点击静音'}`)
+    .accessibilityText(str('a11y_labeled_state', entry.title, muted ? str('gn_muted_tap_unmute') : str('gn_unmuted_tap_mute')))
     .onClick((): void => this.toggle(entry));
   }
 
@@ -212,12 +213,12 @@ struct GroupNotificationsPage {
   openSection() {
     Column() {
       Row() {
-        Text('通知已开启').fontSize(13).fontWeight(FontWeight.Medium)
+        Text($r('app.string.gn_notifications_on')).fontSize(13).fontWeight(FontWeight.Medium)
           .fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
         Text(`${this.openRows.length}`).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
       }.width('100%').padding({ left: 14, right: 14, top: 14, bottom: 6 });
       if (this.openRows.length === 0) {
-        Text('没有会响的群组或频道。').fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
+        Text($r('app.string.gn_none_unmuted')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
           .width('100%').padding({ left: 14, right: 14, top: 4, bottom: 14 });
       } else {
         ForEach(this.openRows, (entry: ChatEntry) => {
@@ -233,12 +234,12 @@ struct GroupNotificationsPage {
   mutedSection() {
     Column() {
       Row() {
-        Text('已静音').fontSize(13).fontWeight(FontWeight.Medium)
+        Text($r('app.string.gn_muted')).fontSize(13).fontWeight(FontWeight.Medium)
           .fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
         Text(`${this.mutedRows.length}`).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
       }.width('100%').padding({ left: 14, right: 14, top: 14, bottom: 6 });
       if (this.mutedRows.length === 0) {
-        Text('还没有静音任何群组或频道。').fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
+        Text($r('app.string.gn_none_muted')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
           .width('100%').padding({ left: 14, right: 14, top: 4, bottom: 14 });
       } else {
         ForEach(this.mutedRows, (entry: ChatEntry) => {
@@ -254,11 +255,11 @@ struct GroupNotificationsPage {
   undoBar() {
     Row({ space: 12 }) {
       Text(this.undoTarget!.nowMuted
-        ? `已静音「${this.undoTarget!.title}」`
-        : `已开启「${this.undoTarget!.title}」的通知`)
+        ? str('gn_muted_toast', this.undoTarget!.title)
+        : str('gn_unmuted_toast', this.undoTarget!.title))
         .fontSize(14).fontColor(Color.White).layoutWeight(1)
         .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis });
-      Text('撤销').fontSize(15).fontWeight(FontWeight.Medium).fontColor('#5AC8FA')
+      Text($r('app.string.undo')).fontSize(15).fontWeight(FontWeight.Medium).fontColor('#5AC8FA')
         .padding({ left: 8, right: 4, top: 6, bottom: 6 })
         .onClick((): void => this.undo());
     }
@@ -279,7 +280,7 @@ struct GroupNotificationsPage {
             SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(24).fontColor([COLOR_TEXT_PRIMARY]);
           }.width(40).height(40).borderRadius(20).backgroundColor(Color.Transparent)
           .onClick((): void => { router.back(); });
-          Text('群组和频道通知').fontSize(22).fontWeight(FontWeight.Bold)
+          Text($r('app.string.gn_title')).fontSize(22).fontWeight(FontWeight.Bold)
             .fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
         }.width('100%').height(52).padding({ left: 8, right: 16 })
         .alignItems(VerticalAlign.Center);
@@ -287,7 +288,7 @@ struct GroupNotificationsPage {
         // 搜索框宽度交给外层 padding 决定，自己不再同时设 width('100%') 和
         // margin —— 两者叠加会超出父容器宽度，右边被裁掉。
         Row() {
-          Search({ value: this.query, placeholder: '搜索群组或频道' })
+          Search({ value: this.query, placeholder: $r('app.string.gn_search') })
             .layoutWeight(1)
             .height(40)
             .backgroundColor(COLOR_SURFACE)
@@ -300,15 +301,16 @@ struct GroupNotificationsPage {
         if (!this.scopesLoaded) {
           Column({ space: 9 }) {
             LoadingProgress().width(32).height(32).color(COLOR_PRIMARY);
-            Text('正在读取通知设置…').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+            Text($r('app.string.gn_loading')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
           }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
         } else {
           Scroll() {
             Column({ space: 12 }) {
               this.openSection();
               this.mutedSection();
-              Text('点击任意一行即可切换。在这里改过的会话会记录为独立设置，'
-                + '不再跟随「群组」「频道」的默认值。')
+              // One key, not two joined: the split was a source-line wrap, and
+              // a sentence assembled from fragments cannot be translated.
+              Text($r('app.string.gn_note'))
                 .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).lineHeight(18).width('100%');
             }
             .width('100%')

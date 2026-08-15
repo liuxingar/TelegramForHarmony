@@ -10,6 +10,18 @@
 # exits non-zero if any are present, giving a trustworthy pass/fail signal.
 set -u
 
+# Defaults are the macOS install. On Windows (git-bash) DevEco lives elsewhere,
+# hvigorw is a .js that needs an explicit node, and hvigor shells out to `java`
+# for PackageHap — which is only on PATH if we put the bundled JBR there.
+DEVECO_WIN="${DEVECO_WIN:-/d/Works/DevEco Studio}"
+if [ -z "${DEVECO_SDK_HOME:-}" ] && [ -d "$DEVECO_WIN/sdk" ]; then
+  # hvigor rejects a POSIX path here, so hand it the Windows spelling.
+  export DEVECO_SDK_HOME="$(cd "$DEVECO_WIN/sdk" && pwd -W | sed 's|/|\\|g')"
+  export DEVECO_NODE_HOME="${DEVECO_NODE_HOME:-$DEVECO_WIN/tools/node}"
+  export PATH="$DEVECO_WIN/jbr/bin:$PATH"
+  HVIGOR_JS="$DEVECO_WIN/tools/hvigor/bin/hvigorw.js"
+fi
+
 export DEVECO_SDK_HOME="${DEVECO_SDK_HOME:-/Applications/DevEco-Studio.app/Contents/sdk}"
 export DEVECO_NODE_HOME="${DEVECO_NODE_HOME:-/Applications/DevEco-Studio.app/Contents/tools/node}"
 HVIGORW="${HVIGORW:-/Applications/DevEco-Studio.app/Contents/tools/hvigor/bin/hvigorw}"
@@ -17,7 +29,23 @@ HVIGORW="${HVIGORW:-/Applications/DevEco-Studio.app/Contents/tools/hvigor/bin/hv
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-OUT="$("$HVIGORW" --mode module -p module=entry@default -p isLocalTest=true test 2>&1)"
+# i18n gate first: it is a static check that runs in a second, so a broken
+# resource reference should not wait behind a two-minute test build.
+NODE_BIN="${DEVECO_NODE_HOME}/bin/node"
+[ -x "$NODE_BIN" ] || NODE_BIN="${DEVECO_NODE_HOME}/node"
+[ -x "$NODE_BIN" ] || NODE_BIN="node"
+if ! "$NODE_BIN" scripts/i18n-check.mjs; then
+  echo ""
+  echo "LOCAL TESTS: FAIL (i18n check — see above)"
+  exit 1
+fi
+echo ""
+
+if [ -n "${HVIGOR_JS:-}" ] && [ ! -x "$HVIGORW" ]; then
+  OUT="$("$NODE_BIN" "$HVIGOR_JS" --mode module -p module=entry@default -p isLocalTest=true test 2>&1)"
+else
+  OUT="$("$HVIGORW" --mode module -p module=entry@default -p isLocalTest=true test 2>&1)"
+fi
 echo "$OUT"
 
 echo "$OUT" | grep -qiE "BUILD SUCCESSFUL" || {

@@ -1,5 +1,6 @@
 import { getTdClient } from '../../tdkit/Globals';
 import { TdObject, TdRequest } from '../../tdkit/TdTypes';
+import { str } from '../../util/strings';
 
 export interface CountryOption {
   iso2: string;
@@ -26,59 +27,64 @@ function country(
 
 // Immediate offline choices while TDLib loads its complete, server-maintained
 // country list. The online result replaces this list and includes every code.
-export const FALLBACK_COUNTRIES: CountryOption[] = [
-  country('CN', '中国大陆', 'China', '86'),
-  country('HK', '中国香港', 'Hong Kong', '852'),
-  country('MO', '中国澳门', 'Macao', '853'),
-  country('TW', '中国台湾', 'Taiwan', '886'),
-  country('SG', '新加坡', 'Singapore', '65'),
-  country('MY', '马来西亚', 'Malaysia', '60'),
-  country('JP', '日本', 'Japan', '81'),
-  country('KR', '韩国', 'South Korea', '82'),
-  country('TH', '泰国', 'Thailand', '66'),
-  country('VN', '越南', 'Vietnam', '84'),
-  country('PH', '菲律宾', 'Philippines', '63'),
-  country('ID', '印度尼西亚', 'Indonesia', '62'),
-  country('IN', '印度', 'India', '91'),
-  country('AE', '阿联酋', 'United Arab Emirates', '971'),
-  country('SA', '沙特阿拉伯', 'Saudi Arabia', '966'),
-  country('TR', '土耳其', 'Türkiye', '90'),
-  country('RU', '俄罗斯', 'Russia', '7'),
-  country('UA', '乌克兰', 'Ukraine', '380'),
-  country('GB', '英国', 'United Kingdom', '44'),
-  country('FR', '法国', 'France', '33'),
-  country('DE', '德国', 'Germany', '49'),
-  country('IT', '意大利', 'Italy', '39'),
-  country('ES', '西班牙', 'Spain', '34'),
-  country('PT', '葡萄牙', 'Portugal', '351'),
-  country('NL', '荷兰', 'Netherlands', '31'),
-  country('BE', '比利时', 'Belgium', '32'),
-  country('CH', '瑞士', 'Switzerland', '41'),
-  country('AT', '奥地利', 'Austria', '43'),
-  country('SE', '瑞典', 'Sweden', '46'),
-  country('NO', '挪威', 'Norway', '47'),
-  country('FI', '芬兰', 'Finland', '358'),
-  country('DK', '丹麦', 'Denmark', '45'),
-  country('PL', '波兰', 'Poland', '48'),
-  country('CZ', '捷克', 'Czechia', '420'),
-  country('GR', '希腊', 'Greece', '30'),
-  country('US', '美国', 'United States', '1'),
-  country('CA', '加拿大', 'Canada', '1'),
-  country('MX', '墨西哥', 'Mexico', '52'),
-  country('BR', '巴西', 'Brazil', '55'),
-  country('AR', '阿根廷', 'Argentina', '54'),
-  country('CL', '智利', 'Chile', '56'),
-  country('CO', '哥伦比亚', 'Colombia', '57'),
-  country('AU', '澳大利亚', 'Australia', '61'),
-  country('NZ', '新西兰', 'New Zealand', '64'),
-  country('ZA', '南非', 'South Africa', '27'),
-  country('EG', '埃及', 'Egypt', '20'),
-  country('NG', '尼日利亚', 'Nigeria', '234'),
-  country('KE', '肯尼亚', 'Kenya', '254'),
-  country('IL', '以色列', 'Israel', '972'),
-  country('PK', '巴基斯坦', 'Pakistan', '92'),
-  country('BD', '孟加拉国', 'Bangladesh', '880')
-];
+// A function, not a const: the names come from str(), which resolves when
+// called. A module-level array is built at first import — before the string
+// source exists — and would freeze the language.
+export function fallbackCountries(): CountryOption[] {
+  return [
+  country('CN', str('country_cn'), 'China', '86'),
+  country('HK', str('country_hk'), 'Hong Kong', '852'),
+  country('MO', str('country_mo'), 'Macao', '853'),
+  country('TW', str('country_tw'), 'Taiwan', '886'),
+  country('SG', str('country_sg'), 'Singapore', '65'),
+  country('MY', str('country_my'), 'Malaysia', '60'),
+  country('JP', str('country_jp'), 'Japan', '81'),
+  country('KR', str('country_kr'), 'South Korea', '82'),
+  country('TH', str('country_th'), 'Thailand', '66'),
+  country('VN', str('country_vn'), 'Vietnam', '84'),
+  country('PH', str('country_ph'), 'Philippines', '63'),
+  country('ID', str('country_id'), 'Indonesia', '62'),
+  country('IN', str('country_in'), 'India', '91'),
+  country('AE', str('country_ae'), 'United Arab Emirates', '971'),
+  country('SA', str('country_sa'), 'Saudi Arabia', '966'),
+  country('TR', str('country_tr'), 'Türkiye', '90'),
+  country('RU', str('country_ru'), 'Russia', '7'),
+  country('UA', str('country_ua'), 'Ukraine', '380'),
+  country('GB', str('country_gb'), 'United Kingdom', '44'),
+  country('FR', str('country_fr'), 'France', '33'),
+  country('DE', str('country_de'), 'Germany', '49'),
+  country('IT', str('country_it'), 'Italy', '39'),
+  country('ES', str('country_es'), 'Spain', '34'),
+  country('PT', str('country_pt'), 'Portugal', '351'),
+  country('NL', str('country_nl'), 'Netherlands', '31'),
+  country('BE', str('country_be'), 'Belgium', '32'),
+  country('CH', str('country_ch'), 'Switzerland', '41'),
+  country('AT', str('country_at'), 'Austria', '43'),
+  country('SE', str('country_se'), 'Sweden', '46'),
+  country('NO', str('country_no'), 'Norway', '47'),
+  country('FI', str('country_fi'), 'Finland', '358'),
+  country('DK', str('country_dk'), 'Denmark', '45'),
+  country('PL', str('country_pl'), 'Poland', '48'),
+  country('CZ', str('country_cz'), 'Czechia', '420'),
+  country('GR', str('country_gr'), 'Greece', '30'),
+  country('US', str('country_us'), 'United States', '1'),
+  country('CA', str('country_ca'), 'Canada', '1'),
+  country('MX', str('country_mx'), 'Mexico', '52'),
+  country('BR', str('country_br'), 'Brazil', '55'),
+  country('AR', str('country_ar'), 'Argentina', '54'),
+  country('CL', str('country_cl'), 'Chile', '56'),
+  country('CO', str('country_co'), 'Colombia', '57'),
+  country('AU', str('country_au'), 'Australia', '61'),
+  country('NZ', str('country_nz'), 'New Zealand', '64'),
+  country('ZA', str('country_za'), 'South Africa', '27'),
+  country('EG', str('country_eg'), 'Egypt', '20'),
+  country('NG', str('country_ng'), 'Nigeria', '234'),
+  country('KE', str('country_ke'), 'Kenya', '254'),
+  country('IL', str('country_il'), 'Israel', '972'),
+  country('PK', str('country_pk'), 'Pakistan', '92'),
+  country('BD', str('country_bd'), 'Bangladesh', '880')
+  ];
+}
 
 function parseCountries(response: TdObject): CountryOption[] {
   const rawCountries = (response['countries'] as TdObject[] | undefined) ?? [];
@@ -119,11 +125,11 @@ export async function loadCountries(): Promise<CountryOption[]> {
     const request: TdRequest = { '@type': 'getCountries' };
     const response = await getTdClient().send(request, 20000);
     const countries = parseCountries(response);
-    return countries.length > 0 ? countries : FALLBACK_COUNTRIES;
+    return countries.length > 0 ? countries : fallbackCountries();
   } catch (caught) {
     const error = caught as Error;
     console.error(`CountryData.loadCountries failed: ${error.message}`);
-    return FALLBACK_COUNTRIES;
+    return fallbackCountries();
   }
 }
 

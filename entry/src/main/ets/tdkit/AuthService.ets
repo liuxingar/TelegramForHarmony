@@ -2,6 +2,7 @@ import { TdClient } from './TdClient';
 import { TdObject, TdRequest } from './TdTypes';
 import { clientRev, clientSig } from './ApiCredentials';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { str } from '../util/strings';
 
 export enum AuthStage {
   Init = 'Init',
@@ -160,7 +161,7 @@ export class AuthService {
         this.closedCallbacks = this.closedCallbacks.filter(
           (callback: () => void): boolean => callback !== complete
         );
-        reject(new Error('等待账号退出完成超时'));
+        reject(new Error(str('auth_logout_timeout')));
       }, 15000);
     });
   }

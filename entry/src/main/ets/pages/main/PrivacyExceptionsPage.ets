@@ -8,6 +8,7 @@ import {
   COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE,
   COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
+import { plural, str } from '../../util/strings';
 
 const CARD_RADIUS: number = 16;
 
@@ -113,7 +114,7 @@ struct PrivacyExceptionsPage {
     const path = local !== undefined ? ((local['path'] as string | undefined) ?? '') : '';
     return {
       id,
-      name: name !== '' ? name : '已删除账户',
+      name: name !== '' ? name : str('deleted_account'),
       username: active.length > 0 ? `@${active[0]}` : '',
       initials: name !== '' ? name.substring(0, 1).toUpperCase() : '?',
       avatarPath: path
@@ -234,7 +235,7 @@ struct PrivacyExceptionsPage {
       console.error(`PrivacyExceptionsPage.save failed: ${error.message}`);
       if (!this.active) { return; }
       this.saving = false;
-      promptAction.showToast({ message: '例外名单保存失败', duration: 1800 });
+      promptAction.showToast({ message: $r('app.string.pe_save_failed'), duration: 1800 });
     });
   }
 
@@ -245,7 +246,7 @@ struct PrivacyExceptionsPage {
         SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(24).fontColor([COLOR_TEXT_PRIMARY]);
       }.width(40).height(40).borderRadius(20).backgroundColor(Color.Transparent)
       .onClick((): void => { router.back(); });
-      Text(`${this.title} · 例外`).fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
+      Text(str('pe_title', this.title)).fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
         .layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
     }
     .width('100%').height(52).padding({ left: 8, right: 14 }).alignItems(VerticalAlign.Center);
@@ -265,15 +266,15 @@ struct PrivacyExceptionsPage {
   }
 
   @Builder
-  exceptionCard(title: string, mode: string, rows: ExceptionUser[], chatCount: number) {
+  exceptionCard(title: ResourceStr, mode: string, rows: ExceptionUser[], chatCount: number) {
     Column() {
       Row() {
         Text(title).fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY).layoutWeight(1);
-        Button('编辑').fontSize(13).fontColor(COLOR_PRIMARY).backgroundColor(Color.Transparent)
+        Button($r('app.string.edit')).fontSize(13).fontColor(COLOR_PRIMARY).backgroundColor(Color.Transparent)
           .height(36).onClick((): void => { this.openPicker(mode); });
       }.width('100%').height(46).padding({ left: 16, right: 8 });
       if (rows.length === 0 && chatCount === 0) {
-        Text('尚未添加例外').fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
+        Text($r('app.string.pe_empty')).fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
           .width('100%').padding({ left: 16, right: 16, top: 10, bottom: 18 });
       } else {
         ForEach(rows, (user: ExceptionUser, index: number) => {
@@ -282,7 +283,7 @@ struct PrivacyExceptionsPage {
         }, (user: ExceptionUser): string => `${mode}_${user.id}`);
         if (chatCount > 0) {
           Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 16 });
-          Text(`${chatCount} 个群组例外已由服务器保留`)
+          Text(plural('pe_group_exceptions_kept', chatCount, chatCount))
             .fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
             .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 12 });
         }
@@ -296,16 +297,16 @@ struct PrivacyExceptionsPage {
     Column({ space: 10 }) {
       Row() {
         Column({ space: 2 }) {
-          Text(this.sheetMode === 'allow' ? '始终允许' : '永不允许')
+          Text(this.sheetMode === 'allow' ? $r('app.string.privacy_always_allow') : $r('app.string.privacy_never_allow'))
             .fontSize(21).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
-          Text('从联系人中选择；保存时自动避免相互冲突')
+          Text($r('app.string.pe_pick_note'))
             .fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
         }.layoutWeight(1).alignItems(HorizontalAlign.Start);
-        Button(this.saving ? '保存中…' : '完成').fontSize(15).fontColor(COLOR_PRIMARY)
+        Button(this.saving ? $r('app.string.saving') : $r('app.string.done')).fontSize(15).fontColor(COLOR_PRIMARY)
           .backgroundColor(Color.Transparent).enabled(!this.saving)
           .onClick((): void => { this.saveDraft(); });
       }.width('100%').height(52).alignItems(VerticalAlign.Center);
-      TextInput({ text: this.query, placeholder: '搜索联系人' })
+      TextInput({ text: this.query, placeholder: $r('app.string.search_contacts') })
         .height(44).fontSize(15).backgroundColor($r('app.color.surface_alt')).borderRadius(12)
         .padding({ left: 13, right: 13 }).onChange((value: string): void => { this.query = value; });
       if (this.candidateState === 'loading') {
@@ -313,13 +314,13 @@ struct PrivacyExceptionsPage {
           .layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else if (this.candidateState === 'error') {
         Column({ space: 10 }) {
-          Text('联系人加载失败').fontSize(15).fontColor(COLOR_TEXT_PRIMARY);
-          Button('重试').onClick((): void => { this.loadCandidates(); });
+          Text($r('app.string.contacts_load_failed')).fontSize(15).fontColor(COLOR_TEXT_PRIMARY);
+          Button($r('app.string.settings_retry')).onClick((): void => { this.loadCandidates(); });
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else if (this.filteredCandidates().length === 0) {
         Column({ space: 6 }) {
-          Text('没有可选联系人').fontSize(15).fontColor(COLOR_TEXT_PRIMARY);
-          Text('可以先在联系人页添加用户。').fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.pe_no_contacts')).fontSize(15).fontColor(COLOR_TEXT_PRIMARY);
+          Text($r('app.string.pe_no_contacts_sub')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else {
         List() {
@@ -353,15 +354,15 @@ struct PrivacyExceptionsPage {
           .layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else if (this.loadState === 'error') {
         Column({ space: 10 }) {
-          Text('例外名单加载失败').fontSize(17).fontColor(COLOR_TEXT_PRIMARY);
-          Button('重新加载').onClick((): void => { this.load(); });
+          Text($r('app.string.pe_load_failed')).fontSize(17).fontColor(COLOR_TEXT_PRIMARY);
+          Button($r('app.string.settings_reload')).onClick((): void => { this.load(); });
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center);
       } else {
         Scroll() {
           Column({ space: 12 }) {
-            this.exceptionCard('始终允许', 'allow', this.allowUsers, this.allowChatCount);
-            this.exceptionCard('永不允许', 'restrict', this.restrictUsers, this.restrictChatCount);
-            Text('群组例外会完整保留；当前页面可编辑用户例外，避免因修改总规则意外清空服务器配置。')
+            this.exceptionCard($r('app.string.privacy_always_allow'), 'allow', this.allowUsers, this.allowChatCount);
+            this.exceptionCard($r('app.string.privacy_never_allow'), 'restrict', this.restrictUsers, this.restrictChatCount);
+            Text($r('app.string.pe_note'))
               .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).lineHeight(18)
               .width('100%').padding({ left: 16, right: 16 });
           }.width('100%').padding({ left: 12, right: 12, top: 6, bottom: this.bottomSafe + 24 });

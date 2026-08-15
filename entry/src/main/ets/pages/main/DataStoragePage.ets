@@ -13,6 +13,8 @@ import {
   COLOR_DIVIDER, COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE,
   COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
+import { plural, str } from '../../util/strings';
+import { fullDate } from '../../util/intlFormat';
 
 const CARD_RADIUS: number = 14;
 const DANGER: string = '#E64646';
@@ -117,8 +119,8 @@ struct DataStoragePage {
     }).catch((error: TdError): void => {
       if (!this.active || sequence !== this.loadSequence) { return; }
       this.storageLoading = false;
-      this.storageError = this.storage === null ? '存储统计加载失败' : '';
-      if (this.storage !== null) { this.syncWarning = '部分数据同步失败，正在显示上次结果'; }
+      this.storageError = this.storage === null ? str('ds_storage_load_failed') : '';
+      if (this.storage !== null) { this.syncWarning = str('ds_partial_sync'); }
       if (!this.networkLoading) { this.stopSkeleton(); }
       console.error(`DataStoragePage.getStorageUsage failed: ${error.message}`);
     });
@@ -131,8 +133,8 @@ struct DataStoragePage {
     }).catch((error: TdError): void => {
       if (!this.active || sequence !== this.loadSequence) { return; }
       this.networkLoading = false;
-      this.networkError = this.network === null ? '流量统计加载失败' : '';
-      if (this.network !== null) { this.syncWarning = '部分数据同步失败，正在显示上次结果'; }
+      this.networkError = this.network === null ? str('network_load_failed') : '';
+      if (this.network !== null) { this.syncWarning = str('ds_partial_sync'); }
       if (!this.storageLoading) { this.stopSkeleton(); }
       console.error(`DataStoragePage.getNetworkUsage failed: ${error.message}`);
     });
@@ -140,42 +142,42 @@ struct DataStoragePage {
 
   private networkLabel(): string {
     if (this.networkType === 'wifi') { return 'Wi‑Fi'; }
-    if (this.networkType === 'mobile') { return '移动网络'; }
-    if (this.networkType === 'roaming') { return '漫游'; }
-    if (this.networkType === 'none') { return '无网络'; }
-    return '其他网络';
+    if (this.networkType === 'mobile') { return str('network_mobile'); }
+    if (this.networkType === 'roaming') { return str('network_roaming'); }
+    if (this.networkType === 'none') { return str('ds_no_network'); }
+    return str('network_other');
   }
 
   private autoDownloadSummary(): string {
     const current = autoDownloadPolicy();
     const enabled: string[] = [];
-    if (current.photos) { enabled.push('图片'); }
-    if (current.videos) { enabled.push('视频'); }
-    if (current.files) { enabled.push('文件'); }
-    return `${this.networkLabel()} · ${enabled.length > 0 ? enabled.join('、') : '已关闭'}`;
+    if (current.photos) { enabled.push(str('storage_photo')); }
+    if (current.videos) { enabled.push(str('storage_video')); }
+    if (current.files) { enabled.push(str('storage_file')); }
+    return str('ds_network_and_kinds', this.networkLabel(), enabled.length > 0 ? enabled.join(str('list_separator')) : str('ds_off'));
   }
 
   private autosaveSummary(): string {
     const enabled: string[] = [];
-    if (this.autosavePrivate) { enabled.push('私聊'); }
-    if (this.autosaveGroup) { enabled.push('群组'); }
-    if (this.autosaveChannel) { enabled.push('频道'); }
-    return enabled.length > 0 ? enabled.join('、') : '已关闭';
+    if (this.autosavePrivate) { enabled.push(str('ns_private')); }
+    if (this.autosaveGroup) { enabled.push(str('gn_group')); }
+    if (this.autosaveChannel) { enabled.push(str('gn_channel')); }
+    return enabled.length > 0 ? enabled.join('、') : str('ds_off');
   }
 
   private sinceLabel(): string {
-    if (this.network === null || this.network.sinceDate <= 0) { return '统计时间不可用'; }
+    if (this.network === null || this.network.sinceDate <= 0) { return str('ds_since_unknown'); }
     const date = new Date(this.network.sinceDate * 1000);
-    return `自 ${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()} 起`;
+    return str('ds_since', fullDate(date));
   }
 
-  private confirmAction(key: string, title: string, message: string, button: string,
-    color: string, operation: () => Promise<void>, success: string): void {
+  private confirmAction(key: string, title: ResourceStr, message: ResourceStr, button: ResourceStr,
+    color: string, operation: () => Promise<void>, success: ResourceStr): void {
     if (this.actionKey !== '') { return; }
     promptAction.showDialog({
       title, message,
       buttons: [
-        { text: '取消', color: COLOR_TEXT_SECONDARY as string },
+        { text: $r('app.string.cancel'), color: COLOR_TEXT_SECONDARY as string },
         { text: button, color }
       ]
     }).then((result: promptAction.ShowDialogSuccessResponse): void => {
@@ -188,7 +190,7 @@ struct DataStoragePage {
       }).catch((error: TdError): void => {
         this.actionKey = '';
         console.error(`DataStoragePage.${key} failed: ${error.message}`);
-        promptAction.showToast({ message: '操作失败，请重试', duration: 1800 });
+        promptAction.showToast({ message: $r('app.string.action_failed_retry'), duration: 1800 });
         this.load(false);
       });
     });
@@ -202,11 +204,11 @@ struct DataStoragePage {
       }
       .width(44).height(44).borderRadius(22).justifyContent(FlexAlign.Center)
       .stateStyles({ normal: this.actionNormalStyle, pressed: this.actionPressedStyle })
-      .accessibilityText('返回设置').onClick((): void => router.back());
+      .accessibilityText($r('app.string.back_to_settings')).onClick((): void => router.back());
       Column({ space: 1 }) {
-        Text('数据与存储').fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
+        Text($r('app.string.settings_data')).fontSize(22).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
         if (this.storageLoading || this.networkLoading) {
-          Text('正在同步统计…').fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.ds_syncing')).fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
         }
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
       Row() {
@@ -219,7 +221,7 @@ struct DataStoragePage {
       .width(44).height(44).borderRadius(22).justifyContent(FlexAlign.Center)
       .enabled(!this.storageLoading && !this.networkLoading)
       .stateStyles({ normal: this.actionNormalStyle, pressed: this.actionPressedStyle })
-      .accessibilityText('刷新统计').onClick((): void => this.load(false));
+      .accessibilityText($r('app.string.ds_refresh')).onClick((): void => this.load(false));
     }
     .width('100%').height(56).padding({ left: 8, right: 8 }).alignItems(VerticalAlign.Center);
   }
@@ -251,7 +253,7 @@ struct DataStoragePage {
     Column({ space: 14 }) {
       Row() {
         Column({ space: 3 }) {
-          Text('本地占用').fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
+          Text($r('app.string.ds_local_usage')).fontSize(13).fontColor(COLOR_TEXT_SECONDARY);
           Text(this.storage !== null ? formatBytes(this.storage.totalSize) : '—')
             .fontSize(30).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY);
         }.layoutWeight(1).alignItems(HorizontalAlign.Start);
@@ -271,9 +273,9 @@ struct DataStoragePage {
             .borderRadius(3).backgroundColor('#C7C7CC');
         }.width('100%');
         Row() {
-          Text(`媒体 ${formatBytes(this.storage.filesSize)}`).fontSize(11).fontColor(COLOR_PRIMARY);
+          Text(str('ds_media_size', formatBytes(this.storage.filesSize))).fontSize(11).fontColor(COLOR_PRIMARY);
           Blank();
-          Text(`数据库 ${formatBytes(this.storage.databaseSize)}`).fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
+          Text(str('ds_database_size', formatBytes(this.storage.databaseSize))).fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
         }.width('100%');
       }
     }
@@ -282,7 +284,7 @@ struct DataStoragePage {
   }
 
   @Builder
-  navRow(icon: Resource, title: string, subtitle: string, value: string, page: string) {
+  navRow(icon: Resource, title: ResourceStr, subtitle: ResourceStr, value: ResourceStr, page: string) {
     Row({ space: 12 }) {
       Stack({ alignContent: Alignment.Center }) {
         Circle({ width: 38, height: 38 }).fill('#163478F6');
@@ -304,13 +306,13 @@ struct DataStoragePage {
   @Builder
   statsCard() {
     Column() {
-      this.navRow($r('sys.symbol.folder_fill'), '存储使用情况',
+      this.navRow($r('sys.symbol.folder_fill'), $r('app.string.storage_title'),
         this.storageError !== '' ? this.storageError :
-          (this.storage !== null ? `${this.storage.fileCount} 个缓存文件` : '等待统计'),
+          (this.storage !== null ? plural('ds_cached_files', this.storage.fileCount, this.storage.fileCount) : $r('app.string.ds_awaiting_stats')),
         this.storage !== null ? formatBytes(this.storage.filesSize) : '—',
         'pages/main/StorageUsagePage');
       Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 62 });
-      this.navRow($r('sys.symbol.data_proportion'), '流量使用情况',
+      this.navRow($r('sys.symbol.data_proportion'), $r('app.string.network_title'),
         this.networkError !== '' ? this.networkError : this.sinceLabel(),
         this.network !== null ? formatBytes(this.network.sent + this.network.received) : '—',
         'pages/main/NetworkUsagePage');
@@ -320,16 +322,16 @@ struct DataStoragePage {
   @Builder
   mediaCard() {
     Column() {
-      this.navRow($r('sys.symbol.arrow_down_circle'), '自动下载媒体', this.autoDownloadSummary(), '',
+      this.navRow($r('sys.symbol.arrow_down_circle'), $r('app.string.ds_auto_download'), this.autoDownloadSummary(), '',
         'pages/main/MediaStorageSettingsPage');
       Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 62 });
-      this.navRow($r('sys.symbol.camera'), '保存到相册', this.autosaveSummary(), '',
+      this.navRow($r('sys.symbol.camera'), $r('app.string.ms_save_to_gallery'), this.autosaveSummary(), '',
         'pages/main/MediaStorageSettingsPage');
     }.width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS).clip(true);
   }
 
   @Builder
-  actionRow(title: string, subtitle: string, key: string, danger: boolean,
+  actionRow(title: ResourceStr, subtitle: ResourceStr, key: string, danger: boolean,
     action: () => void) {
     Row({ space: 10 }) {
       Column({ space: 2 }) {
@@ -349,23 +351,23 @@ struct DataStoragePage {
   @Builder
   actionsCard() {
     Column() {
-      this.actionRow('清理可清理缓存', '不会删除云端消息，媒体可在需要时重新下载', 'cache', false, (): void => {
+      this.actionRow($r('app.string.ds_clear_cache'), $r('app.string.ds_clear_cache_sub'), 'cache', false, (): void => {
         const before = this.storage !== null ? this.storage.filesSize : 0;
-        this.confirmAction('cache', '清理可清理缓存',
-          `将清理最多 ${formatBytes(before)} 的图片、视频和文件缓存。受保护的数据会保留。`,
-          '清理', COLOR_PRIMARY as string,
-          (): Promise<void> => clearCache().then((): void => {}), '缓存清理完成');
+        this.confirmAction('cache', $r('app.string.ds_clear_cache'),
+          str('ds_clear_confirm', formatBytes(before)),
+          $r('app.string.clear'), COLOR_PRIMARY as string,
+          (): Promise<void> => clearCache().then((): void => {}), $r('app.string.storage_clear_done'));
       });
       Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
-      this.actionRow('重置流量统计', '上传和下载计数将从现在重新开始', 'network', false, (): void => {
-        this.confirmAction('network', '重置流量统计', '所有网络分类的计数都会归零。',
-          '重置', COLOR_PRIMARY as string, resetNetworkUsage, '流量统计已重置');
+      this.actionRow($r('app.string.network_reset'), $r('app.string.ds_reset_sub'), 'network', false, (): void => {
+        this.confirmAction('network', $r('app.string.network_reset'), $r('app.string.ds_reset_confirm'),
+          $r('app.string.reset'), COLOR_PRIMARY as string, resetNetworkUsage, $r('app.string.network_reset_done'));
       });
       Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
-      this.actionRow('清空云端草稿', '不包含秘密聊天，此操作无法撤销', 'drafts', true, (): void => {
-        this.confirmAction('drafts', '清空云端草稿',
-          '所有普通会话中未发送的云端草稿都会删除，秘密聊天不受影响。',
-          '清空', DANGER, clearAllDrafts, '云端草稿已清空');
+      this.actionRow($r('app.string.ds_clear_drafts'), $r('app.string.ds_clear_drafts_sub'), 'drafts', true, (): void => {
+        this.confirmAction('drafts', $r('app.string.ds_clear_drafts'),
+          $r('app.string.ds_clear_drafts_confirm'),
+          $r('app.string.clear_all'), DANGER, clearAllDrafts, $r('app.string.ds_drafts_cleared'));
       });
     }.width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS).clip(true);
   }
@@ -376,7 +378,7 @@ struct DataStoragePage {
       Row({ space: 8 }) {
         SymbolGlyph($r('sys.symbol.exclamationmark_circle')).fontSize(17).fontColor(['#FF9500']);
         Text(this.syncWarning).fontSize(12).fontColor(COLOR_TEXT_SECONDARY).layoutWeight(1);
-        Text('重试').fontSize(12).fontColor(COLOR_PRIMARY).onClick((): void => this.load(false));
+        Text($r('app.string.settings_retry')).fontSize(12).fontColor(COLOR_PRIMARY).onClick((): void => this.load(false));
       }.width('100%').padding(11).backgroundColor('#12FF9500').borderRadius(11);
     }
   }
@@ -396,7 +398,7 @@ struct DataStoragePage {
           }
           this.mediaCard();
           this.actionsCard();
-          Text('自动下载按当前网络与文件大小执行；保存到相册由系统确认写入。')
+          Text($r('app.string.ds_note'))
             .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).width('100%')
             .padding({ left: 14, right: 14, top: 1 });
         }.width('100%').padding({ left: 12, right: 12, top: 6, bottom: this.bottomSafe + 24 });

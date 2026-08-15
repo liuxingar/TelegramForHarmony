@@ -1,5 +1,6 @@
 import { MessageEntry } from '../store/MessageEntry';
 import { VoiceState } from './VoicePlayback';
+import { str } from '../util/strings';
 
 // --- Pure queue maths over a loaded message list -----------------------------
 //
@@ -108,15 +109,15 @@ export class MusicQueue {
     }
     if (entry.videoFileId === 0 && entry.videoPath === '') {
       this.pendingPlayId = 0;
-      this.deps.toast('这个音频文件暂时不可用', 1600);
+      this.deps.toast(str('mq_audio_unavailable'), 1600);
       return;
     }
     if (entry.videoPath === '') {
       this.pendingPlayId = messageId;
       this.deps.requestDownload(messageId, entry.videoFailed);
       this.deps.toast(
-        entry.videoFailed ? '正在重新下载音乐'
-          : (entry.mediaDownloadActive ? '音乐正在下载' : '开始下载音乐'),
+        entry.videoFailed ? str('mq_redownloading')
+          : (entry.mediaDownloadActive ? str('mq_downloading') : str('mq_download_started')),
         1400
       );
       return;
@@ -144,7 +145,7 @@ export class MusicQueue {
     }
     if (entry.videoFailed) {
       this.pendingPlayId = 0;
-      this.deps.toast('音乐下载失败，请重试', 1800);
+      this.deps.toast(str('mq_download_failed'), 1800);
       return;
     }
     if (entry.videoPath !== '') {

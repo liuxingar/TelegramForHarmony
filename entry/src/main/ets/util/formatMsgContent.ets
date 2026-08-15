@@ -1,5 +1,7 @@
 import { TdObject } from '../tdkit/TdTypes';
 import { formatPreview } from './formatPreview';
+import { decimalUpTo, usd } from './intlFormat';
+import { plural, str } from './strings';
 
 export interface PollOptionInfo {
   text: string;
@@ -403,12 +405,9 @@ function formattedTextValue(value: TdObject | undefined): string {
 
 function formatTonAmount(value: number): string {
   if (value <= 0) {
-    return 'TON 数量未知';
+    return str('ton_amount_unknown');
   }
-  const ton = value / 1_000_000_000;
-  const fixed = ton.toFixed(3);
-  const trimmed = fixed.replace(/\.?0+$/, '');
-  return `${trimmed} TON`;
+  return str('ton_amount', decimalUpTo(value / 1_000_000_000, 3));
 }
 
 function stickerPreview(sticker: TdObject | undefined): MsgContent | null {
@@ -439,18 +438,18 @@ function giftBase(kind: string, title: string, value: string, status: string,
 
 function giveawayPrizeText(prize: TdObject | undefined): string {
   if (prize === undefined) {
-    return '奖品信息暂不可用';
+    return str('giveaway_prize_unavailable');
   }
   const type = (prize['@type'] as string | undefined) ?? '';
   if (type === 'giveawayPrizePremium') {
     const months = Math.max(0, (prize['month_count'] as number | undefined) ?? 0);
-    return months > 0 ? `${months} 个月 Telegram Premium` : 'Telegram Premium';
+    return months > 0 ? plural('prize_premium_months', months, months) : 'Telegram Premium';
   }
   if (type === 'giveawayPrizeStars') {
     const stars = Math.max(0, (prize['star_count'] as number | undefined) ?? 0);
-    return stars > 0 ? `${stars} 颗 Telegram 星星` : 'Telegram 星星';
+    return stars > 0 ? plural('prize_stars', stars, stars) : str('telegram_stars');
   }
-  return 'Telegram 抽奖奖品';
+  return str('telegram_giveaway_prize');
 }
 
 function giveawayBase(state: string, winnerCount: number, prize: string,
@@ -809,10 +808,10 @@ export function formatMsgContent(message: TdObject): MsgContent {
   if (type === 'messageGiftedPremium') {
     const months = Math.max(0, (content!['month_count'] as number | undefined) ?? 0);
     const days = Math.max(0, (content!['day_count'] as number | undefined) ?? 0);
-    const duration = months > 0 ? `${months} 个月`
-      : (days > 0 ? `${days} 天` : 'Telegram Premium');
+    const duration = months > 0 ? plural('duration_months', months, months)
+      : (days > 0 ? plural('duration_days', days, days) : 'Telegram Premium');
     return giftBase(
-      'premium', 'Telegram Premium 礼物', duration, '已赠送',
+      'premium', str('gift_premium_title'), duration, str('gift_status_gifted'),
       formattedTextValue(content!['text'] as TdObject | undefined),
       content!['sticker'] as TdObject | undefined
     );
@@ -820,27 +819,27 @@ export function formatMsgContent(message: TdObject): MsgContent {
   if (type === 'messageGiftedStars') {
     const stars = Math.max(0, (content!['star_count'] as number | undefined) ?? 0);
     return giftBase(
-      'stars', 'Telegram 星星礼物',
-      stars > 0 ? `${stars} 颗星星` : '星星数量未知',
-      '已到账', '', content!['sticker'] as TdObject | undefined
+      'stars', str('gift_stars_title'),
+      stars > 0 ? plural('gift_stars_count', stars, stars) : str('gift_stars_unknown'),
+      str('gift_status_credited'), '', content!['sticker'] as TdObject | undefined
     );
   }
   if (type === 'messageGiftedTon') {
     const amount = Math.max(0, (content!['ton_amount'] as number | undefined) ?? 0);
     return giftBase(
-      'ton', 'TON 礼物', formatTonAmount(amount),
-      '已到账', '', content!['sticker'] as TdObject | undefined
+      'ton', str('gift_ton_title'), formatTonAmount(amount),
+      str('gift_status_credited'), '', content!['sticker'] as TdObject | undefined
     );
   }
   if (type === 'messagePremiumGiftCode') {
     const months = Math.max(0, (content!['month_count'] as number | undefined) ?? 0);
     const days = Math.max(0, (content!['day_count'] as number | undefined) ?? 0);
-    const duration = months > 0 ? `${months} 个月 Premium`
-      : (days > 0 ? `${days} 天 Premium` : 'Telegram Premium');
+    const duration = months > 0 ? plural('duration_months_premium', months, months)
+      : (days > 0 ? plural('duration_days_premium', days, days) : 'Telegram Premium');
     const unclaimed = (content!['is_unclaimed'] as boolean | undefined) ?? false;
     const result = giftBase(
-      'code', 'Premium 兑换码', duration,
-      unclaimed ? '尚未领取' : '可查看兑换码',
+      'code', str('gift_code_title'), duration,
+      unclaimed ? str('gift_status_unclaimed') : str('gift_status_code_available'),
       formattedTextValue(content!['text'] as TdObject | undefined),
       content!['sticker'] as TdObject | undefined
     );
@@ -857,21 +856,22 @@ export function formatMsgContent(message: TdObject): MsgContent {
       (content!['unique_gift_number'] as number | undefined) ?? 0);
     const starCount = gift !== undefined
       ? Math.max(0, (gift['star_count'] as number | undefined) ?? 0) : 0;
-    let status = saved ? '已展示在个人资料' : '已收到';
+    let status = saved ? str('gift_status_on_profile') : str('gift_status_received');
     if (uniqueNumber > 0 || upgraded) {
-      status = uniqueNumber > 0 ? `珍藏编号 #${uniqueNumber}` : '已升级为珍藏礼物';
+      status = uniqueNumber > 0
+        ? str('gift_collectible_number', uniqueNumber) : str('gift_status_upgraded');
     }
     if (converted) {
-      status = '已兑换为星星';
+      status = str('gift_status_converted');
     }
     if (refunded) {
-      status = '已退款，不再可用';
+      status = str('gift_status_refunded');
     }
     const result = giftBase(
       'regular',
       gift !== undefined && ((gift['is_for_birthday'] as boolean | undefined) ?? false)
-        ? '生日礼物' : 'Telegram 礼物',
-      starCount > 0 ? `价值 ${starCount} 颗星星` : '一份特别礼物',
+        ? str('gift_birthday_title') : str('gift_regular_title'),
+      starCount > 0 ? plural('gift_worth_stars', starCount, starCount) : str('gift_special'),
       status,
       formattedTextValue(content!['text'] as TdObject | undefined),
       gift !== undefined ? (gift['sticker'] as TdObject | undefined) : undefined
@@ -890,25 +890,26 @@ export function formatMsgContent(message: TdObject): MsgContent {
       ? ((gift['is_burned'] as boolean | undefined) ?? false) : false;
     const transferred = (content!['was_transferred'] as boolean | undefined) ?? false;
     const saved = (content!['is_saved'] as boolean | undefined) ?? false;
-    let status = saved ? '已展示在个人资料' : '珍藏礼物';
+    let status = saved ? str('gift_status_on_profile') : str('gift_collectible_title');
     if ((content!['can_be_transferred'] as boolean | undefined) ?? false) {
-      status = '可转让的珍藏礼物';
+      status = str('gift_status_transferable');
     }
     if (transferred) {
-      status = '已转让给其他用户';
+      status = str('gift_status_transferred');
     }
     if (burned) {
-      status = '已用于合成其他礼物';
+      status = str('gift_status_burned');
     }
+    const collectible = str('gift_collectible_title');
     return giftBase(
       'collectible',
       gift !== undefined && ((gift['title'] as string | undefined) ?? '') !== ''
-        ? ((gift['title'] as string | undefined) ?? '珍藏礼物') : '珍藏礼物',
-      usdCents > 0 ? `估值 $${(usdCents / 100).toFixed(2)}`
-        : (number > 0 ? `珍藏编号 #${number}` : '独一无二的 Telegram 礼物'),
+        ? ((gift['title'] as string | undefined) ?? collectible) : collectible,
+      usdCents > 0 ? str('gift_valued_at', usd(usdCents))
+        : (number > 0 ? str('gift_collectible_number', number) : str('gift_unique')),
       status,
       model !== undefined && ((model['name'] as string | undefined) ?? '') !== ''
-        ? `款式：${(model['name'] as string | undefined) ?? ''}` : '',
+        ? str('gift_model', (model['name'] as string | undefined) ?? '') : '',
       model !== undefined ? (model['sticker'] as TdObject | undefined) : undefined
     );
   }
@@ -951,7 +952,7 @@ export function formatMsgContent(message: TdObject): MsgContent {
       'completed',
       (content!['winner_count'] as number | undefined) ?? 0,
       ((content!['is_star_giveaway'] as boolean | undefined) ?? false)
-        ? 'Telegram 星星' : 'Telegram Premium',
+        ? str('telegram_stars') : 'Telegram Premium',
       '', 0,
       (content!['unclaimed_prize_count'] as number | undefined) ?? 0,
       (content!['giveaway_message_id'] as number | undefined) ?? 0,
@@ -962,9 +963,9 @@ export function formatMsgContent(message: TdObject): MsgContent {
     const stars = Math.max(0, (content!['star_count'] as number | undefined) ?? 0);
     return giveawayBase(
       'prize', 1,
-      stars > 0 ? `${stars} 颗 Telegram 星星` : 'Telegram 星星',
+      stars > 0 ? plural('prize_stars', stars, stars) : str('telegram_stars'),
       (content!['is_unclaimed'] as boolean | undefined) ?? false
-        ? '奖品未被领取，已退回频道' : '恭喜，你获得了抽奖奖品',
+        ? str('giveaway_prize_returned') : str('giveaway_prize_won'),
       0, 0,
       (content!['giveaway_message_id'] as number | undefined) ?? 0,
       (content!['boosted_chat_id'] as number | undefined) ?? 0,

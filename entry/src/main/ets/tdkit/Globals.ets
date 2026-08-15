@@ -26,6 +26,7 @@ import {
   accountRegistry, TD_ACCOUNT_SWITCHING, TD_SESSION_EPOCH,
   TdAccountDirectories, TdAccountSummary
 } from './AccountRegistry';
+import { str } from '../util/strings';
 
 let client: TdClient | undefined = undefined;
 let auth: AuthService | undefined = undefined;
@@ -279,7 +280,7 @@ export function logoutCurrentTdAccount(): Promise<void> {
   );
   const currentAuth = auth;
   if (currentAuth === undefined) {
-    return Promise.reject(new Error('账号服务尚未就绪'));
+    return Promise.reject(new Error(str('gl_account_not_ready')));
   }
   AppStorage.setOrCreate(TD_ACCOUNT_SWITCHING, true);
   switchInFlight = currentAuth.logOut().then(async (): Promise<void> => {

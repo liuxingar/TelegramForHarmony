@@ -254,7 +254,7 @@ struct PowerUsagePage {
       }.width('100%');
 
       Row() {
-        Text(str('power_off')).fontSize(14)
+        Text($r('app.string.power_off')).fontSize(14)
           .fontColor(this.threshold === 0 ? COLOR_PRIMARY : COLOR_TEXT_SECONDARY);
         Blank();
         Row({ space: 5 }) {

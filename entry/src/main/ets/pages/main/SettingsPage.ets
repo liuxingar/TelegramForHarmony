@@ -685,7 +685,7 @@ export struct SettingsPage {
           .fontColor(['#E64646']);
       }
       Column({ space: 3 }) {
-        Text(str('settings_profile_failed'))
+        Text($r('app.string.settings_profile_failed'))
           .fontSize(17)
           .fontWeight(FontWeight.Medium)
           .fontColor(COLOR_TEXT_PRIMARY);

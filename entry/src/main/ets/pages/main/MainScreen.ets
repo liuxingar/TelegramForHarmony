@@ -199,7 +199,7 @@ export struct MainScreen {
       .width(32).height(32).borderRadius(16).padding(2)
       // A constant border width avoids a size jump when this tab is selected.
       .border({ width: 2, color: this.tab === 3 ? COLOR_PRIMARY : Color.Transparent });
-      Text(str('tab_profile')).fontSize(10)
+      Text($r('app.string.tab_profile')).fontSize(10)
         .fontColor(this.tab === 3 ? COLOR_PRIMARY : COLOR_TAB_UNSELECTED);
     }
     .layoutWeight(1).height('100%')

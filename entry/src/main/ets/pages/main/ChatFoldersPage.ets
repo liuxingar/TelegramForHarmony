@@ -497,8 +497,8 @@ struct ChatFoldersPage {
       Row() { Text('🏷️').fontSize(20); }.width(42).height(42).borderRadius(14)
         .justifyContent(FlexAlign.Center).backgroundColor('#169270CA');
       Column({ space: 3 }) {
-        Text(str('cf_tags')).fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
-        Text(str('cf_tags_sub')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
+        Text($r('app.string.cf_tags')).fontSize(16).fontWeight(FontWeight.Medium).fontColor(COLOR_TEXT_PRIMARY);
+        Text($r('app.string.cf_tags_sub')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY);
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
       Toggle({ type: ToggleType.Switch, isOn: this.tagsEnabled }).selectedColor(COLOR_PRIMARY)
         .enabled(this.operationKey === '')

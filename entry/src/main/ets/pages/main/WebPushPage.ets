@@ -257,7 +257,7 @@ struct WebPushPage {
                 .fontSize(13).fontColor(COLOR_PRIMARY)
                 .onClick((): void => { this.jsonExpanded = !this.jsonExpanded; });
             }.width('100%').padding({ left: 16, right: 16, top: 14 });
-            Text(('app.string.wp_keygen_note'))
+            Text($r('app.string.wp_keygen_note'))
               .fontSize(11).fontColor(COLOR_TEXT_SECONDARY).lineHeight(16)
               .width('100%').padding({ left: 16, right: 16, top: 6 });
 

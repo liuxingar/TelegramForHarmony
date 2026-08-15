@@ -78,6 +78,26 @@ for (const file of walkEts(ETS_ROOT)) {
   }
 }
 
+// --- 1a. every app.string./app.plural. literal is wrapped in $r() ------------
+//
+// `Text(('app.string.wp_keygen_note'))` compiles, and check 1b below is happy
+// because the key does appear as a literal — but ArkUI renders the qualifier
+// itself, so the screen reads "app.string.wp_keygen_note". Losing the `$r`
+// leaves a plain string that nothing else in the toolchain objects to. It
+// shipped once, from a scripted `str()` → `$r()` rewrite that dropped the
+// prefix.
+const QUALIFIED = /(?<!\$r\(\s{0,4})'app\.(string|plural)\.([A-Za-z0-9_]+)'/g;
+for (const file of walkEts(ETS_ROOT)) {
+  const rel = relFromEtsRoot(file);
+  const text = readFileSync(file, 'utf8');
+  QUALIFIED.lastIndex = 0;
+  let q;
+  while ((q = QUALIFIED.exec(text)) !== null) {
+    const line = text.slice(0, q.index).split('\n').length;
+    failures.push(`${rel}:${line} 'app.${q[1]}.${q[2]}' 没有包在 $r() 里，会被当普通字符串渲染`);
+  }
+}
+
 // --- 1b. every defined key is reachable from the code ------------------------
 //
 // The check above only sees literal call sites. Keys can also be reached

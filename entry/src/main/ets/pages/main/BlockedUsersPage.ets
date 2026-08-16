@@ -7,6 +7,7 @@ import {
   COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
 import { plural, str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const PAGE_LIMIT: number = 40;
 const CARD_RADIUS: number = 16;
@@ -33,6 +34,7 @@ interface PickerUser {
 @Entry
 @Component
 struct BlockedUsersPage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @State rows: BlockedRow[] = [];

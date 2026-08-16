@@ -776,7 +776,7 @@ export struct SettingsPage {
                 webmPath: this.statusEmojiPath, boxWidth: 22, boxHeight: 22, powerCategory: 'emojiStatus'
               });
             } else {
-              Image(`file://${this.statusEmojiPath}`).width(22).height(22).objectFit(ImageFit.Contain);
+              Image(`file://${this.statusEmojiPath}`).draggable(false).width(22).height(22).objectFit(ImageFit.Contain);
             }
           }
         }

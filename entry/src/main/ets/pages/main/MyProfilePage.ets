@@ -18,6 +18,7 @@ import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../u
 import { publicLink } from '../../util/telegramLink';
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
 import { plural, str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const CARD_BG: ResourceColor = $r('app.color.surface');
 const CARD_RADIUS: number = 14;
@@ -32,6 +33,7 @@ const PROFILE_LOAD_TIMEOUT_MS: number = 8000;
 @Preview
 @Component
 export struct MyProfilePage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @Prop active: boolean = false;
   onOpenSettings: () => void = (): void => {};
   @StorageProp('topSafeHeight') topSafe: number = 0;
@@ -1781,7 +1783,7 @@ export struct MyProfilePage {
       ForEach(items, (item: StoryItem) => {
         Stack({ alignContent: Alignment.BottomStart }) {
           if (item.thumbPath !== '') {
-            Image(item.thumbPath.startsWith('/') ? `file://${item.thumbPath}` : item.thumbPath)
+            Image(item.thumbPath.startsWith('/') ? `file://${item.thumbPath}` : item.thumbPath).draggable(false)
               .width(this.storyCell())
               .height(this.storyCell() * 1.33)
               .objectFit(ImageFit.Cover)
@@ -1904,7 +1906,7 @@ export struct MyProfilePage {
         webmPath: this.statusEmojiPath, boxWidth: 24, boxHeight: 24, powerCategory: 'emojiStatus'
       });
     } else {
-      Image(`file://${this.statusEmojiPath}`).width(24).height(24).objectFit(ImageFit.Contain);
+      Image(`file://${this.statusEmojiPath}`).draggable(false).width(24).height(24).objectFit(ImageFit.Contain);
     }
   }
 

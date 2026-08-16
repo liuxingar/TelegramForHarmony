@@ -8,6 +8,7 @@ import { COLOR_PRIMARY, COLOR_TEXT_SECONDARY, COLOR_TAB_SELECTED, COLOR_TAB_UNSE
 import { router } from '@kit.ArkUI';
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
 import { str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 interface TabSpec {
   key: string;
@@ -24,6 +25,7 @@ const FOLDER_SWITCH_DURATION: number = 250;
 @Preview
 @Component
 export struct ChatListPage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @State folders: FolderInfo[] = [];
   @State unreadMap: Map<string, number> = new Map();
   @State selectedIndex: number = 0;
@@ -125,6 +127,13 @@ export struct ChatListPage {
   }
 
   aboutToAppear(): void {
+    // 预热聊天详情页的模块图。首次 router.pushUrl 要现场加载并执行 ChatPage
+    // 及其依赖链（近万行的页面 + MessageBubble + lottie 等），这笔一次性成本
+    // 正是"第一次进聊天卡、之后都不卡"的来源。首页落地后空闲时提前把模块
+    // 拉起来，首次导航就只剩建页本身。
+    setTimeout((): void => {
+      import('../chat/ChatPage').catch((): void => { /* 预热失败无碍，首次导航照常加载 */ });
+    }, 1200);
     this.startClock();
     if (this.searchOpeningTimer !== -1) {
       clearTimeout(this.searchOpeningTimer);
@@ -248,6 +257,9 @@ export struct ChatListPage {
   }
 
   private tabs(): TabSpec[] {
+    // 读一次 langEpoch 建立依赖：否则「全部」这个 str() 文本要重启才换语言
+    // （文件夹名来自服务器，本就不翻译）。
+    void this.langEpoch;
     const specs: TabSpec[] = [];
     for (const f of this.folders) {
       specs.push({ key: `folder:${f.id}`, title: f.title });
@@ -408,7 +420,11 @@ export struct ChatListPage {
   topBar() {
     Row({ space: 2 }) {
       Column() {
-        Text('Telegram')
+        // The app's own name, from the resource rather than a literal — a
+        // rename should not mean hunting through the UI. It is also the one
+        // place users read the product name, so it must not say "Telegram":
+        // that is a trademark, and this is an unofficial client.
+        Text($r('app.string.app_name'))
           .fontSize(25).fontWeight(FontWeight.Bold).fontColor(COLOR_PRIMARY)
           .maxLines(1)
           .translate({ y: this.syncState === '' ? 7 : 0 })

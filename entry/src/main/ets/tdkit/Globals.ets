@@ -1,4 +1,5 @@
 import testNapi from 'libentry.so';
+import { fileIo as fs } from '@kit.CoreFileKit';
 import { TdClient } from './TdClient';
 import { AuthService, AuthStage } from './AuthService';
 import { UserStore } from '../store/UserStore';
@@ -57,10 +58,29 @@ export function initTdKit(context: common.Context): void {
   createRuntime(accountRegistry.activeSlotId());
 }
 
+// TDLib expects <files>/temp to be its download scratch DIRECTORY. On one
+// device a 1.9MB regular file appeared at exactly that path during first
+// login, and from then on every download failed with ENOTDIR ("Not a
+// directory") — images never loaded again for that account. Whatever wrote
+// it, the repair is the same: clear anything that occupies the path as a
+// plain file before TDLib initializes, so it can mkdir its scratch space.
+function repairTdTempDirectory(filesDirectory: string): void {
+  const tempPath = `${filesDirectory}/temp`;
+  try {
+    if (fs.accessSync(tempPath) && !fs.statSync(tempPath).isDirectory()) {
+      fs.unlinkSync(tempPath);
+      console.error(`Globals: removed a plain file squatting on ${tempPath}`);
+    }
+  } catch (e) {
+    console.error(`Globals.repairTdTempDirectory failed: ${e}`);
+  }
+}
+
 function createRuntime(slotId: string): void {
   runtimeReady = false;
   const directories: TdAccountDirectories = accountRegistry.directories(baseFilesDir, slotId);
   activeTdFilesDirectory = directories.filesDirectory;
+  repairTdTempDirectory(directories.filesDirectory);
   client = new TdClient({ init: testNapi.tdInit, send: testNapi.tdSend });
   auth = new AuthService(client, directories.databaseDirectory, directories.filesDirectory);
   users = new UserStore(client);

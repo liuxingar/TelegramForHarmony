@@ -14,8 +14,13 @@
 // string/Resource mismatch, so the $r() calls that should stay are untouched.
 import { execFileSync } from 'node:child_process';
 
-const HVIGOR = process.env.HVIGORW_JS
-  ?? 'D:/Works/DevEco Studio/tools/hvigor/bin/hvigorw.js';
+// Point HVIGORW_JS at your DevEco install, e.g.
+//   <DevEco Studio>/tools/hvigor/bin/hvigorw.js
+const HVIGOR = process.env.HVIGORW_JS ?? '';
+if (HVIGOR === '') {
+  console.error('set HVIGORW_JS to the hvigorw.js inside your DevEco Studio install');
+  process.exit(2);
+}
 
 let output = '';
 try {

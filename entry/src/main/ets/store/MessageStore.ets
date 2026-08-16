@@ -3,6 +3,7 @@ import { TdObject, TdRequest, TdError } from '../tdkit/TdTypes';
 import { UserStore } from './UserStore';
 import { MessageEntry, cloneMessage, buildMessageEntry, commentInfoFromInteraction, CommentInfo, reactionsFromInteraction, ReactionInfo, parseInlineKeyboard, refreshSystemUserLabel } from './MessageEntry';
 import { ReplyKeyboard, parseReplyKeyboard } from './ReplyKeyboard';
+import { publishSenderAvatar } from '../util/senderAvatarChannel';
 import { formatUserStatus } from '../util/formatUserStatus';
 import { formatPreview } from '../util/formatPreview';
 import { formatMemberCount } from '../util/formatMemberCount';
@@ -25,6 +26,23 @@ const REPLY_KB_PROBE_LIMIT: number = 500;
 // Re-request a still-missing thumbnail at most this often (stalled downloads
 // whose bounded retries were exhausted by a transient network failure).
 const THUMB_REKICK_MS: number = 8000;
+
+// 被回复消息的预览快照（发送者 + 摘要）。
+interface RepliedPreview {
+  senderName: string;
+  text: string;
+}
+// 一帧的量级：下载进度的发布合并到这个窗口里，见 notifySoon()。
+const NOTIFY_COALESCE_MS: number = 16;
+// 初始历史发布后的安置期用更宽的合并窗。首页 30 行刚建好的 100ms 内，头像
+// 回填、回复引用、缩略图会各到一批——16ms 的窗口把它们放成两三波，每波都是
+// 近乎整页的 CHANGE 重建（实测每波 27-30 行、各吃一个掉帧）。150ms 把首批
+// 解析并成一波；安置期一过恢复 16ms，日常更新照旧灵敏。
+const INITIAL_SETTLE_COALESCE_MS: number = 150;
+const INITIAL_SETTLE_WINDOW_MS: number = 400;
+// 首屏历史页的条数。30 条一帧建完是实测的首帧掉帧来源；12 条先铺满屏幕，
+// 剩余由短页补链/滚动分页在后续帧补齐。
+const INITIAL_FIRST_PAGE: number = 12;
 
 function pollVoteErrorText(raw: string): string {
   const normalized = raw.trim().toUpperCase();
@@ -73,6 +91,7 @@ export class MessageStore {
   private pinnedIds: number[] = [];
   private pinnedPreviews: string[] = [];
   private pinnedLoadState: string = 'loading';
+  private coalesceTimer: number = -1;
   private pinnedResolveSeq: number = 0;
   private msgSubs: MsgListener[] = [];
   private subSubs: SubtitleListener[] = [];
@@ -109,6 +128,9 @@ export class MessageStore {
   private historyPendingKind: string = 'history';
   private isGroupFlag: boolean = false;
   private repliedFetched: number[] = [];
+  // Reply previews already fetched, kept so a window replacement can restore
+  // them without a second request (repliedFetched would refuse one anyway).
+  private repliedPreview: Map<number, RepliedPreview> = new Map();
   private isChannel: boolean = false;
   private chatPhotoFileId: number = 0;
   private chatPhotoPath: string = '';
@@ -269,6 +291,16 @@ export class MessageStore {
     this.sendSimple('openChat');
     this.chatOpened = true;
     this.readAllBadges();
+    // The suspended stretch is a blind spot: the OS freezes the process, the
+    // connection drops, and messages delivered meanwhile are synced by TDLib
+    // without ever passing through updateNewMessage. The window then holds
+    // [old tail] + [messages arriving after resume] with the in-between pages
+    // simply absent — rendered as a seamless jump (10:46 followed by 10:57).
+    // Refetch the newest page; onHistory's continuity check decides whether it
+    // merges into the window or replaces it.
+    if (this.initialHistoryState === 'ready' && !this.hasMoreNewer) {
+      this.loadHistory(0);
+    }
   }
 
   private chatSuspended: boolean = false;
@@ -331,13 +363,17 @@ export class MessageStore {
       this.upsert(buildMessageEntry(m, this.users));
       this.requestPhotos();
       this.resolveSenderAvatars();
-      this.notify();
+      this.notifySoon();
     }).catch((e: TdError) => {
       console.error(`MessageStore.fetchThreadRoot failed: ${e.message}`);
     });
   }
 
   close(): void {
+    if (this.coalesceTimer !== -1) {
+      clearTimeout(this.coalesceTimer);
+      this.coalesceTimer = -1;
+    }
     this.pinnedResolveSeq++;
     this.kbHistoryProbeSeq++;
     this.kbHistoryProbeRunning = false;
@@ -777,6 +813,11 @@ export class MessageStore {
     });
   }
 
+  // Anchor of the one allowed cache-warm retry — see the comment in loadNewer.
+  // Reset implicitly: a successful page moves newestId, and the next stall (if
+  // any) is a different anchor.
+  private newerRetryAnchor: number = 0;
+
   // Load the next (newer) page — only meaningful after a loadAround jump into
   // the middle of history left unloaded messages below the window.
   loadNewer(): boolean {
@@ -800,7 +841,21 @@ export class MessageStore {
         }
       }
       if (maxId <= newestId) {
-        this.hasMoreNewer = false; // nothing newer came back — we've reached the live tail
+        // TDLib's classic negative-offset trap: the FIRST getChatHistory with
+        // offset < 0 is often served from the local cache only and returns
+        // nothing newer even though newer messages exist server-side. Treating
+        // that as "reached the live tail" froze newer-paging permanently —
+        // the "unread messages don't fully load" report. The first call warms
+        // TDLib's cache, so ask ONCE more from the same anchor; only a second
+        // empty answer means the tail is real.
+        if (this.newerRetryAnchor !== newestId) {
+          this.newerRetryAnchor = newestId;
+          this.newerLoadState = 'idle';
+          this.onHistory(res, 'newer');
+          this.loadNewer();
+          return;
+        }
+        this.hasMoreNewer = false;
         this.newerLoadState = 'end';
       } else {
         this.newerLoadState = 'idle';
@@ -843,7 +898,7 @@ export class MessageStore {
     return this.client.send(req).then((m: TdObject): void => {
       this.upsert(buildMessageEntry(m, this.users));
       this.resolveReplies();
-      this.notify();
+      this.notifySoon();
     });
   }
 
@@ -862,7 +917,7 @@ export class MessageStore {
     return this.client.send(req).then((m: TdObject): void => {
       this.upsert(buildMessageEntry(m, this.users));
       this.resolveReplies();
-      this.notify();
+      this.notifySoon();
     });
   }
 
@@ -936,7 +991,7 @@ export class MessageStore {
       // sends belong in the visible history.
       if (sendDate <= 0) {
         this.upsert(buildMessageEntry(m, this.users));
-        this.notify();
+        this.notifySoon();
       }
     });
   }
@@ -1029,7 +1084,7 @@ export class MessageStore {
     req['input_message_content'] = content;
     return this.client.send(req, 30000).then((m: TdObject): void => {
       this.upsert(buildMessageEntry(m, this.users));
-      this.notify();
+      this.notifySoon();
     });
   }
 
@@ -1055,7 +1110,7 @@ export class MessageStore {
     return this.client.send(req).then((m: TdObject): void => {
       this.upsert(buildMessageEntry(m, this.users));
       this.resolveReplies();
-      this.notify();
+      this.notifySoon();
     });
   }
 
@@ -1120,7 +1175,7 @@ export class MessageStore {
       // resolution as history/new-message entries. Omitting this left a newly
       // sent sticker on its loading ring until the chat was reopened.
       this.requestPhotos();
-      this.notify();
+      this.notifySoon();
     }).catch((e: TdError) => {
       console.error(`MessageStore.sendDocument failed: ${e.message}`);
     });
@@ -1140,7 +1195,7 @@ export class MessageStore {
     return this.client.send(req).then((m: TdObject): number => {
       this.upsert(buildMessageEntry(m, this.users));
       this.requestPhotos();
-      this.notify();
+      this.notifySoon();
       return (m['id'] as number | undefined) ?? 0;
     }).catch((e: TdError): number => {
       console.error(`MessageStore.${tag} failed: ${e.message}`);
@@ -1366,7 +1421,7 @@ export class MessageStore {
       }
       this.resolveReplies();
       this.requestPhotos();
-      this.notify();
+      this.notifySoon();
     }).catch((e: TdError): Promise<void> => {
       console.error(`MessageStore.sendMedia failed: ${e.message}`);
       return Promise.reject(e);
@@ -1457,6 +1512,12 @@ export class MessageStore {
 
   private loadHistory(fromId: number): void {
     const req = this.historyRequest(fromId, 0);
+    // 首屏页刻意取小。实测把通知风暴整个压掉后首帧依然掉帧——瓶颈是一帧里
+    // 构建 30 个 MessageBubble 本身。12 条铺满一屏出头；'latest' 的短页补链
+    // （见 onHistory）随即用增量前插把整页补齐，mvcp 保锚点，肉眼无感。
+    if (fromId === 0 && this.initialHistoryState === 'loading') {
+      req['limit'] = Math.min(INITIAL_FIRST_PAGE, this.historyPageSize);
+    }
     this.client.send(req).then((res: TdObject) => this.onHistory(res, fromId === 0 ? 'latest' : 'history'))
       .catch((e: TdError) => {
       const code = (e as TdError).code;
@@ -1478,6 +1539,10 @@ export class MessageStore {
 
   private onHistory(res: TdObject, kind: string = 'history'): void {
     const arr = (res['messages'] as TdObject[] | undefined) ?? [];
+    if (this.initialHistoryState !== 'ready' && (kind === 'latest' || kind === 'around')) {
+      // 首页即将发布：接下来的解析回填进入宽合并窗（见 notifySoon）。
+      this.initialSettleStart = Date.now();
+    }
     this.initialHistoryState = 'ready';
     this.initialHistoryError = '';
     if (kind === 'latest') {
@@ -1495,7 +1560,30 @@ export class MessageStore {
     // arbitrary around/older page here can resurrect a stale keyboard that a
     // newer remove marker already superseded.
     this.ensureKeyboardHistoryProbe();
-    this.upsertBatch(arr.map((m: TdObject): MessageEntry => buildMessageEntry(m, this.users)));
+    const entries: MessageEntry[] = arr.map((m: TdObject): MessageEntry => buildMessageEntry(m, this.users));
+    // Continuity check for the newest page. If it does not overlap the loaded
+    // window — its oldest id is newer than everything we hold — then the pages
+    // between were never fetched (they were delivered while the process was
+    // suspended). Merging would render the two runs seamlessly glued with the
+    // middle silently missing, so replace the window instead; older paging
+    // refills downward from the new tail. Skipped when the window's newest id
+    // is a pending outgoing message (huge local id): replacement would drop an
+    // unsent message, and that corner merges as before.
+    if (kind === 'latest' && entries.length > 0 && this.messages.length > 0) {
+      let pageOldest: number = entries[0].id;
+      for (const e of entries) {
+        if (e.id < pageOldest) {
+          pageOldest = e.id;
+        }
+      }
+      const windowNewest: number = this.messages[this.messages.length - 1].id;
+      if (pageOldest > windowNewest) {
+        this.messages = [];
+        this.hasMoreOlder = true;
+        this.olderLoadState = 'idle';
+      }
+    }
+    this.upsertBatch(entries);
     if (this.messages.length > 0) {
       this.oldestId = this.messages[0].id;
     }
@@ -1524,6 +1612,68 @@ export class MessageStore {
       this.historyPendingKind = kind;
     }
     this.acknowledgeInitialJoinService();
+  }
+
+  // --- whole-chat translation ------------------------------------------------
+  //
+  // TranslationService owns the cache and the request queue; these methods own
+  // the write path into the entries, because only the store can raise the
+  // CHANGE notifications the list renders from. translatedText feeds the row's
+  // content signature (mutableSig), so a translation landing rebuilds exactly
+  // that row.
+
+  applyTranslation(messageId: number, lang: string, text: string): void {
+    this.patch(messageId, (c: MessageEntry): void => {
+      c.translatedText = text;
+      c.translatedLang = lang;
+    });
+  }
+
+  setTranslationHidden(messageId: number, hidden: boolean): void {
+    this.patch(messageId, (c: MessageEntry): void => {
+      c.translationHidden = hidden;
+    });
+  }
+
+  // Turning whole-chat translation off strips the rendered translations in one
+  // pass; the service keeps its cache, so turning it back on is instant.
+  clearTranslations(): void {
+    let changed = false;
+    const next = this.messages.map((m: MessageEntry): MessageEntry => {
+      if (m.translatedText === '' && !m.translationHidden) {
+        return m;
+      }
+      const c = cloneMessage(m);
+      c.translatedText = '';
+      c.translatedLang = '';
+      c.translationHidden = false;
+      changed = true;
+      return c;
+    });
+    if (changed) {
+      this.messages = next;
+      this.notifySoon();
+    }
+  }
+
+  // Message ids in the given display range worth translating: visible text,
+  // no translation for the current target yet. The caller feeds these to
+  // TranslationService.
+  translationCandidates(fromId: number, toId: number, lang: string): MessageEntry[] {
+    const out: MessageEntry[] = [];
+    for (const m of this.messages) {
+      if (m.id < fromId || m.id > toId) {
+        continue;
+      }
+      if (m.text === '' || m.contentType === 'system' || m.contentType === 'hidden') {
+        continue;
+      }
+      if (m.translatedText !== '' && m.translatedLang === lang) {
+        continue;
+      }
+      out.push(m);
+    }
+    return out;
   }
 
   // Graft chat.last_message into the timeline when history alone didn't reach
@@ -1638,7 +1788,7 @@ export class MessageStore {
     this.resolveCommentAvatars();
     // New incoming messages are marked read only when they become visible
     // (driven by markViewed from the page), not on arrival.
-    this.notify();
+    this.notifySoon();
   }
 
   private onSendSucceeded(u: TdObject): void {
@@ -1655,7 +1805,7 @@ export class MessageStore {
     this.upsert(buildMessageEntry(m, this.users));
     this.resolveReplies();
     this.requestPhotos();
-    this.notify();
+    this.notifySoon();
   }
 
   private onSendFailed(u: TdObject): void {
@@ -1880,7 +2030,7 @@ export class MessageStore {
       return next;
     });
     if (changed) {
-      this.notify();
+      this.notifySoon();
     }
   }
 
@@ -1891,7 +2041,7 @@ export class MessageStore {
     const removeIds = (u['message_ids'] as number[] | undefined) ?? [];
     const set = new Set<number>(removeIds);
     this.messages = this.messages.filter((e: MessageEntry) => !set.has(e.id));
-    this.notify();
+    this.notifySoon();
     if (this.pinnedIds.some((id: number): boolean => set.has(id))) {
       this.removePinnedIds(set);
       this.resolvePinned();
@@ -1947,7 +2097,7 @@ export class MessageStore {
       return;
     }
     this.lastReadOutboxId = (u['last_read_outbox_message_id'] as number | undefined) ?? 0;
-    this.notify(); // notify() applies the read marking centrally
+    this.notifySoon(); // notify() applies the read marking centrally
   }
 
   // Outgoing messages at or below the outbox-read boundary become 'read'.
@@ -1988,7 +2138,7 @@ export class MessageStore {
       return c;
     });
     if (changed) {
-      this.notify();
+      this.notifySoon();
     }
   }
 
@@ -2023,7 +2173,7 @@ export class MessageStore {
       return next;
     });
     if (changed) {
-      this.notify();
+      this.notifySoon();
     }
   }
 
@@ -2116,7 +2266,7 @@ export class MessageStore {
       return c;
     });
     if (changed) {
-      this.notify();
+      this.notifySoon();
     }
   }
 
@@ -2179,7 +2329,7 @@ export class MessageStore {
       return c;
     });
     if (changed) {
-      this.notify();
+      this.notifySoon();
     }
   }
 
@@ -2294,7 +2444,7 @@ export class MessageStore {
       this.customEmojiFailed.delete(ceId);
       if (changed) {
         this.requestPhotos(); // kick thumbnail + animated source downloads
-        this.notify();
+        this.notifySoon();
       }
     }).catch((err: TdError) => {
       console.error(`MessageStore.getCustomEmojiStickers(${ceId}) failed: ${err.message}`);
@@ -2483,7 +2633,7 @@ export class MessageStore {
       return c;
     });
     if (changed) {
-      this.notify();
+      this.notifySoon();
     }
   }
 
@@ -2631,7 +2781,7 @@ export class MessageStore {
     });
     if (changed) {
       this.messages = next;
-      this.notify();
+      this.notifySoon();
     }
   }
 
@@ -2771,7 +2921,9 @@ export class MessageStore {
         this.thumbAttempts.delete(id);
         this.thumbLastKick.delete(id);
       }
-      this.notify();
+      // The hottest path of all during a fling: every row entering the viewport
+      // downloads its thumbnail. Coalesced, see notifySoon().
+      this.notifySoon();
       return;
     }
 
@@ -2879,7 +3031,7 @@ export class MessageStore {
     });
     if (changed) {
       this.messages = next;
-      this.notify();
+      this.notifySoon();
     }
   }
 
@@ -2954,7 +3106,7 @@ export class MessageStore {
     });
     if (changed) {
       this.messages = next;
-      this.notify();
+      this.notifySoon();
     }
   }
 
@@ -2969,25 +3121,17 @@ export class MessageStore {
     });
     if (changed) {
       this.messages = next;
-      this.notify();
+      this.notifySoon();
     }
   }
 
+  // Through the side channel, NOT by patching entries. Writing the path into
+  // every entry changed every row's content key the moment a group's avatars
+  // resolved — a full-page rebuild (`change × 31`) and a dropped frame ~0.7s
+  // after every first entry. The bubbles' avatar views subscribe to the
+  // channel and swap the image in place instead.
   private applySenderPath(key: string, path: string): void {
-    let changed = false;
-    const next = this.messages.map((e: MessageEntry) => {
-      if (!e.isOutgoing && this.senderKey(e.senderId, e.senderIsUser) === key && e.senderAvatarPath !== path) {
-        changed = true;
-        const c = cloneMessage(e);
-        c.senderAvatarPath = path;
-        return c;
-      }
-      return e;
-    });
-    if (changed) {
-      this.messages = next;
-      this.notify();
-    }
+    publishSenderAvatar(key, path);
   }
 
   // --- shared-contact avatars ---
@@ -3039,7 +3183,7 @@ export class MessageStore {
       return c;
     });
     if (changed) {
-      this.notify();
+      this.notifySoon();
     }
   }
 
@@ -3090,7 +3234,7 @@ export class MessageStore {
     });
     if (changed) {
       this.messages = next;
-      this.notify();
+      this.notifySoon();
     }
   }
 
@@ -3202,8 +3346,11 @@ export class MessageStore {
     const hadMoreNewer: boolean = this.hasMoreNewer;
     this.hasMoreNewer = true;
     this.newerLoadState = 'idle';
-    const req = this.historyRequest(messageId, -15);
-    req['limit'] = 30;
+    // 首屏（未读锚点定位）同样取小窗：见 loadHistory 里的注释。之后的滚动
+    // 分页（loadOlder/loadNewer）把两侧补齐。会话中途的跳转维持整页。
+    const initial: boolean = this.initialHistoryState === 'loading';
+    const req = this.historyRequest(messageId, initial ? -7 : -15);
+    req['limit'] = initial ? 14 : 30;
     this.client.send(req).then((res: TdObject): void => {
       this.onHistory(res, 'around');
       if (onComplete !== undefined) {
@@ -3668,6 +3815,17 @@ export class MessageStore {
       }
       const target = this.messages.find((x: MessageEntry) => x.id === e.replyToMessageId);
       if (target === undefined) {
+        // 之前拉过的先用缓存补上。loadAround 会整体替换窗口、条目重建，
+        // replyText 又变空——而 repliedFetched 记着"已经拉过"，于是请求被挡、
+        // 引用块永远空着（点引用跳过去再划回来就必现）。缓存让重建后的条目
+        // 不用重新请求就能恢复。
+        const cached = this.repliedPreview.get(e.replyToMessageId);
+        if (cached !== undefined) {
+          const restored = cloneMessage(e);
+          restored.replySenderName = cached.senderName;
+          restored.replyText = cached.text;
+          return restored;
+        }
         // 原消息不在已加载窗口里 —— 拉一次，否则引用块永远是空的。
         if (missing.indexOf(e.replyToMessageId) < 0) {
           missing.push(e.replyToMessageId);
@@ -3702,6 +3860,9 @@ export class MessageStore {
       if (preview === '' && entry.senderName === '') {
         return;
       }
+      // Remember it: the window can be replaced (loadAround) any number of
+      // times, and the fetch guard would refuse to ask again.
+      this.repliedPreview.set(messageId, { senderName: entry.senderName, text: preview });
       this.messages = this.messages.map((e: MessageEntry): MessageEntry => {
         if (e.replyToMessageId !== messageId || e.replyText !== '') {
           return e;
@@ -3711,7 +3872,7 @@ export class MessageStore {
         c.replyText = preview;
         return c;
       });
-      this.notify();
+      this.notifySoon();
     }).catch((e: TdError): void => {
       console.error(`MessageStore.getMessage(reply ${messageId}) failed: ${e.message}`);
     });
@@ -3837,7 +3998,7 @@ export class MessageStore {
     const next = this.messages.slice();
     next[idx] = c;
     this.messages = next;
-    this.notify();
+    this.notifySoon();
   }
 
   // Telegram may reuse one file id for forwards or repeated media. Keep every
@@ -3858,8 +4019,48 @@ export class MessageStore {
       return c;
     });
     if (changed) {
-      this.notify();
+      this.notifySoon();
     }
+  }
+
+  // Coalesced publish for download-progress updates.
+  //
+  // TDLib emits updateFile many times a second per downloading file, and every
+  // publish makes ChatPage re-collapse the WHOLE loaded message list to rebuild
+  // its row keys — a ~60-field signature per message, with loops over poll
+  // options, reactions, buttons and text entities. During a fling, thumbnails
+  // for the rows coming into view are downloading, so that ran continuously on
+  // the UI thread and showed up as dropped frames.
+  //
+  // One publish per frame instead. A progress ring that advances at 60Hz rather
+  // than whatever rate the network happens to produce is indistinguishable; the
+  // whole-list rebuild is not. Only file progress goes through here — pagination
+  // and initial-history transitions still publish immediately, because ChatPage
+  // anchors scroll position on them.
+  // The ONLY publication path for plain 'update' notifications. Every bare
+  // this.notify() used to publish immediately, and page entry is exactly when
+  // they cluster: avatars, reply quotes, forward titles and thumbnails all
+  // resolve within the first ~30ms, which used to mean ~10 dataset passes and
+  // every freshly built row rebuilt three or four times — the measured
+  // first-entry jank. One frame of coalescing collapses the storm; kinds with
+  // ordering semantics ('latest'/'around'/...) still go through notify(kind)
+  // directly.
+  // 初始历史落地的时刻；其后 INITIAL_SETTLE_WINDOW_MS 内视为安置期。
+  private initialSettleStart: number = 0;
+
+  private notifySoon(): void {
+    if (this.coalesceTimer !== -1) {
+      return;
+    }
+    // 安置期内所有 'update' 发布被整体压到窗口末尾一次放行：进页后首屏刚
+    // 建完的那一秒完全不做行重建，头像/引用/缩略图在 1 秒末一波补齐。
+    // （150ms 滚动窗的版本仍出现 2 波近整页重建；压到单次是当前形态。）
+    const remaining: number = this.initialSettleStart > 0
+      ? this.initialSettleStart + INITIAL_SETTLE_WINDOW_MS - Date.now() : 0;
+    this.coalesceTimer = setTimeout((): void => {
+      this.coalesceTimer = -1;
+      this.notify();
+    }, remaining > 0 ? remaining : NOTIFY_COALESCE_MS);
   }
 
   private notify(kind: string = 'update'): void {

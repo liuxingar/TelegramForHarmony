@@ -4,6 +4,7 @@ import {
   VideoNoteRecorder, VideoNoteOpenResult, VIDEO_NOTE_MAX_SECONDS
 } from '../../services/VideoNoteRecorder';
 import { str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 type VideoNotePhase = 'opening' | 'ready' | 'recording' | 'sending' | 'error';
 
@@ -19,6 +20,7 @@ const MIN_RECORD_MS: number = 800;
 // 只负责采集，产出的文件路径交给调用方去发消息。
 @Component
 export struct VideoNoteRecorderView {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   onCaptured: (path: string, durationSec: number, length: number) => void =
     (): void => {};
   onClose: () => void = (): void => {};

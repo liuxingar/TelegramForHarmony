@@ -37,12 +37,15 @@ export function appLanguages(): AppLanguage[] {
   return [
     { tag: LANGUAGE_SYSTEM, label: str('language_system') },
     { tag: 'zh-Hans', label: '简体中文' }, // i18n-exempt: endonym, never translated
+    { tag: 'zh-Hant', label: '繁體中文' }, // i18n-exempt: endonym, never translated
     { tag: 'en-US', label: 'English' }
   ];
 }
 
 export function supportedLanguageTags(): string[] {
-  return ['zh-Hans', 'en-US'];
+  return appLanguages()
+    .filter((item: AppLanguage): boolean => item.tag !== LANGUAGE_SYSTEM)
+    .map((item: AppLanguage): string => item.tag);
 }
 
 // Which of the listed languages the system language actually resolves to. Used

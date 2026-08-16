@@ -33,6 +33,9 @@ cd "$ROOT"
 # resource reference should not wait behind a two-minute test build.
 NODE_BIN="${DEVECO_NODE_HOME}/bin/node"
 [ -x "$NODE_BIN" ] || NODE_BIN="${DEVECO_NODE_HOME}/node"
+# Windows: the bundled node is node.exe, and bare `node` is usually not on PATH,
+# so without this the gate "fails" for want of an interpreter.
+[ -x "$NODE_BIN" ] || NODE_BIN="${DEVECO_NODE_HOME}/node.exe"
 [ -x "$NODE_BIN" ] || NODE_BIN="node"
 if ! "$NODE_BIN" scripts/i18n-check.mjs; then
   echo ""

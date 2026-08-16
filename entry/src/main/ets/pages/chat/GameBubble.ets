@@ -75,7 +75,7 @@ export struct GameBubble {
   private cover() {
     Stack() {
       if (this.photoPath !== '') {
-        Image(this.photoPath.startsWith('/') ? `file://${this.photoPath}` : this.photoPath)
+        Image(this.photoPath.startsWith('/') ? `file://${this.photoPath}` : this.photoPath).draggable(false)
           .width('100%').height(116)
           .objectFit(ImageFit.Cover)
           .transition(TransitionEffect.OPACITY.animation({

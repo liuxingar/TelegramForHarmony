@@ -1,8 +1,10 @@
+import { fileIo } from '@kit.CoreFileKit';
 import { TdClient } from '../tdkit/TdClient';
 import { TdObject, TdRequest, TdError } from '../tdkit/TdTypes';
 import { ChatStore } from './ChatStore';
 import { ChatThemeStore } from './ChatThemeStore';
 import { fillColorsOf, objectOrNull } from '../util/backgroundPresentation';
+import { gunzipTgs } from '../util/gunzipTgs';
 
 // Everything the chat surface needs to paint its background. One immutable
 // snapshot instead of the nine separate page state variables this replaces.
@@ -29,6 +31,14 @@ export function emptyChatBackground(): ChatBackgroundState {
 }
 
 type Listener = (state: ChatBackgroundState) => void;
+
+// Inflated .tgv → .svg, remembered for the process.
+//
+// A fresh ChatBackgroundStore is constructed for every chat that opens, so
+// without this each open pays a fileIo.access at best, and a gunzip plus a full
+// file write whenever the cached .svg is gone. Both sat on the path between the
+// tap and the first frame of the chat.
+const inflatedPatterns: Map<string, string> = new Map();
 
 // Resolves the background for one open chat, following the same precedence the
 // official client uses: the chat's own background → its theme's background →
@@ -222,21 +232,54 @@ export class ChatBackgroundStore {
     return entry !== undefined && (entry.background !== null || entry.themeName !== '');
   }
 
-  // The image for a background: a pattern prefers its thumbnail, everything
-  // else uses the full document.
-  private documentFile(background: TdObject, pattern: boolean): TdObject | null {
+  // The image for a background is always the full document.
+  //
+  // Patterns used to take the thumbnail instead, and that is what made them
+  // render at the wrong scale: the thumbnail is a picker-sized raster of the
+  // whole motif sheet, so stretching it across the screen scales the motif up by
+  // whatever the viewport/thumbnail ratio happens to be. No objectFit fixes a
+  // source that is already the wrong thing. The real document is a .tgv —
+  // gzipped SVG — which inflateIfPattern() unpacks below; being a vector it
+  // scales exactly.
+  private documentFile(background: TdObject): TdObject | null {
     const document = objectOrNull(background['document']);
     if (document === null) {
       return null;
     }
-    if (pattern) {
-      const thumbnail = objectOrNull(document['thumbnail']);
-      const thumbnailFile = thumbnail !== null ? objectOrNull(thumbnail['file']) : null;
-      if (thumbnailFile !== null) {
-        return thumbnailFile;
-      }
-    }
     return objectOrNull(document['document']);
+  }
+
+  // Pattern documents arrive as .tgv (gzipped SVG), which ArkUI's Image cannot
+  // read. Inflate once next to the download and hand back the .svg path; the
+  // file is regenerated if TDLib's cache ever drops it.
+  private async inflateIfPattern(path: string): Promise<string> {
+    if (!path.endsWith('.tgv')) {
+      return path;
+    }
+    const memo = inflatedPatterns.get(path);
+    if (memo !== undefined) {
+      return memo;
+    }
+    const svgPath = `${path}.svg`;
+    try {
+      if (await fileIo.access(svgPath)) {
+        inflatedPatterns.set(path, svgPath);
+        return svgPath;
+      }
+      const svg = await gunzipTgs(path);
+      if (svg === '') {
+        return '';
+      }
+      const file = await fileIo.open(svgPath,
+        fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC);
+      await fileIo.write(file.fd, svg);
+      await fileIo.close(file);
+      inflatedPatterns.set(path, svgPath);
+      return svgPath;
+    } catch (e) {
+      console.error(`ChatBackgroundStore.inflateIfPattern(${path}) failed: ${e}`);
+      return '';
+    }
   }
 
   private localPathOf(file: TdObject): string {
@@ -255,8 +298,22 @@ export class ChatBackgroundStore {
     }
     const path: string = this.localPathOf(file);
     if (path !== '' && path !== this.state.path) {
-      this.patchPath(path);
+      this.usePath(path, id);
     }
+  }
+
+  // Inflation is async, so a background resolved in the meantime must win:
+  // fileId is re-checked before the state is touched.
+  private usePath(path: string, id: number): void {
+    if (!path.endsWith('.tgv')) {
+      this.patchPath(path);
+      return;
+    }
+    this.inflateIfPattern(path).then((usable: string): void => {
+      if (usable !== '' && id === this.fileId) {
+        this.patchPath(usable);
+      }
+    });
   }
 
   private requestFile(file: TdObject): void {
@@ -268,7 +325,7 @@ export class ChatBackgroundStore {
     const localPath: string = this.localPathOf(file);
     if (localPath !== '') {
       console.info(`[ChatBackground] chat=${this.chatId} file=${id} cached=true`);
-      this.patchPath(localPath);
+      this.usePath(localPath, id);
       return;
     }
     console.info(`[ChatBackground] chat=${this.chatId} file=${id} download=true`);
@@ -326,7 +383,7 @@ export class ChatBackgroundStore {
     const colors: string[] = fillColorsOf(fill);
     const angle: number = fill !== null
       ? ((fill['rotation_angle'] as number | undefined) ?? 180) : 180;
-    const file = this.documentFile(background, pattern);
+    const file = this.documentFile(background);
     const id: number = file !== null ? ((file['id'] as number | undefined) ?? 0) : 0;
     console.info(
       `[ChatBackground] chat=${this.chatId} type=${typeName} colors=${colors.length} file=${id}`
@@ -420,4 +477,29 @@ export class ChatBackgroundStore {
     this.patchBubbleColor(bubbleColors.length > 0 ? bubbleColors[0] : '');
     this.applyBackground(settings !== null ? objectOrNull(settings['background']) : null);
   }
+}
+
+// Resolve the account-default background once at startup so the first chat that
+// opens finds the file downloaded and the pattern already inflated, instead of
+// paying for both between the tap and the first frame.
+//
+// chatId 0 matches no chat, so the per-chat updates this store subscribes to
+// never fire for it and it settles on the account default — exactly what most
+// chats resolve to anyway. It is closed straight after; the work it warms lives
+// in TDLib's file cache and in inflatedPatterns, both process-wide.
+export function preloadDefaultChatBackground(
+  client: TdClient, chats: ChatStore, themes: ChatThemeStore, isDarkMode: () => boolean,
+  onResolved: (state: ChatBackgroundState) => void = (): void => {}
+): void {
+  const store = new ChatBackgroundStore(client, chats, themes, isDarkMode);
+  const unsub = store.subscribe((state: ChatBackgroundState): void => {
+    // A pure-gradient background is fully resolved with no file at all, so
+    // waiting for a path would leave those unrasterised forever.
+    if (state.path !== '' || state.colors.length > 0) {
+      unsub();
+      store.close();
+      onResolved(state);
+    }
+  });
+  store.open(0);
 }

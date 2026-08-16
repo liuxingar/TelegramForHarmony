@@ -10,6 +10,7 @@ import {
 } from '../../util/theme';
 import { str } from '../../util/strings';
 import { fullDate } from '../../util/intlFormat';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const CARD_RADIUS: number = 14;
 const DANGER: string = '#E64646';
@@ -17,6 +18,7 @@ const DANGER: string = '#E64646';
 @Entry
 @Component
 struct NetworkUsagePage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @State usage: NetworkUsage | null = null;

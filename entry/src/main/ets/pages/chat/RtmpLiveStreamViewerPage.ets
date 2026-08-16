@@ -38,6 +38,7 @@ import {
 } from '../../util/liveInteractionPresentation';
 import { LiveInteractionBubble } from './LiveInteractionBubble';
 import { plural, str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const LIVE_BACKGROUND: string = '#0A1117';
 const LIVE_PANEL: string = '#101A23';
@@ -321,6 +322,7 @@ struct RtmpVideoStage {
 @Entry
 @Component
 struct RtmpLiveStreamViewerPage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @StorageProp('cutoutTopSafeHeight') cutoutTopSafe: number = 0;

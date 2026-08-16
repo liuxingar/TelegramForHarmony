@@ -5,6 +5,7 @@ import { TdObject, TdRequest, TdError } from '../../tdkit/TdTypes';
 import { COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
 import { monthDayTime } from '../../util/intlFormat';
 import { str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 // "定时消息" list, extracted from ChatPage.
 //
@@ -13,6 +14,7 @@ import { str } from '../../util/strings';
 // each mutation, exactly as they did inline.
 @Component
 export struct ScheduledSheet {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   // Two-way: tapping the scrim dismisses from in here.
   @Link show: boolean;
   chatId: number = 0;

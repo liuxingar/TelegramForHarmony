@@ -30,6 +30,7 @@ import {
 } from '../../store/AppSettings';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
 import { str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const CARD_BG: ResourceColor = $r('app.color.surface');
 const CARD_RADIUS: number = 14;
@@ -48,6 +49,7 @@ const EFFECT_KEYS: string[] = [
 @Entry
 @Component
 struct PowerUsagePage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @StorageLink(KEY_POWER_THRESHOLD) threshold: number = POWER_THRESHOLD_DEFAULT;

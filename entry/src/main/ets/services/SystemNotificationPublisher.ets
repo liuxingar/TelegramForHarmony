@@ -56,6 +56,23 @@ export class SystemNotificationPublisher implements NotificationPublisher {
     });
   }
 
+  // requestCode is what distinguishes one WantAgent from another. Every chat
+  // used the same constant, and UPDATE_PRESENT_FLAG means "reuse the existing
+  // agent, replace its extras" — so all notifications shared a single agent
+  // carrying whichever chat published last, and tapping any notification
+  // opened that chat instead of its own. Derived per chat, it is stable across
+  // republishes of the same chat and distinct between chats.
+  private requestCodeFor(chatId: number): number {
+    // chat ids are 64-bit and negative for groups/channels; fold to a positive
+    // 31-bit value so it survives the int the API expects.
+    let hash = 8297;
+    const text = `${chatId}`;
+    for (let i = 0; i < text.length; i++) {
+      hash = ((hash * 31) + text.charCodeAt(i)) % 0x7FFFFFFF;
+    }
+    return hash;
+  }
+
   private buildAgent(chatId: number): Promise<object> {
     const params: Record<string, Object> = { 'notifyChatId': chatId };
     const info: wantAgent.WantAgentInfo = {
@@ -65,7 +82,7 @@ export class SystemNotificationPublisher implements NotificationPublisher {
         parameters: params
       }],
       actionType: wantAgent.OperationType.START_ABILITY,
-      requestCode: 8297,
+      requestCode: this.requestCodeFor(chatId),
       actionFlags: [wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG]
     };
     return wantAgent.getWantAgent(info);

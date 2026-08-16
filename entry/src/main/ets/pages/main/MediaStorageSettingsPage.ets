@@ -21,6 +21,7 @@ import {
   COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
 import { str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const CARD_RADIUS: number = 14;
 const LIMITS: number[] = [512 * 1024, 2 * 1024 * 1024, 10 * 1024 * 1024,
@@ -40,6 +41,7 @@ const NETWORKS: NetworkOption[] = [
 @Entry
 @Component
 struct MediaStorageSettingsPage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @State selectedNetwork: string = 'wifi';

@@ -9,6 +9,7 @@ import {
   COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
 import { plural, str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const CARD_RADIUS: number = 14;
 
@@ -22,6 +23,7 @@ interface StickerSetRow {
 @Entry
 @Component
 struct StickerSetsPage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @State installed: StickerSetRow[] = [];

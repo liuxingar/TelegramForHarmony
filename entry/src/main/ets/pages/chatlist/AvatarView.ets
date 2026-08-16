@@ -1,6 +1,7 @@
 import { AVATAR_PALETTE, AVATAR_SIZE, COLOR_PRIMARY } from '../../util/theme';
 import { formatTTL } from '../../util/formatTTL';
 import { AvLoopVideo } from '../common/AvLoopVideo';
+import { CachedImage } from '../common/CachedImage';
 import { KEY_POWER_ACTIVE, KEY_POWER_AUTOPLAY_VIDEO } from '../../store/AppSettings';
 
 @Component
@@ -34,21 +35,38 @@ export struct AvatarView {
       .borderRadius(this.avatarSize / 2)
       .clip(true);
     } else if (this.avatarPath !== '') {
-      // ArkUI Image needs a file:// URI for absolute sandbox paths; TDLib
-      // hands us bare filesystem paths like /data/.../photo.jpg.
-      Image(this.avatarPath.startsWith('/') ? `file://${this.avatarPath}` : this.avatarPath)
-        .width(this.avatarSize).height(this.avatarSize)
-        .borderRadius(this.avatarSize / 2)
-        .objectFit(ImageFit.Cover);
-    } else {
+      // Through the PixelMap cache, like chat photos. Avatars are small but
+      // there are a lot of them and they repeat: the same file is decoded for
+      // every row showing that chat and again after every recycle. Straight
+      // Image(file://…) redid all of that, which is why chat-list rows WITH an
+      // avatar stuttered more than rows falling back to initials.
       Stack() {
-        Circle({ width: this.avatarSize, height: this.avatarSize })
-          .fill(AVATAR_PALETTE[Math.abs(this.colorSeed) % AVATAR_PALETTE.length]);
-        Text(this.initials)
-          .fontColor(Color.White).fontSize(this.avatarSize * 0.4).fontWeight(FontWeight.Medium);
+        // The initials sit underneath so a pending decode shows the coloured
+        // circle rather than a hole.
+        this.initialsCircle();
+        CachedImage({
+          path: this.avatarPath,
+          boxWidth: this.avatarSize,
+          boxHeight: this.avatarSize,
+          radius: this.avatarSize / 2,
+          fit: ImageFit.Cover
+        });
       }
       .width(this.avatarSize).height(this.avatarSize);
+    } else {
+      this.initialsCircle();
     }
+  }
+
+  @Builder
+  initialsCircle() {
+    Stack() {
+      Circle({ width: this.avatarSize, height: this.avatarSize })
+        .fill(AVATAR_PALETTE[Math.abs(this.colorSeed) % AVATAR_PALETTE.length]);
+      Text(this.initials)
+        .fontColor(Color.White).fontSize(this.avatarSize * 0.4).fontWeight(FontWeight.Medium);
+    }
+    .width(this.avatarSize).height(this.avatarSize);
   }
 
   build() {

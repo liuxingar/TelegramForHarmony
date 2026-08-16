@@ -95,7 +95,10 @@ export async function sendInlineResult(
 
 function openParameters(): TdObject {
   const parameters: TdObject = { '@type': 'webAppOpenParameters' };
-  parameters['application_name'] = 'TelegramForHarmony';
+  // Reported to the bot's Mini App as the host client. A literal rather than
+  // the resource because it identifies the client to a remote party and must
+  // not change with the UI language.
+  parameters['application_name'] = 'Petrelgram';
   return parameters;
 }
 

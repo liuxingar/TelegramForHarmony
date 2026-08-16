@@ -2,6 +2,7 @@ import {
   COLOR_PRIMARY, COLOR_SURFACE, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
 import { str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const MAX_OPTIONS: number = 10;
 
@@ -9,6 +10,7 @@ const MAX_OPTIONS: number = 10;
 // 测验模式必须点选一个正确答案。
 @Component
 export struct PollComposeSheet {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   onSubmit: (question: string, options: string[], isAnonymous: boolean,
     isQuiz: boolean, correctOptionId: number) => void =
     (): void => {};

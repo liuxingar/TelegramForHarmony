@@ -10,6 +10,7 @@ import {
   COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY, COLOR_BUBBLE_IN, COLOR_BUBBLE_OUT
 } from '../../util/theme';
 import { str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const CARD_BG: ResourceColor = $r('app.color.surface');
 const CARD_RADIUS: number = 14;
@@ -32,6 +33,7 @@ const NIGHT_OPTIONS: NightOption[] = [
 @Entry
 @Component
 struct ChatSettingsPage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @StorageLink(KEY_TEXT_SIZE) textSize: number = 16;

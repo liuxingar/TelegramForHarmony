@@ -34,7 +34,7 @@ export struct QrDialog {
       // White backing keeps the code scannable in dark mode.
       Column() {
         if (this.pix !== null) {
-          Image(this.pix).width(220).height(220);
+          Image(this.pix).draggable(false).width(220).height(220);
         } else if (this.failed) {
           Text($r('app.string.qr_failed')).fontSize(14).fontColor(COLOR_TEXT_SECONDARY)
             .width(220).height(220).textAlign(TextAlign.Center);

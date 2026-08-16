@@ -10,6 +10,10 @@ import { join, relative, sep } from 'node:path';
 export const ETS_ROOT = 'entry/src/main/ets';
 export const RES_ROOT = 'entry/src/main/resources';
 export const BASE_STRINGS = `${RES_ROOT}/base/element/string.json`;
+// App-level resources. $r('app.string.x') resolves these too — app_name lives
+// here, not in the module — so a checker that only reads the module's file
+// reports a perfectly valid reference as missing.
+export const APP_SCOPE_STRINGS = 'AppScope/resources/base/element/string.json';
 
 // Locales that carry translations. `base` holds the source language (zh-Hans)
 // and is what the system falls back to when no qualifier matches, so there is
@@ -20,7 +24,7 @@ export const BASE_STRINGS = `${RES_ROOT}/base/element/string.json`;
 // zh_CN for Chinese — would block every migration step on having an English
 // translation ready, which would stall the migration itself. Revisit once the
 // English catalogue is complete.
-export const LOCALES = ['en_US'];
+export const LOCALES = ['en_US', 'zh_Hant'];
 
 // Source directory → key domain. Longest prefix wins.
 const DOMAIN_RULES = [

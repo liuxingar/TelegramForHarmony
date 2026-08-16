@@ -12,6 +12,7 @@ import {
 } from '../../util/theme';
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
 import { plural, str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const CARD_RADIUS: number = 14;
 const DANGER: string = '#E64646';
@@ -19,6 +20,7 @@ const DANGER: string = '#E64646';
 @Entry
 @Component
 struct StorageUsagePage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @State usage: DetailedStorageUsage | null = null;

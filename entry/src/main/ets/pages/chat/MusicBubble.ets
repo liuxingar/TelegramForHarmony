@@ -213,7 +213,7 @@ export struct MusicBubble {
   private coverControl(): void {
     Stack() {
       if (this.coverPath !== '') {
-        Image(this.coverPath.startsWith('/') ? `file://${this.coverPath}` : this.coverPath)
+        Image(this.coverPath.startsWith('/') ? `file://${this.coverPath}` : this.coverPath).draggable(false)
           .width(52).height(52)
           .borderRadius(13)
           .objectFit(ImageFit.Cover);

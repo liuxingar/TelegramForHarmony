@@ -13,6 +13,7 @@ import {
 } from '../../util/theme';
 import { AvatarView } from '../chatlist/AvatarView';
 import { plural, str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 interface FolderInviteParams {
   folderId: number;
@@ -25,6 +26,7 @@ const DANGER: string = '#E64646';
 @Entry
 @Component
 struct FolderInviteLinksPage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @State folderId: number = 0;

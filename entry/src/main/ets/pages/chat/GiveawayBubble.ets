@@ -76,7 +76,7 @@ export struct GiveawayBubble {
               [this.refunded ? '#F5F6F7' : '#F3E7FF', 1]]
           });
         if (this.photoPath !== '') {
-          Image(this.photoPath.startsWith('/') ? `file://${this.photoPath}` : this.photoPath)
+          Image(this.photoPath.startsWith('/') ? `file://${this.photoPath}` : this.photoPath).draggable(false)
             .width(104).height(104).objectFit(ImageFit.Contain);
         } else {
           Text(this.state === 'prize' ? '🏆' : (this.refunded ? '↩️' : '🎉'))

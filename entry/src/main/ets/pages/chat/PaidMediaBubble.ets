@@ -104,7 +104,7 @@ export struct PaidMediaBubble {
   private unlockedArtwork() {
     Stack() {
       if (this.photoPath !== '') {
-        Image(this.photoPath.startsWith('/') ? `file://${this.photoPath}` : this.photoPath)
+        Image(this.photoPath.startsWith('/') ? `file://${this.photoPath}` : this.photoPath).draggable(false)
           .width('100%').height(156).objectFit(ImageFit.Cover)
           .transition(TransitionEffect.OPACITY.animation({
             duration: 180, curve: Curve.EaseOut

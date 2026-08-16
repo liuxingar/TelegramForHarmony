@@ -91,7 +91,7 @@ export struct QrLoginPage {
     // 白底保证深色模式下二维码依然可被扫描。
     Column() {
       if (this.code !== null) {
-        Image(this.code).width(212).height(212).interpolation(ImageInterpolation.None);
+        Image(this.code).draggable(false).width(212).height(212).interpolation(ImageInterpolation.None);
       } else if (this.failed) {
         Text($r('app.string.lg_qr_failed'))
           .fontSize(14).fontColor('#FF3B30')

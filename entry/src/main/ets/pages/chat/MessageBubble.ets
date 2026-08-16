@@ -11,6 +11,10 @@ import {
 import { TgsStickerView } from './TgsStickerView';
 import { WebmStickerView } from './WebmStickerView';
 import { SmartLoopVideo } from '../common/SmartLoopVideo';
+import { CachedImage } from '../common/CachedImage';
+import {
+  bubbleMaxWidth, MediaBox, MEDIA_MAX_HEIGHT_RATIO, MEDIA_MAX_WIDTH, mediaBoxFor, mediaThumbWidth
+} from '../../util/mediaBox';
 import { AvLoopVideo } from '../common/AvLoopVideo';
 import { VoiceBubble } from './VoiceBubble';
 import { MusicBubble } from './MusicBubble';
@@ -30,6 +34,10 @@ import { packAlbumRows, AlbumCell } from '../../util/packAlbumRows';
 import { linkPreviewPresentation, LinkPreviewPresentation } from '../../util/linkPreview';
 import { reactionKeyFrom } from '../../util/reactions';
 import { COLOR_PRIMARY, COLOR_TEXT_SECONDARY, COLOR_BUBBLE_OUT, COLOR_BUBBLE_IN, COLOR_BUBBLE_TEXT, AVATAR_PALETTE, botButtonBg } from '../../util/theme';
+import { languageDisplayName } from '../../services/TranslationService';
+import {
+  senderAvatarFor, senderChannelKey, subscribeSenderAvatar
+} from '../../util/senderAvatarChannel';
 import { plural, str } from '../../util/strings';
 
 // 圆形视频气泡直径。和 Telegram 的观感接近，同时不至于挤占整行宽度。
@@ -38,8 +46,6 @@ const REPLY_QUOTE_WIDTH_RATIO: number = 0.76;
 
 const ALBUM_MAX_WIDTH: number = 280;
 const STICKER_MAX: number = 160;
-const MEDIA_MAX_WIDTH: number = 280;
-const MEDIA_MAX_HEIGHT_RATIO: number = 1.2;
 const LINK_PREVIEW_HEIGHT_RATIO: number = 0.62;
 // Quick reactions shown in the long-press menu's top row (tap the chevron to
 // open the full emoji picker).
@@ -47,9 +53,56 @@ const QUICK_REACTIONS: string[] = ['❤️', '👍', '👎', '🔥', '🥰', '�
 // Media whose caption can be replaced via editMessageCaption.
 const EDITABLE_CAPTION_TYPES: string[] = ['photo', 'video', 'file', 'audio', 'voice'];
 
-interface MediaBox {
-  width: number;
-  height: number;
+// NOT @Reusable, deliberately.
+//
+// It was, keyed by contentType, and it corrupted rows: text going missing,
+// avatars in the wrong place, messages showing the wrong position — most
+// visible right after a fast jump, when many rows are recycled at once.
+//
+// The reason is structural. @Reusable requires the component tree to stay the
+// same across a reuse, and to split the pool by reuseId wherever it does not.
+// Within a single contentType this build still branches on a reply quote, a
+// forward header, the sender name, the avatar, a link preview, reactions,
+// inline buttons, a date pill and an unread divider — the guide's "reuseId too
+// coarse" case, and enumerating those combinations would land squarely in its
+// "reuseId too fine" case instead, where the pool almost never hits.
+//
+// Making this reusable properly means splitting the bubble into per-part
+// components and reusing those, which is a rewrite rather than a decorator.
+
+// 群消息的发送者头像。路径经 senderAvatarChannel 旁路直达这里就地刷新，
+// 不触发行重建 —— 头像路径已从行的内容 key 里摘除。
+@Component
+struct LiveSenderAvatar {
+  senderId: number = 0;
+  senderIsUser: boolean = true;
+  initialPath: string = '';
+  initials: string = '?';
+  @State private path: string = '';
+  private unsubAvatar: (() => void) | null = null;
+
+  aboutToAppear(): void {
+    const key: string = senderChannelKey(this.senderId, this.senderIsUser);
+    const known: string = senderAvatarFor(key);
+    this.path = known !== '' ? known : this.initialPath;
+    this.unsubAvatar = subscribeSenderAvatar(key, (path: string): void => {
+      this.path = path;
+    });
+  }
+
+  aboutToDisappear(): void {
+    if (this.unsubAvatar !== null) {
+      this.unsubAvatar();
+      this.unsubAvatar = null;
+    }
+  }
+
+  build() {
+    AvatarView({
+      avatarPath: this.path, initials: this.initials,
+      colorSeed: this.senderId, avatarSize: 32
+    });
+  }
 }
 
 @Component
@@ -105,6 +158,8 @@ export struct MessageBubble {
   onPaidMediaUnlock: (messageId: number) => void = (_messageId: number): void => {};
   onPaidMediaOpen: (messageId: number) => void = (_messageId: number): void => {};
   onSpecialPhotoRetry: (messageId: number) => void = (_messageId: number): void => {};
+  // 视频缩略图/文件下载失败后的重试；和图片重试分开，走的是 downloadFile 而非缩略图。
+  onVideoRetry: (messageId: number) => void = (_messageId: number): void => {};
   onGiftCodeCopy: (code: string) => void = (_code: string): void => {};
   onGiveawayOpen: (chatId: number, messageId: number) => void =
     (_chatId: number, _messageId: number): void => {};
@@ -151,6 +206,8 @@ export struct MessageBubble {
   onOpenReactions: (messageId: number) => void = (): void => {};
   onRecognizeSpeech: (messageId: number) => void = (): void => {};
   onVideoNoteDownload: (messageId: number) => void = (): void => {};
+  // 整聊天翻译：点「隐藏译文/显示译文」的单条折叠开关，状态存在条目上。
+  onToggleTranslation: (messageId: number, hidden: boolean) => void = (): void => {};
   // 圆形视频原地播放的开关，逐条独立。
   @State private videoNotePlaying: boolean = false;
   // Chat's currently active video chat, if any (0 = none live) — lets a
@@ -187,6 +244,16 @@ export struct MessageBubble {
     this.requestAutoplayDownload();
   }
 
+  // Everything this row shows has to be re-seeded here.
+  //
+  // Two separate hazards. First, undecorated members are NOT updated when a
+  // component is reused (albumCaptionEntities is the only one that carries
+  // data; the on* callbacks are page-level closures keyed by messageId, so a
+  // stale one still does the right thing). Second, this component's own @State
+  // is per-message — a reused bubble would otherwise inherit the previous
+  // message's revealed spoilers, expanded quotes, playing video note or failed
+  // sticker. Both are silent wrong-content bugs rather than crashes, so the
+  // reset is exhaustive on purpose.
   private requestAutoplayDownload(): void {
     if (this.msg.contentType !== 'video' || this.msg.videoFileId === 0 ||
       this.msg.videoPath !== '' || this.msg.videoFailed || !this.mediaVisible) {
@@ -219,7 +286,7 @@ export struct MessageBubble {
   // max width on the outer shrink-to-fit Column can resolve differently from
   // the numeric caps used by text/media and cause a late first-layout reflow.
   private bubbleMaxW(): number {
-    return this.screenW * 0.78;
+    return bubbleMaxWidth(this.screenW);
   }
 
   private inlineMaxW(): number {
@@ -377,7 +444,7 @@ export struct MessageBubble {
   }
 
   private mediaThumbW(): number {
-    return Math.min(MEDIA_MAX_WIDTH, this.inlineMaxW());
+    return mediaThumbWidth(this.screenW);
   }
 
   private mediaMaxH(): number {
@@ -449,17 +516,11 @@ export struct MessageBubble {
       : str('mb_tap_play_video');
   }
 
+  // Same helper the prefetcher uses — the two must agree exactly or the
+  // prefetched bitmap lands under a key this bubble never asks for.
   private mediaBox(): MediaBox {
-    const maxW = this.mediaThumbW();
-    const maxH = this.mediaMaxH();
-    const ratio = this.mediaRatio();
-    let width = maxW;
-    let height = width / ratio;
-    if (height > maxH) {
-      height = maxH;
-      width = height * ratio;
-    }
-    return { width, height };
+    return mediaBoxFor(this.screenW, this.msg.photoWidth, this.msg.photoHeight,
+      this.msg.contentType === 'video');
   }
 
   private linkPreviewH(width: number = this.cardMaxW()): number {
@@ -818,6 +879,41 @@ export struct MessageBubble {
     .alignItems(HorizontalAlign.Start);
   }
 
+  // 整聊天翻译块：原文之下分隔线 + 斜体译文 + 「已翻译成X · 隐藏译文」小字。
+  // 原文永远保留（对照式，不是替换式），隐藏只折叠译文本体，脚注变为
+  // 「显示译文」。存在译文时时间戳的占位挪到脚注行（见 timeReserveInText）。
+  @Builder
+  translationBlock() {
+    if (this.msg.translatedText !== '') {
+      Divider().color(COLOR_TEXT_SECONDARY).opacity(0.3).strokeWidth(0.6)
+        .margin({ top: 6, bottom: 5 });
+      if (!this.msg.translationHidden) {
+        Text(this.msg.translatedText)
+          .fontSize(this.msgTextSize)
+          .lineHeight(this.msgTextSize * 1.34)
+          .fontStyle(FontStyle.Italic)
+          .fontColor(COLOR_BUBBLE_TEXT)
+          .wordBreak(WordBreak.BREAK_WORD)
+          .constraintSize({ maxWidth: this.inlineMaxW() });
+      }
+      Row({ space: 4 }) {
+        Text(str('mb_translated_into', languageDisplayName(this.msg.translatedLang)))
+          .fontSize(11).fontColor(COLOR_TEXT_SECONDARY);
+        Text('·').fontSize(11).fontColor(COLOR_TEXT_SECONDARY); // i18n-exempt: 标点
+        Text(this.msg.translationHidden
+          ? $r('app.string.mb_show_translation') : $r('app.string.mb_hide_translation'))
+          .fontSize(11).fontColor(COLOR_TEXT_SECONDARY).fontWeight(FontWeight.Medium);
+        if (this.timeReserveOnFooter()) {
+          Text(this.timeReserve()).fontSize(11).fontColor(Color.Transparent);
+        }
+      }
+      .margin({ top: 4 })
+      .onClick((): void => {
+        this.onToggleTranslation(this.msg.id, !this.msg.translationHidden);
+      });
+    }
+  }
+
   // Channel post footer: recent-commenter avatars + comment count + chevron,
   // tapping opens the linked discussion group's thread for this post.
   @Builder
@@ -1019,6 +1115,36 @@ export struct MessageBubble {
   // every photo's own aspect ratio (rows vary in height), instead of a uniform
   // square grid that crops everything to 1:1. Video members get a play badge;
   // tapping any cell opens the fullscreen viewer for that specific message.
+  // The album arrays are parallel, and the cell list is derived from just one
+  // of them (albumRatios). Reuse re-seeds them one at a time, so a render can
+  // land while the new ratios are in place and another array is still the old,
+  // shorter one — that read used to be unguarded and took the process down with
+  // "Cannot read property startsWith of undefined". A missing cell renders as
+  // the placeholder for one frame; nothing here is worth crashing over.
+  // A retry is only worth offering when there is a file to fetch: photoFileId 0
+  // means the message never had a thumbnail, and re-requesting nothing would
+  // just spin.
+  private thumbnailRetryable(): boolean {
+    return this.msg.photoPath === '' && this.msg.photoFailed && this.msg.photoFileId !== 0;
+  }
+
+  private albumCellRetryable(index: number): boolean {
+    return this.albumPathAt(index) === '' && (this.albumFailed[index] ?? false) &&
+      (this.albumFileIds[index] ?? 0) !== 0;
+  }
+
+  private albumPathAt(index: number): string {
+    return this.albumPaths[index] ?? '';
+  }
+
+  private albumIsVideoAt(index: number): boolean {
+    return this.albumIsVideo[index] ?? false;
+  }
+
+  private albumMemberIdAt(index: number): number {
+    return this.albumMemberIds[index] ?? 0;
+  }
+
   @Builder
   albumGrid() {
     Column({ space: 2 }) {
@@ -1026,15 +1152,22 @@ export struct MessageBubble {
         Row({ space: 2 }) {
           ForEach(row, (cell: AlbumCell) => {
             Stack() {
-              if (this.albumPaths[cell.idx] !== '') {
-                Image(this.albumPaths[cell.idx].startsWith('/') ? `file://${this.albumPaths[cell.idx]}` : this.albumPaths[cell.idx])
-                  .width(cell.width).height(cell.height).borderRadius(6).objectFit(ImageFit.Cover)
-                  .transition(TransitionEffect.OPACITY
-                    .combine(TransitionEffect.scale({ x: 0.985, y: 0.985 }))
-                    .animation({ duration: this.effectDuration(180), curve: Curve.EaseOut }));
+              if (this.albumPathAt(cell.idx) !== '') {
+                // No appear transition, for the same reason as the single-media
+                // thumbnail: a row rebuild re-creates this node and would
+                // replay the fade every time.
+                // desiredSize matters most here: a cell is a few tens of vp
+                // wide while the file behind it is the conversation-wide size.
+                CachedImage({
+                  path: this.albumPathAt(cell.idx),
+                  boxWidth: cell.width,
+                  boxHeight: cell.height,
+                  radius: 6,
+                  fit: ImageFit.Cover
+                });
               } else {
                 Column().width(cell.width).height(cell.height).borderRadius(6)
-                  .backgroundColor(this.albumIsVideo[cell.idx] ? '#AEB6C0' : '#D7DCE2');
+                  .backgroundColor(this.albumIsVideoAt(cell.idx) ? '#AEB6C0' : '#D7DCE2');
                 // A video without a downloadable thumbnail remains playable;
                 // don't leave an endless 0% spinner over that intentional state.
                 if ((this.albumFileIds[cell.idx] ?? 0) !== 0 &&
@@ -1044,7 +1177,7 @@ export struct MessageBubble {
                     this.albumProgress[cell.idx] ?? 0,
                     false
                   );
-                } else if (!this.albumIsVideo[cell.idx]) {
+                } else if (!this.albumIsVideoAt(cell.idx)) {
                   this.mediaLoadState(
                     Math.min(34, Math.min(cell.width, cell.height) * 0.4),
                     0,
@@ -1052,19 +1185,26 @@ export struct MessageBubble {
                   );
                 }
               }
-              if (this.albumIsVideo[cell.idx] &&
-                (this.albumPaths[cell.idx] !== '' ||
+              if (this.albumIsVideoAt(cell.idx) &&
+                (this.albumPathAt(cell.idx) !== '' ||
                   (this.albumFileIds[cell.idx] ?? 0) === 0 ||
                   (this.albumFailed[cell.idx] ?? false))) {
                 this.playBadge(Math.min(40, Math.min(cell.width, cell.height) * 0.46));
               }
             }
             .width(cell.width).height(cell.height)
-            .accessibilityText(this.albumIsVideo[cell.idx]
+            .accessibilityText(this.albumIsVideoAt(cell.idx)
               ? str('mb_album_item_video', cell.idx + 1)
               : ((this.albumFailed[cell.idx] ?? false)
                 ? str('mb_photo_failed') : str('mb_album_item', cell.idx + 1)))
-            .onClick((e: ClickEvent) => { this.onMediaTap(this.albumMemberIds[cell.idx], e.windowX, e.windowY); });
+            .onClick((e: ClickEvent) => {
+              // Same as the single-media case: a failed cell offers retry.
+              if (this.albumCellRetryable(cell.idx)) {
+                this.onSpecialPhotoRetry(this.albumMemberIdAt(cell.idx));
+                return;
+              }
+              this.onMediaTap(this.albumMemberIdAt(cell.idx), e.windowX, e.windowY);
+            });
           }, (cell: AlbumCell) => `cell_${cell.idx}`);
         }
       }, (_row: AlbumCell[], rowIdx: number) => `row_${rowIdx}`);
@@ -1104,7 +1244,7 @@ export struct MessageBubble {
     Stack({ alignContent: Alignment.Center }) {
       if (this.msg.linkPhotoPath !== '') {
         Image(this.msg.linkPhotoPath.startsWith('/')
-          ? `file://${this.msg.linkPhotoPath}` : this.msg.linkPhotoPath)
+          ? `file://${this.msg.linkPhotoPath}` : this.msg.linkPhotoPath).draggable(false)
           .width(width).height(height).objectFit(ImageFit.Cover)
           .transition(TransitionEffect.OPACITY.animation({
             duration: this.effectDuration(180), curve: Curve.EaseOut
@@ -1390,6 +1530,7 @@ export struct MessageBubble {
       if (this.hasLinkPreview()) {
         this.linkPreviewCard();
       }
+      this.translationBlock();
     } else if (this.msg.contentType === 'photo' || this.msg.contentType === 'video') {
       Stack() {
         if (this.autoplayInlineVideo()) {
@@ -1414,11 +1555,22 @@ export struct MessageBubble {
           // geometry transition can re-parent this Image node; with LazyForEach
           // recycling that occasionally restored only the placeholder/background
           // or an undecoded blank node after returning to the chat.
-          Image(this.msg.photoPath.startsWith('/') ? `file://${this.msg.photoPath}` : this.msg.photoPath)
-            .width(this.mediaBox().width).height(this.mediaBox().height).borderRadius(8).objectFit(ImageFit.Cover)
-            .transition(TransitionEffect.OPACITY
-              .combine(TransitionEffect.scale({ x: 0.985, y: 0.985 }))
-              .animation({ duration: this.effectDuration(180), curve: Curve.EaseOut }));
+          // No appear transition here. A LazyForEach CHANGE rebuilds this
+          // subtree, so the Image comes back as a new node and any appear
+          // transition replays — during a download that fired at the updateFile
+          // rate and read as the thumbnail flickering. The row key now buckets
+          // progress (see collapseAlbums.progressBucket), but a rebuild is still
+          // normal for every other field, and a thumbnail must not blink on one.
+          // Decoded through the PixelMap cache: DMA memory so the first draw
+          // costs no texture upload on the render thread, and desiredSize
+          // downsamples during the decode rather than after it.
+          CachedImage({
+            path: this.msg.photoPath,
+            boxWidth: this.mediaBox().width,
+            boxHeight: this.mediaBox().height,
+            radius: 8,
+            fit: ImageFit.Cover
+          });
         } else {
           Stack() {
             Column().width(this.mediaBox().width).height(this.mediaBox().height).borderRadius(8)
@@ -1463,6 +1615,17 @@ export struct MessageBubble {
         }
       })
       .onClick((e: ClickEvent) => {
+        // When the media shows a retry control, the tap has to retry. It used
+        // to fall through to onMediaTap, which opened a viewer onto a file that
+        // was never downloaded — the retry badge was decoration.
+        if (this.thumbnailRetryable()) {
+          this.onSpecialPhotoRetry(this.msg.id);
+          return;
+        }
+        if (this.msg.contentType === 'video' && this.msg.videoFailed) {
+          this.onVideoRetry(this.msg.id);
+          return;
+        }
         if (this.msg.isAnimation) {
           this.onAnimationTap(this.msg.id, this.autoplayInlineVideo());
         } else {
@@ -1790,10 +1953,10 @@ export struct MessageBubble {
         if (this.stickerAnimationSuspended() && this.msg.photoPath === '') {
           this.stickerPausedFallback();
         } else if (this.stickerPlaybackFailed && this.msg.photoPath !== '') {
-          Image(this.msg.photoPath.startsWith('/') ? `file://${this.msg.photoPath}` : this.msg.photoPath)
+          Image(this.msg.photoPath.startsWith('/') ? `file://${this.msg.photoPath}` : this.msg.photoPath).draggable(false)
             .width(this.stickerW()).height(this.stickerH()).objectFit(ImageFit.Contain);
         } else if (this.stickerAnimationSuspended() && this.msg.photoPath !== '') {
-          Image(this.msg.photoPath.startsWith('/') ? `file://${this.msg.photoPath}` : this.msg.photoPath)
+          Image(this.msg.photoPath.startsWith('/') ? `file://${this.msg.photoPath}` : this.msg.photoPath).draggable(false)
             .width(this.stickerW()).height(this.stickerH()).objectFit(ImageFit.Contain);
         } else if (!this.stickerPlaybackFailed &&
           this.msg.stickerFormat === 'tgs' && this.msg.stickerPath !== '') {
@@ -1810,7 +1973,7 @@ export struct MessageBubble {
             onPlaybackFailed: (): void => { this.stickerPlaybackFailed = true; } })
             .hitTestBehavior(HitTestMode.None);
         } else if (this.msg.photoPath !== '') {
-          Image(this.msg.photoPath.startsWith('/') ? `file://${this.msg.photoPath}` : this.msg.photoPath)
+          Image(this.msg.photoPath.startsWith('/') ? `file://${this.msg.photoPath}` : this.msg.photoPath).draggable(false)
             .width(this.stickerW()).height(this.stickerH()).objectFit(ImageFit.Contain)
             .transition(TransitionEffect.OPACITY.animation({
               duration: this.effectDuration(180), curve: Curve.EaseOut
@@ -1943,7 +2106,12 @@ export struct MessageBubble {
   // text line (only when the time actually lands there — not when reactions
   // or a comments bar sit below the text).
   private timeReserveInText(): boolean {
-    return this.msg.reactions.length === 0;
+    // 有译文时最后一行是翻译脚注，时间戳的占位改由脚注行承担。
+    return this.msg.reactions.length === 0 && this.msg.translatedText === '';
+  }
+
+  private timeReserveOnFooter(): boolean {
+    return this.msg.reactions.length === 0 && this.msg.translatedText !== '';
   }
 
   // Bare media at the bubble's bottom edge → the timestamp needs a translucent
@@ -2106,8 +2274,15 @@ export struct MessageBubble {
       Row() {
       if (this.isGroup && !this.msg.isOutgoing) {
         if (this.showAvatar) {
-          AvatarView({ avatarPath: this.msg.senderAvatarPath, initials: this.msg.senderInitials,
-            colorSeed: this.msg.senderId, avatarSize: 32 })
+          // LiveSenderAvatar, not AvatarView directly: the path arrives via the
+          // sender-avatar side channel and swaps in place — the row itself never
+          // rebuilds for an avatar (see senderAvatarChannel).
+          LiveSenderAvatar({
+            senderId: this.msg.senderId,
+            senderIsUser: this.msg.senderIsUser,
+            initialPath: this.msg.senderAvatarPath,
+            initials: this.msg.senderInitials
+          })
             .margin({ right: 6 })
             .onClick(() => {
               // Group message avatar → that user's profile page.

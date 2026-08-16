@@ -15,6 +15,7 @@ import {
 } from '../../util/theme';
 import { plural, str } from '../../util/strings';
 import { fullDate } from '../../util/intlFormat';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const CARD_RADIUS: number = 14;
 const DANGER: string = '#E64646';
@@ -23,6 +24,7 @@ const SKELETON_ROWS: number[] = [0, 1, 2];
 @Entry
 @Component
 struct DataStoragePage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @StorageProp(KEY_CURRENT_NETWORK_TYPE) networkType: string = 'other';

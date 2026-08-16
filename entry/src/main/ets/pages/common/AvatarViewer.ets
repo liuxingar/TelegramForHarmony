@@ -55,7 +55,7 @@ export struct AvatarViewer {
         // 未放大时下滑关闭；放大后该手势让位给拖动。
         // 淡出交给根节点的 transition，这里不再单独改透明度，否则黑底会先
         // 于图片瞬间消失。
-      Image(this.imageSource())
+      Image(this.imageSource()).draggable(false)
         .width('100%')
         .height('100%')
         .objectFit(ImageFit.Contain)

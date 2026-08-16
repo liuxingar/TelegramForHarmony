@@ -11,10 +11,18 @@ import { initSettings, refreshPowerSavingState } from '../store/AppSettings';
 import { beginNetworkMonitoring, refreshNetworkState } from '../services/NetworkStateService';
 import { updateChecker } from '../services/UpdateChecker';
 import { liveLocation } from '../services/LiveLocationService';
+import { setInlinePhotoTargetPx } from '../util/formatMsgContent';
+import { trimPixelCache } from '../util/pixelCache';
+
+// 和 MessageBubble 的 MEDIA_MAX_WIDTH 对齐；两处要一起改。
+const BUBBLE_MEDIA_MAX_VP: number = 280;
 
 const DOMAIN = 0x0000;
 
 export default class EntryAbility extends UIAbility {
+  // 上一次见到的系统语言，用来判断配置变更里语言到底变没变。
+  private lastLanguage: string = '';
+
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     // Before anything that formats text: stores build chat previews during
     // startup, and without a source installed those would come out as raw keys.
@@ -49,9 +57,19 @@ export default class EntryAbility extends UIAbility {
   // while the app is running. Resources re-resolve themselves; the Intl
   // formatters are cached in-process and do not, so they would keep rendering
   // dates in the language the user just left.
-  onConfigurationUpdate(_config: Configuration): void {
+  onConfigurationUpdate(config: Configuration): void {
     refreshLocale();
-    bumpLanguageEpoch();
+    // Only on an actual language change. This fires for every configuration
+    // change — dark mode, font scale, orientation — and the epoch is embedded
+    // in list row keys, so bumping it renames every row in the app. Doing that
+    // for a colour-mode change (or whatever the system reports when an app
+    // returns to the foreground) left the lists rebuilding for no reason, and
+    // renamed rows out from under LazyForEach.
+    const language: string = config.language ?? '';
+    if (language !== this.lastLanguage) {
+      this.lastLanguage = language;
+      bumpLanguageEpoch();
+    }
   }
 
   // Publish the launch URI for the UI layer. Cleared to '' first so re-opening
@@ -112,6 +130,13 @@ export default class EntryAbility extends UIAbility {
       AppStorage.setOrCreate('cutoutLeftSafeWidth', px2vp(cutoutAvoid.leftRect.width));
       AppStorage.setOrCreate('cutoutRightSafeWidth', px2vp(cutoutAvoid.rightRect.width));
       AppStorage.setOrCreate('screenWidthVp', px2vp(win.getWindowProperties().windowRect.width));
+      AppStorage.setOrCreate('screenHeightVp', px2vp(win.getWindowProperties().windowRect.height));
+      // 气泡里的媒体最宽 MEDIA_MAX_WIDTH(280vp)，按它的物理像素挑图片尺寸，
+      // 别再固定取第二小的那档。用窗口宽算密度，比猜一个屏宽比例准——多挑一档
+      // 就是多几倍的解码像素，滑动时那笔账要在主线程上还。
+      const rectPx: number = win.getWindowProperties().windowRect.width;
+      const density: number = rectPx / Math.max(1, px2vp(rectPx));
+      setInlinePhotoTargetPx(Math.min(rectPx, BUBBLE_MEDIA_MAX_VP * density));
       win.on('avoidAreaChange', (data) => {
         if (data.type === window.AvoidAreaType.TYPE_SYSTEM) {
           AppStorage.setOrCreate('topSafeHeight', px2vp(data.area.topRect.height));
@@ -130,6 +155,7 @@ export default class EntryAbility extends UIAbility {
       });
       win.on('windowSizeChange', (size) => {
         AppStorage.setOrCreate('screenWidthVp', px2vp(size.width));
+        AppStorage.setOrCreate('screenHeightVp', px2vp(size.height));
       });
     } catch (err) {
       hilog.error(DOMAIN, 'testTag', 'Failed to set full-screen layout. Cause: %{public}s', JSON.stringify(err));
@@ -175,6 +201,9 @@ export default class EntryAbility extends UIAbility {
     setTdOnlineState(false);
     // 申请短时任务：切后台后多存活几分钟，这段时间内新消息仍能实时收到并通知。
     backgroundGraceTask.begin();
+    // 解码后的位图很占内存（几十 MB 量级），后台留着只会抬高被系统查杀的概率。
+    // 还挂在组件上的那些由引用计数保住，回前台重新解码代价很小。
+    trimPixelCache();
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onBackground');
   }
 }

@@ -12,6 +12,7 @@ import {
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
 import { plural, str } from '../../util/strings';
 import { clockTime, fullDate, monthDayTime } from '../../util/intlFormat';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const CARD_RADIUS: number = 16;
 const DANGER: string = '#EF5B5B';
@@ -129,6 +130,7 @@ function formatLastActive(seconds: number, isCurrent: boolean): string {
 @Entry
 @Component
 struct ActiveSessionsPage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @State current: SessionRow | null = null;

@@ -19,6 +19,7 @@ import {
   COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
 import { plural, str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const CARD_RADIUS: number = 14;
 const DANGER: string = '#E64646';
@@ -29,6 +30,7 @@ const ROW_STEP: number = ROW_HEIGHT + 0.5;
 @Entry
 @Component
 struct ChatFoldersPage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @State folders: FolderInfo[] = [];

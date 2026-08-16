@@ -8,6 +8,7 @@ import {
 } from '../../util/callPresentation';
 import { CALL_VIDEO_OFF, CALL_VIDEO_FRONT } from '../../services/CallMediaBridge';
 import { str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const BG_COLOR: string = '#FF17212B';
 const CONTROL_BG: string = '#33FFFFFF';
@@ -18,6 +19,7 @@ const ACCEPT: string = '#FF31C48D';
 @Entry
 @Component
 struct CallPage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @State snap: CallSnapshot | null = null;

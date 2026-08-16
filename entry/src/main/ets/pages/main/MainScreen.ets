@@ -1,6 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { router } from '@kit.ArkUI';
-import { getTdClient, getUnreadCountStore, getCallSession } from '../../tdkit/Globals';
+import { getTdClient, getUnreadCountStore, getCallSession, getChatStore, getChatThemeStore } from '../../tdkit/Globals';
 import { CallSnapshot } from '../../services/CallSession';
 import { callKeepAliveTask } from '../../services/CallKeepAliveTask';
 import { bindAccentPrimary } from '../../util/accentTheme';
@@ -15,6 +15,9 @@ import { COLOR_DIVIDER, COLOR_PRIMARY, COLOR_TAB_PILL_BG, COLOR_TAB_UNSELECTED }
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
 import { updateChecker, STORAGE_UPDATE_AVAILABLE } from '../../services/UpdateChecker';
 import { str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
+import { ChatBackgroundState, preloadDefaultChatBackground } from '../../store/ChatBackgroundStore';
+import { rasterizeBackground } from '../../util/chatBackgroundRaster';
 
 // Translucent tint over a backdrop blur — the frosted-glass dock material.
 const DOCK_BG: ResourceColor = $r('app.color.dock_glass');
@@ -31,7 +34,10 @@ const DOCK_SWITCH_DURATION: number = 240;
 // Tabs — only dock taps switch tabs.
 @Component
 export struct MainScreen {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
+  @StorageProp('screenWidthVp') screenW: number = 360;
+  @StorageProp('screenHeightVp') screenH: number = 780;
   @StorageProp(STORAGE_UPDATE_AVAILABLE) updateAvailable: boolean = false;
   // 回前台补偿：后台期间的来电 push 可能被系统拒绝，前台一刻重查一次。
   @StorageProp('appIsForeground') @Watch('onAppForegroundChanged') appIsForeground: boolean = true;
@@ -49,9 +55,40 @@ export struct MainScreen {
   private unsubCall: (() => void) | null = null;
   private callPagePushed: boolean = false;
 
+  // Same luminance probe ChatPage uses; a chat theme picks its light or dark
+  // background from it.
+  private darkResourceMode(): boolean {
+    try {
+      const color = (getContext(this) as common.UIAbilityContext)
+        .resourceManager.getColorSync($r('app.color.chat_bg'));
+      const red = (color >>> 16) & 0xFF;
+      const green = (color >>> 8) & 0xFF;
+      const blue = color & 0xFF;
+      return red * 0.299 + green * 0.587 + blue * 0.114 < 128;
+    } catch (_error) {
+      return false;
+    }
+  }
+
   aboutToAppear(): void {
     // 已登录才查更新（MainScreen 只在登录后渲染），内部按 6 小时节流。
     updateChecker.check(false).catch((): void => {});
+    // 背景（尤其是图案）要下载并解压 .tgv，放到开会话时做就是点击到首帧之间
+    // 的卡顿。这里趁进主界面先跑一遍，结果进 TDLib 文件缓存和进程内的
+    // inflatedPatterns，之后每个会话都是命中。
+    preloadDefaultChatBackground(
+      getTdClient(), getChatStore(), getChatThemeStore(),
+      (): boolean => this.darkResourceMode(),
+      // 顺带把合成也做掉：第一次进会话时这张 jpg 已经在缓存里，不用再等
+      // 离屏渲染 + 编码。
+      (state: ChatBackgroundState): void => {
+        rasterizeBackground(this.getUIContext(), {
+          colors: state.colors, angle: state.angle, path: state.path,
+          isPattern: state.isPattern, imageOpacity: state.imageOpacity,
+          dimming: state.dimming, blurred: state.blurred,
+          width: this.screenW, height: this.screenH
+        }, (getContext(this) as common.UIAbilityContext).cacheDir);
+      });
     // 来电（应用存活时）：常驻订阅通话状态，响铃即弹入通话页。
     this.unsubCall = getCallSession().subscribe((s: CallSnapshot): void => {
       // 通话期保活：接通流程开始挂 voip 长时任务，结束即释放。
@@ -213,6 +250,14 @@ export struct MainScreen {
     .onClick(() => { this.select(3); });
   }
 
+  // Dock 标签必须经这里取：str() 出来的是普通字符串，节点只有在"构建时读过
+  // 某个状态"才会随它重建 —— langEpoch 光声明不读，语言切换时 dock 纹丝不动
+  // （用户实测要重启才生效）。这里显式读一次 langEpoch 建立依赖。
+  private dockLabel(key: string): string {
+    void this.langEpoch;
+    return str(key);
+  }
+
   // Floating capsule: outer Column carries the horizontal padding + bottom
   // margin (width('100%') + horizontal margin conflict on the same node in
   // ArkUI), inner Row is the pill itself.
@@ -237,9 +282,9 @@ export struct MainScreen {
             .hitTestBehavior(HitTestMode.None);
         }
         Row() {
-          this.dockItem(0, 'sys.symbol.message', str('tab_chats'));
-          this.dockItem(1, 'sys.symbol.person_2', str('tab_contacts'));
-          this.dockItem(2, 'sys.symbol.gearshape', str('settings_title'));
+          this.dockItem(0, 'sys.symbol.message', this.dockLabel('tab_chats'));
+          this.dockItem(1, 'sys.symbol.person_2', this.dockLabel('tab_contacts'));
+          this.dockItem(2, 'sys.symbol.gearshape', this.dockLabel('settings_title'));
           this.profileDockItem();
         }
         .width('100%').height('100%')

@@ -8,10 +8,12 @@ import {
 } from './CountryData';
 import { LoginHero } from './LoginHero';
 import { str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 @Preview
 @Component
 export struct PhoneNumberPage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @State phoneDigits: string = '';
   @State errorText: string = '';
   @State busy: boolean = false;

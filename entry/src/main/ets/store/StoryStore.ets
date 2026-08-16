@@ -7,6 +7,7 @@ export interface StoryRingEntry {
   storyIds: number[];       // 升序（发布时间序）
   maxReadStoryId: number;
   hasUnread: boolean;
+  isSelf: boolean;          // 自己的那一项，环里固定排第一
 }
 
 type StoryListener = (entries: StoryRingEntry[]) => void;
@@ -18,10 +19,35 @@ export class StoryStore {
   private entriesById: Map<number, StoryRingEntry> = new Map();
   private subs: StoryListener[] = [];
   private opened: boolean = false;
+  // 自己的会话 id。自己的那一项在环里固定排第一（和官方客户端一致），而不是
+  // 按 order 混进联系人里。0 表示还没拿到，此时先按普通项收着，拿到之后重排。
+  private selfId: number = 0;
 
   constructor(client: TdClient) {
     this.client = client;
     client.onUpdate('updateChatActiveStories', (u: TdObject) => this.onActiveStories(u));
+  }
+
+  // Must not run from the constructor: the store is built before client.start(),
+  // so getMe would be sent unauthorized, fail, and leave selfId at 0 — the ring
+  // would then never know which entry is yours.
+  // open() runs at AuthStage.Ready, where getMe is answerable.
+  private resolveSelf(): void {
+    this.client.send({ '@type': 'getMe' } as TdRequest).then((me: TdObject): void => {
+      // 私聊的 chat_id 等于 user_id。
+      this.selfId = (me['id'] as number | undefined) ?? 0;
+      if (this.selfId !== 0) {
+        this.publish();
+      }
+    }).catch((e: TdError): void => {
+      console.error(`StoryStore.getMe failed: ${e.message}`);
+    });
+  }
+
+  // 自己的会话 id；0 表示 getMe 还没回来。环需要它来渲染「我的动态」那一格，
+  // 包括自己还没发过动态、环里根本没有自己这项的情况。
+  selfChatId(): number {
+    return this.selfId;
   }
 
   // 触发 TDLib 拉取主故事列表（结果全部经 update 回流）。
@@ -30,6 +56,7 @@ export class StoryStore {
       return;
     }
     this.opened = true;
+    this.resolveSelf();
     const req: TdRequest = { '@type': 'loadActiveStories' };
     req['story_list'] = { '@type': 'storyListMain' } as TdObject;
     this.client.send(req).catch((e: TdError): void => {
@@ -48,9 +75,20 @@ export class StoryStore {
     };
   }
 
+  // 自己永远第一，其余按 order 降序——order 是 TDLib 给的联系人排序，把自己
+  // 也丢进去比较的话，自己会随它上下跳。
   entries(): StoryRingEntry[] {
     return Array.from(this.entriesById.values())
-      .sort((a: StoryRingEntry, b: StoryRingEntry) => b.order - a.order);
+      .map((e: StoryRingEntry): StoryRingEntry => {
+        e.isSelf = this.selfId !== 0 && e.chatId === this.selfId;
+        return e;
+      })
+      .sort((a: StoryRingEntry, b: StoryRingEntry) => {
+        if (a.isSelf !== b.isSelf) {
+          return a.isSelf ? -1 : 1;
+        }
+        return b.order - a.order;
+      });
   }
 
   entryOf(chatId: number): StoryRingEntry | undefined {
@@ -87,7 +125,8 @@ export class StoryStore {
       order: (active['order'] as number | undefined) ?? 0,
       storyIds: storyIds,
       maxReadStoryId: maxRead,
-      hasUnread: storyIds.some((id: number): boolean => id > maxRead)
+      hasUnread: storyIds.some((id: number): boolean => id > maxRead),
+      isSelf: this.selfId !== 0 && chatId === this.selfId
     });
     this.publish();
   }

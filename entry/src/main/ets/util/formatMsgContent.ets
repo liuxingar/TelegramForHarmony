@@ -347,6 +347,24 @@ function largestPhotoSize(photo: TdObject | undefined): PhotoSize {
 
 // A smaller size for inline bubble display (fast to download); the largest
 // size is downloaded separately, on demand, when the viewer is opened.
+// Physical pixels the in-bubble photo has to cover. Set once from the real
+// window width; the default is a sane phone value for tests and early calls.
+let inlineTargetPx: number = 800;
+
+export function setInlinePhotoTargetPx(px: number): void {
+  if (px > 0) {
+    inlineTargetPx = Math.max(320, Math.round(px));
+  }
+}
+
+// The photo size the bubble renders.
+//
+// This used to be sizes[1] — a fixed index, which in TDLib's ascending list is
+// normally the ~320px 'm' size. A bubble is roughly three quarters of the screen
+// width, so on a 3x phone it is around 750 physical pixels: the image was being
+// upscaled more than 2x, which is why bubble photos looked like something
+// already zoomed in. Pick the first size that actually covers the target and
+// fall back to the largest available.
 function inlinePhotoSize(photo: TdObject | undefined): PhotoSize {
   if (photo === undefined) {
     return { fileId: 0, width: 0, height: 0 };
@@ -355,7 +373,13 @@ function inlinePhotoSize(photo: TdObject | undefined): PhotoSize {
   if (sizes === undefined || sizes.length === 0) {
     return { fileId: 0, width: 0, height: 0 };
   }
-  const idx = Math.min(1, sizes.length - 1);
+  let idx = sizes.length - 1;
+  for (let i = 0; i < sizes.length; i++) {
+    if (((sizes[i]['width'] as number | undefined) ?? 0) >= inlineTargetPx) {
+      idx = i;
+      break;
+    }
+  }
   const s = sizes[idx];
   const file = s['photo'] as TdObject | undefined;
   return {

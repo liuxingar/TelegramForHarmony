@@ -9,6 +9,7 @@ import {
   COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
 import { plural, str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const CARD_RADIUS: number = 16;
 
@@ -60,6 +61,7 @@ function replaceUserRule(rules: TdObject[], type: string, ids: number[]): TdObje
 @Entry
 @Component
 struct PrivacyExceptionsPage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @State setting: string = '';

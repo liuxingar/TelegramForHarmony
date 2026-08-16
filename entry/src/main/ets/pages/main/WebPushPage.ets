@@ -13,6 +13,7 @@ import {
   deregisterWebPush, parseSubscriptionJson, registerWebPush, validateWebPushConfig
 } from '../../services/WebPushRegistration';
 import { str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const CARD_RADIUS: number = 14;
 
@@ -23,6 +24,7 @@ const CARD_RADIUS: number = 14;
 @Entry
 @Component
 struct WebPushPage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @StorageProp(KEY_WEBPUSH_ENABLED) pushEnabled: boolean = false;

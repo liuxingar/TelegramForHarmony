@@ -9,6 +9,7 @@ import {
   KEY_POWER_EFFECT_BLUR, KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration
 } from '../../store/AppSettings';
 import { str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const VIEWER_CHROME_BG: string = '#6e3e3e40';
 const VIEWER_MIN_SCALE: number = 1;
@@ -31,6 +32,7 @@ interface ViewerFit {
 // no explicit teardown is needed.
 @Component
 export struct MediaViewerOverlay {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   // Two-way with the page: tapping close clears the id from in here.
   @Link viewerMsgId: number;
   @Link chromeVisible: boolean;
@@ -253,11 +255,22 @@ export struct MediaViewerOverlay {
     this.edgeOverscroll = desiredX - this.photoOffsetX;
   }
 
-  // A single tap toggles chrome at every zoom level. Closing is explicit via
-  // the top-left button/back gesture, preventing an ordinary inspection tap
-  // from unexpectedly throwing the user back into the chat.
+  // A single tap on a photo at 1x closes the viewer, the way the official
+  // client behaves — at that zoom level there is nothing to inspect, so a tap
+  // means "done". Once zoomed the tap goes back to toggling chrome, because
+  // closing out of a zoomed photo would lose the user's position.
+  //
+  // Video keeps the toggle at every level: a tap there is how you reach the
+  // controls.
+  //
+  // Closing goes through onRequestClose, the same path as the top-left button,
+  // so the shrink-back-to-thumbnail transition is unchanged.
   private onPhotoTap(): void {
     if (Date.now() < this.ignoreTapUntilMs) {
+      return;
+    }
+    if (!this.isVideo() && !this.zoomed()) {
+      this.onRequestClose();
       return;
     }
     this.toggleChrome();
@@ -545,7 +558,7 @@ export struct MediaViewerOverlay {
             } else {
               if (this.siblingPath(id) !== '') {
                 Image(this.siblingPath(id).startsWith('/')
-                  ? `file://${this.siblingPath(id)}` : this.siblingPath(id))
+                  ? `file://${this.siblingPath(id)}` : this.siblingPath(id)).draggable(false)
                   .objectFit(ImageFit.Contain).width('100%').height('100%');
               }
               Stack() {
@@ -560,7 +573,7 @@ export struct MediaViewerOverlay {
             // factor. The Image only carries the scale/translate transform.
             Stack() {
               if (this.photoSrcFor(id) !== '') {
-                Image(this.photoSrcFor(id))
+                Image(this.photoSrcFor(id)).draggable(false)
                   .objectFit(ImageFit.Contain).width('100%').height('100%')
                   .scale({
                     x: id === this.viewerMsgId ? this.photoScale : VIEWER_MIN_SCALE,
@@ -573,10 +586,23 @@ export struct MediaViewerOverlay {
               }
             }
             .width('100%').height('100%')
-            // Exclusive tap recognition delays the single-tap action just
-            // enough to determine whether the user is double tapping.
+            // Parallel, not Exclusive. Exclusive has to hold the single tap
+            // back until the double-tap window expires, and since a single tap
+            // at 1x now closes the viewer, that wait showed up as a stall
+            // before the shrink animation started. In parallel the single tap
+            // fires on release.
+            //
+            // The gesture tree stays static on purpose: choosing the recogniser
+            // from this.zoomed() looked tidier but left the tap bound to
+            // nothing at all, because the binding is not re-evaluated when the
+            // condition changes.
+            //
+            // Consequences, both acceptable. At 1x the first tap closes, so
+            // double-tap-to-zoom-in never gets a chance — pinch is the way in.
+            // While zoomed, a double tap also fires the single tap twice, which
+            // toggles chrome twice and lands back where it started.
             .gesture(
-              GestureGroup(GestureMode.Exclusive,
+              GestureGroup(GestureMode.Parallel,
                 TapGesture({ count: 2, fingers: 1 })
                   .onAction((event: GestureEvent) => { this.onPhotoDoubleTap(event); }),
                 TapGesture({ count: 1, fingers: 1 })
@@ -662,7 +688,7 @@ export struct MediaViewerOverlay {
         ForEach(this.siblingIds(), (id: number) => {
           Stack() {
             if (this.siblingPath(id) !== '') {
-              Image(this.siblingPath(id).startsWith('/') ? `file://${this.siblingPath(id)}` : this.siblingPath(id))
+              Image(this.siblingPath(id).startsWith('/') ? `file://${this.siblingPath(id)}` : this.siblingPath(id)).draggable(false)
                 .width(52).height(52).borderRadius(6).objectFit(ImageFit.Cover);
             } else {
               Column().width(52).height(52).borderRadius(6).backgroundColor('#333333');

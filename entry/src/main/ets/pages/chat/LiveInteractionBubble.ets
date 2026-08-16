@@ -26,7 +26,7 @@ export struct LiveInteractionBubble {
   avatar() {
     if (this.message.senderAvatarPath !== '') {
       Image(this.message.senderAvatarPath.startsWith('/')
-        ? `file://${this.message.senderAvatarPath}` : this.message.senderAvatarPath)
+        ? `file://${this.message.senderAvatarPath}` : this.message.senderAvatarPath).draggable(false)
         .width(32).height(32).borderRadius(16).objectFit(ImageFit.Cover);
     } else {
       Stack() {
@@ -68,7 +68,7 @@ export struct LiveInteractionBubble {
           }
           if (this.message.photoPath !== '') {
             Image(this.message.photoPath.startsWith('/')
-              ? `file://${this.message.photoPath}` : this.message.photoPath)
+              ? `file://${this.message.photoPath}` : this.message.photoPath).draggable(false)
               .width(176).height(108).borderRadius(10)
               .objectFit(ImageFit.Cover).margin({ top: 3 });
           }

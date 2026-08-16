@@ -56,6 +56,7 @@ import musicQueueTest from './MusicQueue.test';
 import mediaPickTest from './MediaPick.test';
 import chatBackgroundStoreTest from './ChatBackgroundStore.test';
 import chatHeaderPresentationTest from './ChatHeaderPresentation.test';
+import translationServiceTest from './TranslationService.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -78,6 +79,7 @@ export default function testsuite() {
   messageEntryTest();
   messageStoreTest();
   albumGroupDataSourceTest();
+  translationServiceTest();
   callSessionTest();
   callPresentationTest();
   notificationServiceTest();

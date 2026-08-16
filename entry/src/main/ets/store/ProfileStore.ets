@@ -123,6 +123,13 @@ export class ProfileStore {
         this.applyUserStatus(u['status'] as TdObject | undefined, true);
       }
     }));
+    // A posted story only becomes real when TDLib says so. Both spellings are
+    // subscribed because the update was renamed across TDLib versions and an
+    // unknown name simply never fires.
+    for (const name of ['updateStoryPostSucceeded', 'updateStorySendSucceeded',
+      'updateStoryDeleted']) {
+      this.unsubs.push(this.client.onUpdate(name, (): void => { this.refreshStories(); }));
+    }
     this.loadUser();
     this.loadFullInfo();
     this.loadStories();
@@ -459,17 +466,24 @@ export class ProfileStore {
     this.storiesLoading = true;
     this.storiesError = '';
     this.notify();
-    // The private chat may not exist locally yet ("Chat not found") —
-    // materialize it first, then query the profile stories.
+    // Both requests go out at once.
+    //
+    // The stories query never needed the chat object: a user's chat id equals
+    // the user id, and that is what loadStoriesNow() sends. Chaining it behind
+    // createPrivateChat put a full round trip in front of every profile open —
+    // the "stories take ages to load" — and made a createPrivateChat failure
+    // blank the grid for a reason that has nothing to do with stories.
+    // createPrivateChat still runs: privateChatId feeds the shared-content
+    // store and message jumps. It just no longer gates this.
+    this.loadStoriesNow(version);
     const create: TdRequest = { '@type': 'createPrivateChat' };
     create['user_id'] = this.userId;
     create['force'] = false;
     this.send(create, 'createPrivateChat', (chat: TdObject): void => {
       this.privateChatId = (chat['id'] as number | undefined) ?? this.userId;
       this.notify();
-      this.loadStoriesNow(version);
     }, (): void => {
-      this.failStories(version);
+      console.error(`ProfileStore.createPrivateChat(${this.userId}) failed`);
     });
   }
 
@@ -477,6 +491,21 @@ export class ProfileStore {
     if (!this.storiesLoading) {
       this.loadStories();
     }
+  }
+
+  // Re-query the grid without clearing it first.
+  //
+  // postStory resolves as soon as TDLib accepts the upload, not when the story
+  // exists server-side, so the reload the caller fires right after it came back
+  // without the new story and the grid sat stale until the page was reopened.
+  // The authoritative signal is the update below; this refresh has to be silent
+  // because loadStories() blanks the list and would flash an empty grid every
+  // time one arrives.
+  private refreshStories(): void {
+    if (this.storiesLoading) {
+      return;
+    }
+    this.loadStoriesNow(++this.storiesVersion);
   }
 
   private failStories(version: number): void {

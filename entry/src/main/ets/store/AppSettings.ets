@@ -147,10 +147,16 @@ export const KEY_WEBPUSH_ENDPOINT: string = 'webPushEndpoint';
 export const KEY_WEBPUSH_P256DH: string = 'webPushP256dh';
 export const KEY_WEBPUSH_AUTH: string = 'webPushAuth';
 
+// 翻译。目标语言 '' 表示跟随系统语言；整聊天翻译是总开关，关闭时会话里
+// 不出现整聊天翻译入口（单条翻译不受它控制）。
+export const KEY_TRANSLATE_TARGET: string = 'translateTargetLang';
+export const KEY_TRANSLATE_CHATS: string = 'translateEntireChats';
+
 const DATA_STRING_KEYS: string[] = [
   KEY_WEBPUSH_ENDPOINT,
   KEY_WEBPUSH_P256DH,
-  KEY_WEBPUSH_AUTH
+  KEY_WEBPUSH_AUTH,
+  KEY_TRANSLATE_TARGET
 ];
 
 // 后台播放：各媒体类别切后台是否继续播放（audioPlayback 长时任务）。
@@ -194,7 +200,8 @@ const DATA_BOOLEAN_FALSE_DEFAULTS: string[] = [
   KEY_AUTO_LESS_DATA_CALLS,
   KEY_AUTOSAVE_PRIVATE,
   KEY_AUTOSAVE_GROUP,
-  KEY_AUTOSAVE_CHANNEL
+  KEY_AUTOSAVE_CHANNEL,
+  KEY_TRANSLATE_CHATS
 ];
 
 interface NumberDefault {

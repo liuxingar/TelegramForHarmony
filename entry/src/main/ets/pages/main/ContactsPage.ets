@@ -7,6 +7,7 @@ import { promptAction, router, SymbolGlyphModifier } from '@kit.ArkUI';
 import { searchPublicUsers } from '../../store/PublicUserSearch';
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
 import { plural, str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const CARD_BG: ResourceColor = $r('app.color.surface');
 const CARD_RADIUS: number = 14;
@@ -23,6 +24,7 @@ const SKELETON_ROWS: number[] = [0, 1, 2, 3, 4];
 @Preview
 @Component
 export struct ContactsPage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @State contacts: ContactItem[] = [];

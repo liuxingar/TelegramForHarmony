@@ -5,6 +5,7 @@ import {
   COLOR_SURFACE, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
 import { str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 export interface PickedContact {
   userId: number;
@@ -25,6 +26,7 @@ interface ContactRow {
 // 发送名片：TDLib 联系人列表选择一个。
 @Component
 export struct ContactPickerSheet {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   onPick: (contact: PickedContact) => void = (): void => {};
   onClose: () => void = (): void => {};
   @State rows: ContactRow[] = [];

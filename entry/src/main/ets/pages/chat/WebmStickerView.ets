@@ -262,13 +262,13 @@ export struct WebmStickerView {
   build() {
     if (this.powerSuspended()) {
       if (this.thumbPath !== '') {
-        Image(this.thumbPath.startsWith('/') ? `file://${this.thumbPath}` : this.thumbPath)
+        Image(this.thumbPath.startsWith('/') ? `file://${this.thumbPath}` : this.thumbPath).draggable(false)
           .width(this.boxWidth).height(this.boxHeight).objectFit(ImageFit.Contain);
       } else {
         Stack().width(this.boxWidth).height(this.boxHeight);
       }
     } else if (this.failed && this.thumbPath !== '') {
-      Image(this.thumbPath.startsWith('/') ? `file://${this.thumbPath}` : this.thumbPath)
+      Image(this.thumbPath.startsWith('/') ? `file://${this.thumbPath}` : this.thumbPath).draggable(false)
         .width(this.boxWidth).height(this.boxHeight).objectFit(ImageFit.Contain);
     } else {
       XComponent({ id: this.componentId(), type: XComponentType.TEXTURE, libraryname: 'ijkplayer_napi' })

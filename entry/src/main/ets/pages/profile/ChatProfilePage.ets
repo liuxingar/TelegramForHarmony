@@ -22,6 +22,7 @@ import {
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
 import { MUTE_LONG, setMute } from '../../store/ChatActions';
 import { str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const CARD_BG: ResourceColor = $r('app.color.surface');
 const CARD_RADIUS: number = 14;
@@ -51,6 +52,7 @@ const PROFILE_TABS: ProfileTabItem[] = [
 @Entry
 @Component
 struct ChatProfilePage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('screenWidthVp') screenW: number = 360;
   @State title: string = '';
@@ -1204,7 +1206,7 @@ struct ChatProfilePage {
       ForEach(this.contentItems, (item: ProfileContentItem) => {
         Stack({ alignContent: Alignment.BottomEnd }) {
           if (item.thumbPath !== '') {
-            Image(`file://${item.thumbPath}`).width('100%').height('100%')
+            Image(`file://${item.thumbPath}`).draggable(false).width('100%').height('100%')
               .objectFit(ImageFit.Cover);
           } else {
             Column() {
@@ -1271,7 +1273,7 @@ struct ChatProfilePage {
           Row({ space: 11 }) {
             Stack() {
               if (item.thumbPath !== '') {
-                Image(`file://${item.thumbPath}`).width(46).height(46)
+                Image(`file://${item.thumbPath}`).draggable(false).width(46).height(46)
                   .objectFit(ImageFit.Cover).borderRadius(10);
               } else {
                 SymbolGlyph($r(this.contentIcon(item))).fontSize(22).fontColor([COLOR_PRIMARY]);

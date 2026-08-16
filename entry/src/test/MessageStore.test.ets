@@ -278,6 +278,72 @@ export default function messageStoreTest() {
       expect(ids(store.getMessages()).join(',')).assertEqual('10,20,30');
       expect(store.getInitialHistoryState()).assertEqual('ready');
     });
+    // The suspended stretch is a blind spot: the process is frozen, messages
+    // delivered meanwhile never pass through updateNewMessage. resumeOpenChat
+    // refetches the newest page; if it does not overlap the loaded window the
+    // pages between were never fetched, and merging would render the two runs
+    // seamlessly glued with the middle silently missing (10:46 followed by
+    // 10:57 on the device). Disjoint pages must replace the window.
+    it('resume_after_suspend_replaces_disjoint_window', 0, async () => {
+      const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
+      store.open();
+      feedChat(b, 5);
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      feedHistory(b, [textMessage(30, 5, false, 'c'), textMessage(20, 5, false, 'b'), textMessage(10, 5, false, 'a')]);
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      expect(ids(store.getMessages()).join(',')).assertEqual('10,20,30');
+      store.suspendOpenChat();
+      store.resumeOpenChat();
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      // The refetched newest page shares no id with the window: 40 was lost in
+      // the gap, 50-70 arrived later.
+      feedHistory(b, [textMessage(70, 5, false, 'g'), textMessage(60, 5, false, 'f'), textMessage(50, 5, false, 'e')]);
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      expect(ids(store.getMessages()).join(',')).assertEqual('50,60,70');
+    });
+    // The overlap case must keep merging: replacing the window on every resume
+    // would throw away loaded history for no reason.
+    it('resume_after_suspend_merges_overlapping_page', 0, async () => {
+      const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
+      store.open();
+      feedChat(b, 5);
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      feedHistory(b, [textMessage(30, 5, false, 'c'), textMessage(20, 5, false, 'b'), textMessage(10, 5, false, 'a')]);
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      store.suspendOpenChat();
+      store.resumeOpenChat();
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      // One new message; the page still contains 20 and 30 — contiguous.
+      feedHistory(b, [textMessage(40, 5, false, 'd'), textMessage(30, 5, false, 'c'), textMessage(20, 5, false, 'b')]);
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      expect(ids(store.getMessages()).join(',')).assertEqual('10,20,30,40');
+    });
+    // TDLib often answers the FIRST negative-offset getChatHistory from its
+    // local cache only — nothing newer comes back even though newer messages
+    // exist. Concluding "live tail" from that one answer froze newer-paging,
+    // which users saw as unread messages never fully loading. The store must
+    // retry once from the same anchor before believing the tail is real.
+    it('newer_paging_retries_cache_only_first_answer', 0, async () => {
+      const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
+      store.open();
+      feedChat(b, 5);
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      feedHistory(b, [textMessage(30, 5, false, 'c'), textMessage(20, 5, false, 'b'), textMessage(10, 5, false, 'a')]);
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      // Jump mid-history so hasMoreNewer arms newer paging.
+      store.loadAround(20);
+      feedHistory(b, [textMessage(30, 5, false, 'c'), textMessage(20, 5, false, 'b'), textMessage(10, 5, false, 'a')]);
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      expect(store.loadNewer()).assertTrue();
+      // Cache-only first answer: anchor and older, nothing newer.
+      feedHistory(b, [textMessage(30, 5, false, 'c'), textMessage(20, 5, false, 'b')]);
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      // The retry fired automatically; the server-backed page answers it.
+      feedHistory(b, [textMessage(50, 5, false, 'e'), textMessage(40, 5, false, 'd'), textMessage(30, 5, false, 'c')]);
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      expect(ids(store.getMessages()).join(',')).assertEqual('10,20,30,40,50');
+      expect(store.getHasMoreNewer()).assertTrue();
+    });
     it('sole_local_join_notice_is_injected_and_read', 0, async () => {
       const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
       store.open();
@@ -408,7 +474,10 @@ export default function messageStoreTest() {
       const upd: TdObject = { '@type': 'updateUser' };
       upd['user'] = user;
       b.onReceive(JSON.stringify(upd));
-      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 0));
+      // Past the full settle window (1s): right after initial history the
+      // store holds ALL update publications and flushes once at window end —
+      // which is exactly what this test exercises.
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 1100));
       const named = store.getMessages()
         .filter((m: MessageEntry): boolean => m.senderName === 'Bob').length;
       expect(named).assertEqual(5);
@@ -456,12 +525,14 @@ export default function messageStoreTest() {
       expect(ids(store.getMessages()).join(',')).assertEqual('2002');
       expect(store.getMessages()[0].sendState).assertEqual('sent');
     });
-    it('read_outbox_marks_read', 0, () => {
+    it('read_outbox_marks_read', 0, async () => {
       const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
       store.open();
       pushNewMessage(b, textMessage(50, 5, true, 'x')); // outgoing, sent
       const u: TdObject = { '@type': 'updateChatReadOutbox' }; u['chat_id'] = 5; u['last_read_outbox_message_id'] = 50;
       b.onReceive(JSON.stringify(u));
+      // The read watermark is applied inside the (now coalesced) publish.
+      await new Promise<void>((r: (v: undefined) => void) => setTimeout(() => r(undefined), 30));
       expect(store.getMessages()[0].sendState).assertEqual('read');
     });
     it('edited_update_refreshes_edit_marker', 0, () => {

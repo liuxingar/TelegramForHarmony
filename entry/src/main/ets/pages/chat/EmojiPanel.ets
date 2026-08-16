@@ -6,6 +6,7 @@ import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../u
 import { StickerPicker, StickerItem, ClassicPack } from './StickerPicker';
 import { GifPicker, GifItem } from './GifPicker';
 import { str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 interface EmojiSection {
   title: string;
@@ -75,6 +76,7 @@ const CLASSIC_PACKS: ClassicPack[] = SECTIONS.map((s: EmojiSection): ClassicPack
 // category after the panel is closed and reopened.
 @Component
 export struct EmojiPanel {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   onPick: (emoji: string) => void = (): void => {};
   onPickCustomEmoji: (emoji: string, customEmojiId: string) => void = (): void => {};
   onPickSticker: (s: StickerItem, x: number, y: number) => void = (): void => {};

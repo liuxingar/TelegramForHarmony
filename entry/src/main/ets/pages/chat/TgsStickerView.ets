@@ -11,6 +11,12 @@ import {
 // cap render their static thumbnail; scrolling releases slots so fresh cells
 // animate again.
 const MAX_LIVE_TGS: number = 14;
+const TGS_FIRST_DELAY_MS: number = 120;
+// 一帧只放一个进来，别让它们挤在一起。
+const TGS_STAGGER_MS: number = 70;
+// 下一个可以开始的时刻，全局共享——错开的是所有实例，不是单个。
+let tgsNextStartAt: number = 0;
+
 let liveTgs: number = 0;
 
 // Plays a Telegram TGS sticker (gzipped Lottie JSON) on a Canvas via
@@ -44,6 +50,7 @@ export struct TgsStickerView {
   private disposed: boolean = false;
   private holdsSlot: boolean = false;
   private canvasReady: boolean = false;
+  private startTimer: number = -1;
 
   aboutToReuse(params: Record<string, Object>): void {
     const np = params['tgsPath'] as string | undefined;
@@ -57,7 +64,7 @@ export struct TgsStickerView {
     this.disposed = false;
     this.failed = false;
     if (this.canvasReady) {
-      this.startAnimation();
+      this.scheduleStart();
     }
   }
 
@@ -69,11 +76,12 @@ export struct TgsStickerView {
     if (this.powerSuspended()) {
       this.stopAnim();
     } else if (this.canvasReady) {
-      this.startAnimation();
+      this.scheduleStart();
     }
   }
 
   private stopAnim(): void {
+    this.cancelScheduledStart();
     if (this.holdsSlot) {
       liveTgs--;
       this.holdsSlot = false;
@@ -89,9 +97,35 @@ export struct TgsStickerView {
     this.stopAnim();
   }
 
+  // Staggered, never in the frame that asked for it.
+  //
+  // Bringing one of these up costs about 35ms of main-thread work — gunzip,
+  // JSON.parse, then lottie.loadAnimation — and a chat opening with several
+  // animated stickers on screen put all of that into the frame that was
+  // supposed to present the page. Spacing the starts lets the chat appear
+  // first and the stickers come alive over the next moment, which is what they
+  // look like anyway.
+  private scheduleStart(): void {
+    this.cancelScheduledStart();
+    const now = Date.now();
+    const at = Math.max(now + TGS_FIRST_DELAY_MS, tgsNextStartAt);
+    tgsNextStartAt = at + TGS_STAGGER_MS;
+    this.startTimer = setTimeout((): void => {
+      this.startTimer = -1;
+      this.startAnimation();
+    }, at - now);
+  }
+
+  private cancelScheduledStart(): void {
+    if (this.startTimer !== -1) {
+      clearTimeout(this.startTimer);
+      this.startTimer = -1;
+    }
+  }
+
   private async startAnimation(): Promise<void> {
     this.stopAnim(); // reuse path: drop the previous sticker's animation first
-    if (this.powerSuspended()) {
+    if (this.powerSuspended() || this.disposed) {
       return;
     }
     if (liveTgs >= MAX_LIVE_TGS) {
@@ -150,20 +184,20 @@ export struct TgsStickerView {
   build() {
     if (this.powerSuspended()) {
       if (this.thumbPath !== '') {
-        Image(this.thumbPath.startsWith('/') ? `file://${this.thumbPath}` : this.thumbPath)
+        Image(this.thumbPath.startsWith('/') ? `file://${this.thumbPath}` : this.thumbPath).draggable(false)
           .width(this.boxWidth).height(this.boxHeight).objectFit(ImageFit.Contain);
       } else {
         Stack().width(this.boxWidth).height(this.boxHeight);
       }
     } else if (this.failed && this.thumbPath !== '') {
-      Image(this.thumbPath.startsWith('/') ? `file://${this.thumbPath}` : this.thumbPath)
+      Image(this.thumbPath.startsWith('/') ? `file://${this.thumbPath}` : this.thumbPath).draggable(false)
         .width(this.boxWidth).height(this.boxHeight).objectFit(ImageFit.Contain);
     } else {
       Canvas(this.ctx)
         .width(this.boxWidth).height(this.boxHeight)
         .onReady(() => {
           this.canvasReady = true;
-          this.startAnimation();
+          this.scheduleStart();
         });
     }
   }

@@ -68,6 +68,10 @@ export struct AvLoopVideo {
           });
         } else if (state === 'prepared') {
           p.loop = this.loop;
+          // 保比例裁切填充。默认的拉伸填充会把竖屏录屏（约 0.46 比例）压进
+          // 裁到 0.56 的气泡框——纵向压扁 20%，就是"视频缩略图变形"。
+          // FIT_CROP 与底层缩略图的 ImageFit.Cover 行为一致，切换无跳变。
+          p.videoScaleType = media.VideoScaleType.VIDEO_SCALE_TYPE_FIT_CROP;
           p.setVolume(this.muted ? 0 : 1);
           p.play().catch((e: Object) => {
             console.error(`AvLoopVideo.play failed: ${JSON.stringify(e)}`);

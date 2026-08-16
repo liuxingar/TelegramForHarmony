@@ -17,7 +17,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import {
-  BASE_STRINGS, ETS_ROOT, LOCALES, RES_ROOT, findLiterals, isExemptLine,
+  APP_SCOPE_STRINGS, BASE_STRINGS, ETS_ROOT, LOCALES, RES_ROOT, findLiterals, isExemptLine,
   isMigrated, relFromEtsRoot, walkEts
 } from './i18n-config.mjs';
 
@@ -42,7 +42,13 @@ function readNames(path, group) {
 
 // --- 1. referenced keys exist -----------------------------------------------
 
+// Module strings plus the app-level ones: $r('app.string.x') resolves both, so
+// checking only the module's file rejects a valid reference to app_name.
+// Kept separate from `baseStrings` for the reachability pass below — AppScope
+// entries are referenced from app.json5 as well as from code.
+const appScopeStrings = readNames(APP_SCOPE_STRINGS, 'string') ?? new Set();
 const baseStrings = readNames(BASE_STRINGS, 'string') ?? new Set();
+const knownStrings = new Set([...baseStrings, ...appScopeStrings]);
 const basePlurals = readNames(`${RES_ROOT}/base/element/plural.json`, 'plural') ?? new Set();
 
 // Two access paths, both must be checked. $r() is for components; str()/plural()
@@ -70,7 +76,7 @@ for (const file of walkEts(ETS_ROOT)) {
     while ((m = p.re.exec(text)) !== null) {
       refCount++;
       const name = m[1];
-      const known = p.kind === 'string' ? baseStrings : basePlurals;
+      const known = p.kind === 'string' ? knownStrings : basePlurals;
       if (!known.has(name)) {
         failures.push(`${rel} 引用了不存在的 ${p.label.replace('%s', name)}`);
       }

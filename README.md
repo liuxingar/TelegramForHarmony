@@ -1,4 +1,4 @@
-# TelegramForHarmony
+# Petrelgram
 
 一个开源的**非官方 HarmonyOS NEXT Telegram 客户端**。使用 ArkTS/ArkUI 编写，
 通过原生 N-API 桥接 [TDLib](https://core.telegram.org/tdlib)（Telegram 官方客户端库）。

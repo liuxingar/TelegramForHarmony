@@ -62,7 +62,7 @@ export struct GiftBubble {
           colors: [[`${this.accent()}22`, 0], ['#F7F9FC', 1]]
         });
       if (this.photoPath !== '') {
-        Image(this.photoPath.startsWith('/') ? `file://${this.photoPath}` : this.photoPath)
+        Image(this.photoPath.startsWith('/') ? `file://${this.photoPath}` : this.photoPath).draggable(false)
           .width(112).height(112).objectFit(ImageFit.Contain)
           .transition(TransitionEffect.OPACITY
             .combine(TransitionEffect.scale({ x: 0.92, y: 0.92 }))

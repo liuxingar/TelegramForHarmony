@@ -22,6 +22,9 @@ import { plural, str } from '../../util/strings';
 // 对话框会挂死（Promise 既不 resolve 也不 reject）。
 const MENU_DISMISS_MS: number = 150;
 
+// Reused across list rows. Every chat row is the same shape, so there is no
+// reuseId to split: one pool serves the whole list.
+@Reusable
 @Component
 export struct ChatRow {
   @Prop chat: ChatEntry;
@@ -48,7 +51,41 @@ export struct ChatRow {
   private pressConsumedByMenu: boolean = false;
 
   aboutToAppear(): void {
-    if (!this.chat.isLive) { return; }
+    this.startLivePulse(this.chat.isLive);
+  }
+
+  // Recycling is NOT destruction: a reused row goes to the pool and
+  // aboutToDisappear never runs for it. Without this the live pulse interval
+  // would outlive the row and keep ticking for every row the list ever showed.
+  aboutToRecycle(): void {
+    this.teardown();
+  }
+
+  aboutToReuse(params: Record<string, Object>): void {
+    // Only this row's own state is re-seeded — @Prop is refreshed by the
+    // framework, and assigning it here is what tore MessageBubble's parallel
+    // arrays apart.
+    this.livePulseExpanded = false;
+    this.contextMenuShown = false;
+    this.pressActive = false;
+    this.pressRevision = -1;
+    this.pressIndex = -1;
+    this.pressConsumedByMenu = false;
+    // isLive comes from params, not this.chat: that refresh lands after this
+    // callback, so reading the field here would arm the pulse from the row
+    // being replaced rather than the one arriving.
+    const next = params.chat as ChatEntry | undefined;
+    this.startLivePulse(next !== undefined && next.isLive);
+  }
+
+  aboutToDisappear(): void {
+    this.teardown();
+  }
+
+  private startLivePulse(isLive: boolean): void {
+    if (this.livePulseTimer !== -1 || !isLive) {
+      return;
+    }
     this.livePulseTimer = setInterval((): void => {
       if (this.powerSaving || !this.particlesEnabled) {
         this.livePulseExpanded = false;
@@ -58,7 +95,7 @@ export struct ChatRow {
     }, 760);
   }
 
-  aboutToDisappear(): void {
+  private teardown(): void {
     if (this.livePulseTimer !== -1) {
       clearInterval(this.livePulseTimer);
       this.livePulseTimer = -1;
@@ -420,6 +457,9 @@ export struct ChatRow {
         return;
       }
       const params: Record<string, Object> = { 'chatId': this.chat.id };
+      // 打点：首次进入卡顿的定位用。到 ChatPage.aboutToAppear 之间的间隔就是
+      // 页面模块加载+路由成本，只有首次导航才付。
+      AppStorage.setOrCreate('chatOpenTapAt', Date.now());
       router.pushUrl({ url: 'pages/chat/ChatPage', params: params });
     })
     .onTouch((event: TouchEvent): void => {

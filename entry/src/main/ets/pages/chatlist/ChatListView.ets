@@ -4,9 +4,11 @@ import { ChatRow } from './ChatRow';
 import { CHAT_MENU_OPEN, ChatListFreeze } from './ChatListFreeze';
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 @Component
 export struct ChatListView {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @Prop listKey: string;
   // Folder tabs sit behind MainScreen's floating dock; ArchivePage does not.
   @Prop reserveDockSpace: boolean = true;
@@ -78,9 +80,10 @@ export struct ChatListView {
     }
   }
 
+  // langEpoch in the key: see MainTabBody.rowKey.
   private rowKey(item: ChatEntry): string {
     const pinned = getChatStore().isPinned(this.listKey, item.id) ? 1 : 0;
-    return `${item.id}_${item.revision}_${pinned}`;
+    return `${item.id}_${item.revision}_${pinned}_${this.langEpoch}`;
   }
 
   private loadMore(): void {

@@ -1,10 +1,12 @@
 import { common, Want } from '@kit.AbilityKit';
 import { promptAction, router } from '@kit.ArkUI';
-import { KEY_APP_LANGUAGE, setString } from '../../store/AppSettings';
 import {
-  AppLanguage, LANGUAGE_SYSTEM, appLanguages, applyAppLanguage, labelForTag, requiresRestart,
-  systemMatchedLanguage
-} from '../../util/appLanguage';
+  KEY_APP_LANGUAGE, KEY_TRANSLATE_CHATS, KEY_TRANSLATE_TARGET, setBoolean, setString
+} from '../../store/AppSettings';
+import { AppLanguage, LANGUAGE_SYSTEM, appLanguages, applyAppLanguage, labelForTag, requiresRestart, systemMatchedLanguage, LANGUAGE_EPOCH } from '../../util/appLanguage';
+import {
+  languageDisplayName, resolveTranslateTarget, TRANSLATE_LANG_CODES
+} from '../../services/TranslationService';
 import { str } from '../../util/strings';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
 
@@ -19,9 +21,14 @@ const CARD_RADIUS: number = 14;
 @Entry
 @Component
 struct LanguagePage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @StorageLink(KEY_APP_LANGUAGE) selected: string = LANGUAGE_SYSTEM;
+  // 翻译设置。目标语言 '' = 跟随系统；整聊天翻译是总开关，会话菜单里的
+  // 「翻译此聊天」入口只在它打开时出现。
+  @StorageLink(KEY_TRANSLATE_TARGET) translateTarget: string = '';
+  @StorageLink(KEY_TRANSLATE_CHATS) translateChats: boolean = false;
   @State leavingPage: boolean = false;
   private leaveTimer: number = -1;
 
@@ -164,11 +171,80 @@ struct LanguagePage {
     .onClick((): void => { this.choose(opt.tag); });
   }
 
+  // 目标语言选择：首项「跟随系统」（清空设置），其后为固定候选表。
+  private pickTranslateTarget(): void {
+    const codes: string[] = TRANSLATE_LANG_CODES;
+    const names: string[] = [str('language_system')];
+    for (const code of codes) {
+      names.push(languageDisplayName(code));
+    }
+    const selectedIdx: number = this.translateTarget === ''
+      ? 0 : Math.max(0, codes.indexOf(this.translateTarget) + 1);
+    TextPickerDialog.show({
+      range: names,
+      selected: selectedIdx,
+      onAccept: (value: TextPickerResult): void => {
+        const idx: number = value.index as number;
+        setString(KEY_TRANSLATE_TARGET, idx <= 0 ? '' : codes[idx - 1]);
+      }
+    });
+  }
+
+  private translateTargetLabel(): string {
+    if (this.translateTarget === '') {
+      return str('language_system_hint', languageDisplayName(resolveTranslateTarget()));
+    }
+    return languageDisplayName(this.translateTarget);
+  }
+
+  @Builder
+  translationSection() {
+    Text($r('app.string.language_translate_section'))
+      .fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
+      .width('100%').padding({ left: 16 });
+    Column() {
+      Row() {
+        Text($r('app.string.language_translate_target'))
+          .fontSize(16).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
+        Text(this.translateTargetLabel())
+          .fontSize(15).fontColor(COLOR_TEXT_SECONDARY);
+        SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(16)
+          .fontColor([COLOR_TEXT_SECONDARY]).margin({ left: 4 });
+      }
+      .width('100%').padding({ left: 16, right: 12, top: 13, bottom: 13 })
+      .stateStyles({
+        normal: this.optionNormalStyle,
+        pressed: this.optionPressedStyle
+      })
+      .onClick((): void => { this.pickTranslateTarget(); });
+      Divider().color($r('app.color.divider')).strokeWidth(0.7).margin({ left: 16 });
+      Row() {
+        Column({ space: 2 }) {
+          Text($r('app.string.language_translate_chats'))
+            .fontSize(16).fontColor(COLOR_TEXT_PRIMARY).width('100%');
+          Text($r('app.string.language_translate_chats_hint'))
+            .fontSize(13).fontColor(COLOR_TEXT_SECONDARY).width('100%');
+        }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+        Toggle({ type: ToggleType.Switch, isOn: this.translateChats })
+          .selectedColor(COLOR_PRIMARY)
+          .onChange((on: boolean): void => { setBoolean(KEY_TRANSLATE_CHATS, on); });
+      }
+      .width('100%').padding({ left: 16, right: 12, top: 10, bottom: 10 });
+    }
+    .width('100%').backgroundColor(CARD_BG).borderRadius(CARD_RADIUS)
+    .padding({ top: 2, bottom: 2 });
+  }
+
   build() {
     Column() {
       this.header();
       Scroll() {
         Column({ space: 14 }) {
+          this.translationSection();
+
+          Text($r('app.string.language_app_section'))
+            .fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
+            .width('100%').padding({ left: 16 });
           Column() {
             ForEach(appLanguages(), (opt: AppLanguage, idx: number) => {
               if (idx > 0) {

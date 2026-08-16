@@ -44,21 +44,32 @@ import {
 } from '../../store/ChatBackgroundStore';
 import { gradientStops } from '../../util/backgroundPresentation';
 import {
+  BackgroundRasterParams, cachedRaster, rasterSignature, rasterizeBackground
+} from '../../util/chatBackgroundRaster';
+import {
   chatHeaderPresentation, chatHeaderTitle, ChatHeaderPresentation
 } from '../../util/chatHeaderPresentation';
 import { MusicQueue } from '../../services/MusicQueue';
 import { VoiceState } from '../../services/VoicePlayback';
 import { setMediaViewerOrientation } from './LiveViewerUi';
-import { AlbumGroupDataSource } from './AlbumGroupDataSource';
+import { AlbumGroupDataSource, contentFingerprint, DataSourceUpdateKind } from './AlbumGroupDataSource';
+import { BasicPrefetcher } from '@kit.ArkUI';
+import { guardKey } from '../../util/keyGuard';
+import { CachedImage } from '../common/CachedImage';
 import { collapseAlbums, groupIndexOf, AlbumGroup } from '../../util/collapseAlbums';
 import { AvatarView } from '../chatlist/AvatarView';
 import {
   KEY_POWER_ACTIVE, KEY_POWER_CHAT_EFFECTS, KEY_POWER_EMOJI, KEY_POWER_EMOJI_REACTIONS,
   KEY_POWER_EFFECT_BACKGROUND, KEY_POWER_EFFECT_BLUR, KEY_POWER_EFFECT_MENU,
   KEY_POWER_EFFECT_REACTION, KEY_POWER_EFFECT_REPLY, KEY_POWER_PARTICLES,
-  KEY_POWER_SMOOTH_TRANSITIONS, KEY_REDUCE_ANIM, KEY_SEND_BY_ENTER, powerAnimationDuration,
+  KEY_POWER_SMOOTH_TRANSITIONS, KEY_REDUCE_ANIM, KEY_SEND_BY_ENTER, KEY_TRANSLATE_CHATS,
+  powerAnimationDuration,
   powerFeatureEnabled, powerGroupAnimationDuration, powerGroupFeatureEnabled, autosaveEnabled
 } from '../../store/AppSettings';
+import {
+  getTranslationService, languageDisplayName, looksLikeTargetLanguage, resolveTranslateTarget,
+  TRANSLATE_LANG_CODES
+} from '../../services/TranslationService';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY, botButtonBg } from '../../util/theme';
 import {
   normalizeTelegramLink, bareUsernameOf, inviteLinkOf, chatLinkActionOf,
@@ -78,6 +89,7 @@ import { floatingLiveWindow } from './LiveFloatingWindow';
 import { MUTE_LONG, setMute } from '../../store/ChatActions';
 import { liveLocation, LiveLocationState } from '../../services/LiveLocationService';
 import { plural, str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 // One emoji-triggered sticker hint shown above the composer.
 interface StickerSuggestion {
@@ -103,11 +115,22 @@ const HEADER_BLUR_RADIUS: number = 140;
 // 实时位置的上报间隔。Telegram 官方客户端也是分钟级——秒级上报既费电又没有
 // 实际意义，收到的一方看到的地图精度远达不到那个粒度。
 
+// 稳定后的预建行数，以及首屏之后隔多久补上。
+const LIST_CACHED_COUNT: number = 4;
+const CACHED_COUNT_GROW_MS: number = 450;
+
 const CHAT_HEADER_ACTION_SIZE: number = 42;
 const CHAT_HEADER_RADIUS: number = 22;
 const CHAT_HEADER_NAV_GUARD_MS: number = 700;
 const TOP_CARD_LOADING_DELAY_MS: number = 180;
 const TOP_CARD_ACTION_GUARD_MS: number = 650;
+
+// Composer geometry. These three have to agree with the TextArea's own
+// lineHeight/padding: the editor height is computed from them, and a mismatch
+// clips the last line instead of scrolling to it.
+const COMPOSER_LINE_H: number = 22;
+const COMPOSER_EDITOR_PAD: number = 9;
+const COMPOSER_MAX_LINES: number = 4;
 
 // Emoji offered in the full reaction picker (opened from the long-press menu's
 // chevron). Ordered roughly like the official client's reaction sheet.
@@ -115,6 +138,10 @@ const TOP_CARD_ACTION_GUARD_MS: number = 650;
 @Preview
 @Component
 struct ChatPage {
+  // @Watch, because the row key below embeds this value: bumping it renames
+  // every row, and the data source has to be told or LazyForEach keeps a key
+  // table that no longer matches anything.
+  @StorageProp(LANGUAGE_EPOCH) @Watch('onLanguageEpochChanged') langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;  // ✅ 新增
   @StorageProp('keyboardHeightVp') @Watch('onKeyboardHeightChanged') keyboardH: number = 0;
@@ -134,6 +161,84 @@ struct ChatPage {
   // paging in the viewer once more history loads.
   @State groups: AlbumGroup[] = [];
   private groupsData: AlbumGroupDataSource = new AlbumGroupDataSource();
+
+  // The ONE definition of a message row's LazyForEach key. Both the key
+  // generator below and the data source's operations go through this: the data
+  // source names the keys its ADD/CHANGE operations affect instead of leaving
+  // the framework to re-derive them, and two spellings of the format would put
+  // the two tables out of step with nothing to catch it.
+  //
+  // The content fingerprint is the load-bearing part: LazyForEach reuse is
+  // key-driven (reload's contract is "key unchanged -> original component
+  // reused"), so a key that doesn't change with the content resurrects stale
+  // nodes on every reload — see contentFingerprint. langEpoch is in the key so
+  // a language switch rebuilds every row exactly once; the alternative — a
+  // @StorageProp on MessageBubble — registers an AppStorage observer per ROW,
+  // paid on every mount and every scroll recycle, to serve something that
+  // changes once in a session.
+  private rowKeyOf: (g: AlbumGroup) => string = (g: AlbumGroup): string =>
+    `message_group_${g.head.id}_${g.memberIds.join('_')}` +
+    `_${contentFingerprint(g.key)}_${this.langEpoch}`;
+
+  // Whether this page is currently visible (between onPageShow and onPageHide),
+  // and whether the list dataset changed while it was not.
+  //
+  // Notifications delivered while the page is hidden are the root of the
+  // "messages scrambled after returning from the background" report. The store
+  // keeps publishing while the app is backgrounded, so the data source keeps
+  // emitting ADD/CHANGE — but a hidden List does not fully apply them: on the
+  // device, "Use repeat key" warnings start the moment the page becomes visible
+  // again, BEFORE any new notification, meaning the framework's key -> node
+  // table came back from the hidden period already inconsistent. It then
+  // re-associates recycled rows against that stale table: the newest rows are
+  // freshly built and correct, the rows above them come back as some other
+  // row's content. The data and the notifications are provably clean — the
+  // snapshot duplicate scan and a mirrored key table both stayed silent while
+  // the framework warned — so the fix is not to notify better but to stop
+  // trusting the hidden-period bookkeeping: one RELOAD on return rebuilds the
+  // framework's table from the (correct) dataset, and the viewport is restored
+  // around the anchor row.
+  private pageVisible: boolean = true;
+  private hiddenListDirty: boolean = false;
+
+  // The single gate for publishing a dataset while the page may be hidden.
+  private publishGroups(groups: AlbumGroup[]): DataSourceUpdateKind {
+    const kind: DataSourceUpdateKind = this.groupsData.update(groups);
+    if (!this.pageVisible && kind !== 'none') {
+      this.hiddenListDirty = true;
+    }
+    return kind;
+  }
+
+  private resyncListAfterHidden(): void {
+    let anchorId: number = 0;
+    let anchorY: number = 0;
+    if (!this.atBottom && this.didInitialScroll &&
+      this.curStartIdx >= 0 && this.curStartIdx < this.groups.length) {
+      anchorId = this.groups[this.curStartIdx].head.id;
+      try {
+        anchorY = this.scroller.getItemRect(this.curStartIdx).y;
+      } catch (e) {
+        anchorY = 0;
+      }
+    }
+    this.groupsData.reload();
+    if (anchorId > 0) {
+      this.restorePrependAnchor(this.groups, anchorId, anchorY);
+    } else if (this.atBottom && this.didInitialScroll) {
+      const actionSeq: number = ++this.scrollActionSeq;
+      setTimeout((): void => {
+        if (actionSeq === this.scrollActionSeq) {
+          this.scroller.scrollEdge(Edge.Bottom);
+        }
+      }, 0);
+    }
+  }
+  // 官方预取算法：按可见区域变化决定预取/取消哪些行的图片解码。
+  private imagePrefetcher: BasicPrefetcher = new BasicPrefetcher(this.groupsData);
+  // 首屏只建可见行，落地后再补预建（见 List.cachedCount）。
+  @State listCachedCount: number = 1;
+  private cachedCountTimer: number = -1;
   @State subtitle: string = '';
   // "×× 正在输入…" — shown as the composer placeholder while live, not in the
   // header subtitle (see composerPlaceholder).
@@ -148,6 +253,7 @@ struct ChatPage {
   // 聊天设置 → 回车键发送.
   @StorageProp(KEY_SEND_BY_ENTER) sendByEnter: boolean = false;
   @StorageProp('screenWidthVp') screenW: number = 360;
+  @StorageProp('screenHeightVp') screenH: number = 780;
   @StorageProp(KEY_POWER_ACTIVE) powerSaving: boolean = false;
   @StorageProp(KEY_POWER_CHAT_EFFECTS) powerChatEffects: boolean = true;
   @StorageProp(KEY_POWER_EFFECT_BACKGROUND) powerBackgroundEffect: boolean = false;
@@ -271,9 +377,11 @@ struct ChatPage {
   private lastMaxId: number = 0;
   @State atBottom: boolean = true;
   @State isMuted: boolean = false;
-  // 会话级自动翻译（chat.is_translatable）。单条翻译走 translateMessage，
-  // 这个开关让 TDLib 对整个会话建议翻译。
+  // 会话级整聊天翻译。chat.is_translatable 是服务端同步的按会话开关（官方
+  // 客户端同款语义），本地的 KEY_TRANSLATE_CHATS 是设置里的总开关——两者都
+  // 开时，可见范围内的消息由 TranslationService 逐条翻译并写回气泡。
   @State isTranslatable: boolean = false;
+  @StorageProp(KEY_TRANSLATE_CHATS) translateChatsEnabled: boolean = false;
   // 是否正在共享实时位置（全局单例状态，不限于当前会话）。
   @State liveLocationActive: boolean = false;
   @State liveLocationMessageId: number = 0;
@@ -294,6 +402,7 @@ struct ChatPage {
   // unread run isn't glued past the divider by async in-place content growth.
   private stayAtUnread: boolean = false;
   private curStartIdx: number = -1; // topmost visible row index (from onScrollIndex)
+  private curEndIdx: number = -1;   // bottom visible row index (from onScrollIndex)
   private pendingScrollBottom: boolean = false; // snap to the end once jumpToLatest's page arrives
   @State scrollToBottomBusy: boolean = false;
   private scrollActionSeq: number = 0;
@@ -505,7 +614,7 @@ struct ChatPage {
     this.newerLoadState = 'idle';
     this.groups = [];
     this.visibleGroupCount = 0;
-    this.groupsData.update([]);
+    this.publishGroups([]);
     this.pausedAnimationIds = [];
     this.forcedAnimationIds = [];
     this.failedAnimationIds = [];
@@ -618,7 +727,7 @@ struct ChatPage {
     const groups: AlbumGroup[] = this.groupsWithClientJoinNotice(this.messages);
     this.groups = groups;
     this.visibleGroupCount = groups.length;
-    this.groupsData.update(groups);
+    this.publishGroups(groups);
     if (this.didInitialScroll && this.atBottom) {
       const actionSeq: number = ++this.scrollActionSeq;
       setTimeout((): void => {
@@ -650,6 +759,15 @@ struct ChatPage {
   }
 
   aboutToAppear(): void {
+    // 首进卡顿打点：tap → aboutToAppear 的间隔是模块加载+路由成本。临时。
+    const tapAt: number = AppStorage.get<number>('chatOpenTapAt') ?? 0;
+    if (tapAt > 0) {
+      console.info(`[Perf] tap->aboutToAppear ${Date.now() - tapAt}ms`);
+    }
+    // Before anything can publish a dataset: the data source names the keys of
+    // the rows its operations touch, and it has to name them the same way the
+    // LazyForEach key generator does.
+    this.groupsData.setKeyBuilder(this.rowKeyOf);
     this.nowSec = Math.floor(Date.now() / 1000);
     const params = router.getParams() as Record<string, Object> | undefined;
     this.chatId = params !== undefined ? (params['chatId'] as number) : 0;
@@ -753,6 +871,7 @@ struct ChatPage {
     );
     this.unsubBg = this.bgStore.subscribe((state: ChatBackgroundState): void => {
       this.chatBg = state;
+      this.syncBackgroundRaster();
     });
     this.bgStore.open(this.chatId);
     this.unsubMembershipSupergroup = getTdClient().onUpdate('updateSupergroup', (u: TdObject) => {
@@ -833,11 +952,26 @@ struct ChatPage {
       if (historyState === 'loading') {
         return;
       }
-      // subscribe() immediately publishes the new store's empty snapshot.
-      // During cached-page resume, keep the old viewport on screen until the
-      // around/latest request returns instead of flashing a blank conversation.
-      if (scrollResumeWaiting && list.length === 0 && this.groups.length > 0 &&
-        historyState !== 'ready') {
+      // During a cached-page resume, hold the old viewport until a snapshot
+      // arrives that is actually a timeline rather than a fragment of one.
+      //
+      // The empty-snapshot case is not the only fragment. openChat makes TDLib
+      // push the newest message immediately, and its first getChatHistory reply
+      // may legally contain fewer messages than asked for — and onHistory marks
+      // the store 'ready' the moment that reply lands. So a one-message,
+      // already-'ready' snapshot reached this point and replaced 34 rows with
+      // one, which the log shows the list then rebuilding back to thirty. That
+      // collapse and rebuild is the "messages scrambled after coming back from
+      // the background" report.
+      //
+      // The test is a size collapse, not emptiness: a fragment is an order of
+      // magnitude smaller than what is on screen, while messages deleted in the
+      // background shrink the list by a few rows. The halving threshold draws
+      // that line. It errs by holding a stale viewport for one update if more
+      // than half a chat is deleted while backgrounded; the next snapshot
+      // clears it.
+      const fragment: boolean = this.groups.length > 0 && list.length * 2 < this.groups.length;
+      if (scrollResumeWaiting && (list.length === 0 || fragment)) {
         return;
       }
       const notifyKind: string = store.getCurrentNotifyKind();
@@ -865,7 +999,7 @@ struct ChatPage {
         list.findIndex((m: MessageEntry): boolean => m.id === this.viewerMsgId) < 0) {
         this.closeViewer();
       }
-      const updateKind: string = this.groupsData.update(groups);
+      const updateKind: string = this.publishGroups(groups);
       this.musicQueue.settlePending(list);
       // Incremental ops (the normal prepend) keep the viewport anchored via
       // maintainVisibleContentPosition; forcing scrollToIndex on top of that
@@ -1209,12 +1343,26 @@ struct ChatPage {
 
   onPageHide(): void {
     console.info(`[ChatDiag] hide msgs=${this.messages.length} groups=${this.groups.length} ds=${this.groupsData.totalCount()}`);
+    this.pageVisible = false;
     // 页面不可见时停表，回来时补一次即时值再续上。
     this.clearNowSecTimer();
   }
 
   onPageShow(): void {
     console.info(`[ChatDiag] show msgs=${this.messages.length} groups=${this.groups.length} ds=${this.groupsData.totalCount()}`);
+    const tapAt: number = AppStorage.get<number>('chatOpenTapAt') ?? 0;
+    if (tapAt > 0) {
+      console.info(`[Perf] tap->show ${Date.now() - tapAt}ms`);
+      AppStorage.setOrCreate('chatOpenTapAt', 0);
+    }
+    this.pageVisible = true;
+    // The list changed while this page was hidden. See hiddenListDirty: the
+    // framework applies hidden-period notifications incompletely, so rebuild
+    // its key table from the dataset before the user can see mismatched rows.
+    if (this.hiddenListDirty) {
+      this.hiddenListDirty = false;
+      this.resyncListAfterHidden();
+    }
     this.nowSec = Math.floor(Date.now() / 1000);
     this.armNowSecTimer();
     // The chat page is cached underneath the live viewer. A successful
@@ -1229,6 +1377,14 @@ struct ChatPage {
   }
 
   aboutToDisappear(): void {
+    if (this.cachedCountTimer !== -1) {
+      clearTimeout(this.cachedCountTimer);
+      this.cachedCountTimer = -1;
+    }
+    if (this.bgRasterTimer !== -1) {
+      clearTimeout(this.bgRasterTimer);
+      this.bgRasterTimer = -1;
+    }
     this.clearNowSecTimer();
     if (this.unsubChatAction !== null) {
       this.unsubChatAction();
@@ -1571,9 +1727,11 @@ struct ChatPage {
     }
     const groupCallId = this.liveGroupCallId;
     const onlineText = this.liveParticipantCount > 0 ? plural('cp_live_online_now', this.liveParticipantCount, this.liveParticipantCount) : '';
-    const privacyText = this.liveCallIsRtmp
-      ? $r('app.string.cp_live_one_way_body')
-      : $r('app.string.cp_live_two_way_body');
+    // str(), not $r(): this is concatenated into the dialog's message below, and
+    // a Resource in a template literal stringifies to "[object Object]".
+    const privacyText: string = this.liveCallIsRtmp
+      ? str('cp_live_one_way_body')
+      : str('cp_live_two_way_body');
     this.liveDialogOpening = true;
     promptAction.showDialog({
       title: $r('app.string.cp_live_join_title'),
@@ -1596,6 +1754,18 @@ struct ChatPage {
   // any index, so an index-based check leaves atBottom stuck true and the glue
   // keeps snapping back down. Frozen while the media viewer is open so the
   // underlying chat position is stable when the preview closes.
+  // 首屏之后再把预建行数补回来。用一次性定时器而不是直接赋值：onScrollIndex
+  // 在首帧就会触发，那时提高 cachedCount 等于把省下的工作原样搬回同一帧。
+  private growCachedCount(): void {
+    if (this.listCachedCount >= LIST_CACHED_COUNT || this.cachedCountTimer !== -1) {
+      return;
+    }
+    this.cachedCountTimer = setTimeout((): void => {
+      this.cachedCountTimer = -1;
+      this.listCachedCount = LIST_CACHED_COUNT;
+    }, CACHED_COUNT_GROW_MS);
+  }
+
   private refreshAtBottom(): void {
     if (this.viewerMsgId === 0) {
       // During an IME resize the last row is briefly clipped before List has
@@ -2919,6 +3089,15 @@ struct ChatPage {
     return [messageId];
   }
 
+  private onLanguageEpochChanged(): void {
+    // A hidden page can't be trusted to apply even a RELOAD; re-issue on show.
+    if (!this.pageVisible) {
+      this.hiddenListDirty = true;
+      return;
+    }
+    this.groupsData.reload();
+  }
+
   private onAppForegroundChanged(): void {
     // 停留在会话页切后台时必须 closeChat，否则 TDLib 认为用户正在看这个
     // 会话，不会为它生成任何通知。
@@ -3312,7 +3491,7 @@ struct ChatPage {
           Column({ space: 3 }) {
             Stack({ alignContent: Alignment.Center }) {
               if (row.thumbPath !== '') {
-                Image(`file://${row.thumbPath}`).width(56).height(56)
+                Image(`file://${row.thumbPath}`).draggable(false).width(56).height(56)
                   .objectFit(ImageFit.Cover).borderRadius(8);
               } else {
                 SymbolGlyph($r('sys.symbol.doc')).fontSize(22)
@@ -3397,7 +3576,7 @@ struct ChatPage {
         ForEach(this.stickerSuggestions, (row: StickerSuggestion) => {
           Stack({ alignContent: Alignment.Center }) {
             if (row.thumbPath !== '') {
-              Image(`file://${row.thumbPath}`).width(56).height(56).objectFit(ImageFit.Contain);
+              Image(`file://${row.thumbPath}`).draggable(false).width(56).height(56).objectFit(ImageFit.Contain);
             } else {
               LoadingProgress().width(20).height(20).color(COLOR_TEXT_SECONDARY);
             }
@@ -3878,9 +4057,12 @@ struct ChatPage {
           () => { this.confirmStopLiveLocation(); });
       }
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
-      this.headerMenuRow('sys.symbol.translate',
-        this.isTranslatable ? str('cp_auto_translate_off') : str('cp_auto_translate_on'), false,
-        () => { this.toggleTranslatable(); });
+      // 只有设置里的整聊天翻译总开关打开时才露出入口；单条翻译不受影响。
+      if (this.translateChatsEnabled) {
+        this.headerMenuRow('sys.symbol.translate',
+          this.isTranslatable ? str('cp_translate_chat_off') : str('cp_translate_chat_on'), false,
+          () => { this.toggleTranslatable(); });
+      }
       this.headerMenuRow('sys.symbol.xmark_circle', str('cp_clear_history'), false, () => { this.confirmClearHistory(); });
       if (this.isGroup && this.membershipState === 'writable') {
         Divider().color($r('app.color.divider')).strokeWidth(0.7);
@@ -3923,13 +4105,22 @@ struct ChatPage {
   // TextArea's intrinsic minimum is taller than the old 48vp input capsule on
   // some phones/font scales. Give it an explicit content-driven height so the
   // empty composer keeps the original silhouette and only grows after typing.
+  //
+  // The cap is derived from the real line box rather than a round number: at
+  // lineHeight 22 and 9+9 padding, four lines need 106vp. The old cap of 104
+  // was six short, so the fourth line was already clipped — and past the cap
+  // the TextArea has to scroll internally, which it can only do if nothing
+  // truncates the layout (see the removed maxLines at the call site).
   private composerEditorHeight(): number {
     const chunks: string[] = this.draft.split('\n');
     let lines: number = 0;
     for (let i: number = 0; i < chunks.length; i++) {
+      // Rough wrap estimate: the exact break depends on the glyphs, and
+      // over-counting only grows the box a line early.
       lines += Math.max(1, Math.ceil(chunks[i].length / 18));
     }
-    return Math.min(104, 40 + Math.max(0, lines - 1) * 20);
+    return COMPOSER_LINE_H * Math.max(1, Math.min(COMPOSER_MAX_LINES, lines))
+      + COMPOSER_EDITOR_PAD * 2;
   }
 
   // 渐变模糊：只在顶部 chrome 那一条区域内从"全糊"过渡到"清晰"。
@@ -4901,10 +5092,63 @@ struct ChatPage {
     });
   }
 
+  // 可见范围（外扩几行缓冲）内还没有当前目标语言译文的消息，交给
+  // TranslationService 排队。结果回来经 store.applyTranslation 写入条目，
+  // 内容签名变化触发 CHANGE，气泡里长出译文块。
+  private driveTranslations(startIdx: number, endIdx: number): void {
+    const store = this.store;
+    if (!this.translateChatsEnabled || !this.isTranslatable || store === null ||
+      this.groups.length === 0) {
+      return;
+    }
+    const lang: string = resolveTranslateTarget();
+    const from: number = Math.max(0, startIdx - 3);
+    const to: number = Math.min(this.groups.length - 1, endIdx + 3);
+    if (from > to) {
+      return;
+    }
+    const fromId: number = this.groups[from].head.id;
+    const toGroup: AlbumGroup = this.groups[to];
+    const toId: number = toGroup.memberIds[toGroup.memberIds.length - 1];
+    const service = getTranslationService(getTdClient());
+    for (const m of store.translationCandidates(fromId, toId, lang)) {
+      // 已经是目标语言（按文字系统判定）就不发请求。拉丁字母目标语言判不了，
+      // 仍交给服务器（结果按内容版本缓存，只花一次往返）。
+      if (looksLikeTargetLanguage(m.text, lang)) {
+        continue;
+      }
+      const hit: string | null = service.cached(this.chatId, m.id, m.editDate, lang);
+      if (hit !== null) {
+        // 译文与原文相同（同语言消息）就什么都不写，气泡不长翻译块。
+        if (hit !== '' && hit !== m.text) {
+          store.applyTranslation(m.id, lang, hit);
+        }
+        continue;
+      }
+      const requestedId: number = m.id;
+      const originalText: string = m.text;
+      service.request(this.chatId, m.id, m.editDate, lang, (text: string | null): void => {
+        if (text !== null && text !== '' && text !== originalText && this.store === store) {
+          store.applyTranslation(requestedId, lang, text);
+        }
+      });
+    }
+  }
+
+  private toggleTranslationHidden(messageId: number, hidden: boolean): void {
+    this.store?.setTranslationHidden(messageId, hidden);
+  }
+
   private toggleTranslatable(): void {
     const previous: boolean = this.isTranslatable;
     const next: boolean = !previous;
     this.isTranslatable = next;
+    if (!next) {
+      // 关掉时立刻把已渲染的译文收走；服务的缓存保留，再开秒回。
+      this.store?.clearTranslations();
+    } else {
+      this.driveTranslations(Math.max(0, this.curStartIdx), Math.max(0, this.curEndIdx));
+    }
     const req: TdRequest = { '@type': 'toggleChatIsTranslatable' };
     req['chat_id'] = this.chatId;
     req['is_translatable'] = next;
@@ -5173,41 +5417,160 @@ struct ChatPage {
 
   // Translate a message's text/caption into the system language and show the
   // result in place (dialog). TDLib needs an explicit ISO 639-1 target code.
+  // 单条翻译改半模态面板（可上拉全屏）：原文/译文对照、复制、快速换目标语言。
+  // 此前是 promptAction.showDialog 小弹窗，长文没法读。
+  @State translateSheetOpen: boolean = false;
+  @State translateSheetOriginal: string = '';
+  @State translateSheetText: string = '';
+  @State translateSheetState: string = 'loading'; // loading | done | failed | empty
+  @State translateSheetLang: string = '';
+  private translateSheetMsgId: number = 0;
+  private translateSheetEditDate: number = 0;
+  private translateSheetSeq: number = 0;
+
   private translateMessage(messageId: number): void {
-    let target = 'zh';
-    try {
-      const lang = i18n.System.getSystemLanguage();
-      if (lang.length >= 2) { target = lang.split('-')[0]; }
-    } catch (_e) { /* keep zh */ }
-    const req: TdRequest = { '@type': 'translateMessageText' };
-    req['chat_id'] = this.chatId;
-    req['message_id'] = messageId;
-    req['to_language_code'] = target;
-    getTdClient().send(req, 20000).then((result: TdObject): void => {
-      const text = (result['text'] as string | undefined) ?? '';
-      if (text === '') {
-        promptAction.showToast({ message: $r('app.string.cp_nothing_to_translate'), duration: 1600 });
+    const entry: MessageEntry | undefined =
+      this.messages.find((m: MessageEntry): boolean => m.id === messageId);
+    if (entry === undefined || entry.text.trim() === '') {
+      promptAction.showToast({ message: $r('app.string.cp_nothing_to_translate'), duration: 1600 });
+      return;
+    }
+    this.translateSheetMsgId = messageId;
+    this.translateSheetEditDate = entry.editDate;
+    this.translateSheetOriginal = entry.text;
+    this.translateSheetOpen = true;
+    this.runSheetTranslation(resolveTranslateTarget());
+  }
+
+  private runSheetTranslation(lang: string): void {
+    const seq: number = ++this.translateSheetSeq;
+    this.translateSheetLang = lang;
+    this.translateSheetText = '';
+    this.translateSheetState = 'loading';
+    const service = getTranslationService(getTdClient());
+    const msgId: number = this.translateSheetMsgId;
+    const editDate: number = this.translateSheetEditDate;
+    const original: string = this.translateSheetOriginal;
+    const settle = (text: string | null): void => {
+      if (seq !== this.translateSheetSeq) {
         return;
       }
-      promptAction.showDialog({
-        title: $r('app.string.mb_translate'),
-        message: text,
-        buttons: [
-          { text: $r('app.string.copy'), color: '#3390EC' },
-          { text: $r('app.string.close'), color: '#8E8E93' }
-        ]
-      }).then((chosen): void => {
-        if (chosen.index === 0) {
-          const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text);
-          pasteboard.getSystemPasteboard().setData(data).then((): void => {
-            promptAction.showToast({ message: $r('app.string.copied'), duration: 1300 });
-          }).catch((): void => {});
-        }
-      }).catch((): void => {});
-    }).catch((e: TdError): void => {
-      console.error(`ChatPage.translate failed: ${e.message}`);
-      promptAction.showToast({ message: $r('app.string.cp_translate_failed'), duration: 1700 });
+      if (text === null) {
+        this.translateSheetState = 'failed';
+      } else if (text === '' || text === original) {
+        this.translateSheetState = 'empty';
+      } else {
+        this.translateSheetText = text;
+        this.translateSheetState = 'done';
+      }
+    };
+    service.request(this.chatId, msgId, editDate, lang, (text: string | null): void => {
+      if (text !== null) {
+        settle(text);
+        return;
+      }
+      // null 也可能是"同一条消息正被整聊天翻译在途"——稍后从缓存补一次再定失败。
+      setTimeout((): void => {
+        settle(service.cached(this.chatId, msgId, editDate, lang));
+      }, 2500);
     });
+  }
+
+  private pickTranslateSheetLang(): void {
+    const codes: string[] = TRANSLATE_LANG_CODES;
+    const names: string[] = codes.map((c: string): string => languageDisplayName(c));
+    TextPickerDialog.show({
+      range: names,
+      selected: Math.max(0, codes.indexOf(this.translateSheetLang)),
+      onAccept: (value: TextPickerResult): void => {
+        const idx: number = value.index as number;
+        if (idx >= 0 && idx < codes.length) {
+          this.runSheetTranslation(codes[idx]);
+        }
+      }
+    });
+  }
+
+  private copySheetTranslation(): void {
+    const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, this.translateSheetText);
+    pasteboard.getSystemPasteboard().setData(data).then((): void => {
+      promptAction.showToast({ message: $r('app.string.copied'), duration: 1300 });
+    }).catch((): void => {});
+  }
+
+  @Builder
+  translateSheet() {
+    Column() {
+      Row() {
+        Text($r('app.string.mb_translate'))
+          .fontSize(17).fontWeight(FontWeight.Bold).fontColor(COLOR_TEXT_PRIMARY)
+          .layoutWeight(1);
+        // 目标语言胶囊：点它换语言并重译。
+        Row({ space: 4 }) {
+          Text(languageDisplayName(this.translateSheetLang))
+            .fontSize(13).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium);
+          SymbolGlyph($r('sys.symbol.chevron_down')).fontSize(12).fontColor([COLOR_PRIMARY]);
+        }
+        .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+        .borderRadius(14)
+        .backgroundColor('#143390EC')
+        .onClick((): void => { this.pickTranslateSheetLang(); });
+      }
+      .width('100%')
+      .padding({ left: 18, right: 18, top: 6, bottom: 10 });
+      Scroll() {
+        Column({ space: 6 }) {
+          Text($r('app.string.cp_translate_original'))
+            .fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
+            .alignSelf(ItemAlign.Start);
+          Text(this.translateSheetOriginal)
+            .fontSize(16).lineHeight(22).fontColor(COLOR_TEXT_PRIMARY)
+            .copyOption(CopyOptions.LocalDevice)
+            .alignSelf(ItemAlign.Start);
+          Divider().color($r('app.color.divider')).strokeWidth(0.7)
+            .margin({ top: 8, bottom: 8 });
+          Text(str('mb_translated_into', languageDisplayName(this.translateSheetLang)))
+            .fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
+            .alignSelf(ItemAlign.Start);
+          if (this.translateSheetState === 'loading') {
+            LoadingProgress().width(26).height(26).color(COLOR_PRIMARY)
+              .alignSelf(ItemAlign.Center).margin({ top: 12 });
+          } else if (this.translateSheetState === 'failed') {
+            Text($r('app.string.cp_translate_failed'))
+              .fontSize(14).fontColor(COLOR_TEXT_SECONDARY).alignSelf(ItemAlign.Start);
+            Button($r('app.string.cp_translate_retry'))
+              .fontSize(14).height(34)
+              .backgroundColor('#143390EC').fontColor(COLOR_PRIMARY)
+              .alignSelf(ItemAlign.Start)
+              .onClick((): void => { this.runSheetTranslation(this.translateSheetLang); });
+          } else if (this.translateSheetState === 'empty') {
+            Text($r('app.string.cp_nothing_to_translate'))
+              .fontSize(14).fontColor(COLOR_TEXT_SECONDARY).alignSelf(ItemAlign.Start);
+          } else {
+            Text(this.translateSheetText)
+              .fontSize(16).lineHeight(22).fontColor(COLOR_TEXT_PRIMARY)
+              .copyOption(CopyOptions.LocalDevice)
+              .alignSelf(ItemAlign.Start);
+          }
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start)
+        .padding({ left: 18, right: 18, bottom: 16 });
+      }
+      .layoutWeight(1)
+      .align(Alignment.TopStart)
+      .scrollBar(BarState.Off);
+      if (this.translateSheetState === 'done') {
+        Button($r('app.string.copy'))
+          .width('100%').height(44).fontSize(16)
+          .backgroundColor(COLOR_PRIMARY).fontColor(Color.White)
+          .margin({ left: 18, right: 18, bottom: this.bottomSafe + 10 })
+          .onClick((): void => { this.copySheetTranslation(); });
+      }
+    }
+    .width('100%').height('100%')
+    .alignItems(HorizontalAlign.Start)
+    .padding({ top: 8 });
   }
 
   // Long-press on a reaction chip: who reacted with it.
@@ -5628,7 +5991,7 @@ struct ChatPage {
                 })
                   .margin({ left: 4 });
               } else {
-                Image(`file://${this.headerEmojiPath}`)
+                Image(`file://${this.headerEmojiPath}`).draggable(false)
                   .width(18)
                   .height(18)
                   .objectFit(ImageFit.Contain)
@@ -6080,9 +6443,15 @@ struct ChatPage {
   }
 
   // Replaces the composer for public groups/channels the current user hasn't
-  // joined yet, matching Telegram's full-width bottom action.
+  // joined yet, and carries the mute toggle for read-only channels.
+  //
+  // Shaped exactly like the composer — a floating rounded capsule inset from
+  // both edges, not a full-width bar with a divider. It occupies the same slot
+  // and swaps with the composer as membership changes, so anything else reads
+  // as the bottom of the screen changing shape.
   @Builder
   membershipBar() {
+    Column() {
     Row({ space: 8 }) {
       if (this.membershipState === 'checking') {
         LoadingProgress()
@@ -6107,12 +6476,13 @@ struct ChatPage {
       }
     }
     .width('100%')
-    .height(52 + this.composerBottomGap())
-    .padding({ left: 12, right: 12, bottom: this.composerBottomGap() })
+    // Same silhouette as the composer's inner pill.
+    .constraintSize({ minHeight: 48 })
+    .padding({ left: 12, right: 12, top: 4, bottom: 4 })
     .justifyContent(FlexAlign.Center)
     .alignItems(VerticalAlign.Center)
     .backgroundColor($r('app.color.surface'))
-    .border({ width: { top: 0.7 }, color: $r('app.color.divider') })
+    .borderRadius(24)
     .enabled((this.membershipState === 'joinable' && !this.joiningChat) ||
       this.membershipState === 'readonly')
     .onClick(() => {
@@ -6121,7 +6491,11 @@ struct ChatPage {
       } else {
         this.joinCurrentChat();
       }
-    })
+    });
+    }
+    .width('100%')
+    .padding({ left: 14, right: 14, top: 6, bottom: this.composerBottomGap() })
+    .alignItems(HorizontalAlign.Center)
     .onAreaChange((_old: Area, area: Area) => { this.inputBarH = area.height as number; });
   }
 
@@ -6186,13 +6560,20 @@ struct ChatPage {
           TextArea({ text: this.draft, placeholder: this.composerPlaceholder(), controller: this.composerController })
             .layoutWeight(1)
             .height(this.composerEditorHeight())
-            .maxLines(5)
+            // No maxLines. It caps the LAYOUT, not just the visible box, so
+            // anything past the last line never lays out and cannot be scrolled
+            // to — a long draft was simply unreachable. The height above is the
+            // only cap; beyond it the TextArea scrolls its own content.
             .maxLength(4096)
             .fontSize(15)
-            .lineHeight(22)
+            .lineHeight(COMPOSER_LINE_H)
             .fontColor(COLOR_TEXT_PRIMARY)
             .caretColor(COLOR_PRIMARY)
-            .padding({ left: 3, right: 3, top: 9, bottom: 9 })
+            .padding({
+              left: 3, right: 3,
+              top: COMPOSER_EDITOR_PAD, bottom: COMPOSER_EDITOR_PAD
+            })
+            .barState(BarState.Auto)
             .backgroundColor(Color.Transparent)
             .key('chat_composer')
             .onChange((v: string) => {
@@ -6936,8 +7317,76 @@ struct ChatPage {
     .hitTestBehavior(HitTestMode.Transparent);
   }
 
+  // The flattened background, once it exists. Until then the layered version
+  // below renders, so the chat never waits on the raster.
+  @State bgRasterPath: string = '';
+
+  private backgroundRasterParams(): BackgroundRasterParams {
+    return {
+      colors: this.chatBg.colors, angle: this.chatBg.angle, path: this.chatBg.path,
+      isPattern: this.chatBg.isPattern, imageOpacity: this.chatBg.imageOpacity,
+      dimming: this.chatBg.dimming, blurred: this.chatBg.blurred,
+      width: this.screenW, height: this.screenH
+    };
+  }
+
+  private bgRasterTimer: number = -1;
+
+  private syncBackgroundRaster(): void {
+    const params = this.backgroundRasterParams();
+    const sig = rasterSignature(params);
+    const hit = cachedRaster(sig);
+    if (hit !== '') {
+      this.bgRasterPath = hit;
+      return;
+    }
+    // Drop the stale raster first: keeping the previous background on screen
+    // while a new one encodes would show the wrong chat's wallpaper.
+    this.bgRasterPath = '';
+    // Debounced: background resolution publishes several INTERMEDIATE states
+    // in quick succession while the theme/custom image settle (measured as
+    // three full-screen JPEG encodes, 52+68+58ms, on every first entry). Only
+    // the state that survives the quiet window is worth rasterizing — the live
+    // layered background renders meanwhile, so nothing is visually missing.
+    if (this.bgRasterTimer !== -1) {
+      clearTimeout(this.bgRasterTimer);
+    }
+    this.bgRasterTimer = setTimeout((): void => {
+      this.bgRasterTimer = -1;
+      const settled = this.backgroundRasterParams();
+      const settledSig = rasterSignature(settled);
+      const settledHit = cachedRaster(settledSig);
+      if (settledHit !== '') {
+        this.bgRasterPath = settledHit;
+        return;
+      }
+      rasterizeBackground(this.getUIContext(), settled,
+        (getContext(this) as common.UIAbilityContext).cacheDir).then((path: string): void => {
+        // The background can change again while this encodes.
+        if (path !== '' && rasterSignature(this.backgroundRasterParams()) === settledSig) {
+          this.bgRasterPath = path;
+        }
+      });
+    }, 280);
+  }
+
   @Builder
   chatBackgroundLayer() {
+    if (this.bgRasterPath !== '') {
+      // Through the PixelMap cache, not Image(file://…). The raster is a
+      // full-screen JPEG, so decoding it costs ~20ms — and measurement showed
+      // that bill being paid again on every single chat open, which is most of
+      // why the first entry into a chat stuttered while the second felt fine.
+      // Every chat shares the same background, so cached it is decoded once.
+      CachedImage({
+        path: this.bgRasterPath,
+        boxWidth: this.screenW,
+        boxHeight: this.screenH,
+        radius: 0,
+        fit: ImageFit.Cover,
+        pin: true
+      });
+    } else {
     Stack() {
       if (this.chatBg.colors.length > 0) {
         Column()
@@ -6950,19 +7399,16 @@ struct ChatPage {
         Column().width('100%').height('100%')
           .backgroundColor($r('app.color.chat_bg'));
       }
-      // KNOWN ISSUE — built-in patterns (backgroundTypePattern) render at the
-      // wrong scale. The cause is the source, not the fit: the store hands over
-      // the pattern's *thumbnail*, a picker-sized preview, and no objectFit or
-      // tiling makes a thumbnail correct at full screen. Fixing it means using
-      // the full document, which Telegram ships as .tgv (gzipped SVG) and so
-      // needs inflating first — util/gunzipTgs.ets already does that for .tgs
-      // stickers. Left as-is deliberately rather than half-fixed; chatBg
-      // carries isPattern so the renderer can branch once the source is right.
+      // A pattern is a motif sheet laid over the fill, not a photo: it has to
+      // keep its own proportions (Contain), while a wallpaper photo fills the
+      // surface and crops (Cover). Cropping a pattern is what read as "the
+      // background ratio is wrong" — together with the store handing over the
+      // picker-sized thumbnail, which it no longer does.
       if (this.chatBg.path !== '') {
         Image(this.chatBg.path.startsWith('/')
-          ? `file://${this.chatBg.path}` : this.chatBg.path)
+          ? `file://${this.chatBg.path}` : this.chatBg.path).draggable(false)
           .width('100%').height('100%')
-          .objectFit(ImageFit.Cover)
+          .objectFit(this.chatBg.isPattern ? ImageFit.Contain : ImageFit.Cover)
           .opacity(this.chatBg.imageOpacity)
           // Blurring needs a little overscan or transparent edge pixels become
           // visible around the viewport.
@@ -6980,6 +7426,7 @@ struct ChatPage {
     }
     .width('100%').height('100%')
     .hitTestBehavior(HitTestMode.None);
+    }
   }
 
   @Builder
@@ -7084,6 +7531,9 @@ struct ChatPage {
                   this.showReactors(id, emoji);
                 },
                 onTranslateMsg: (id: number): void => { this.translateMessage(id); },
+                onToggleTranslation: (id: number, hidden: boolean): void => {
+                  this.toggleTranslationHidden(id, hidden);
+                },
                 onPinMsg: (id: number, unpin: boolean): void => { this.togglePinMessage(id, unpin); },
                 onStopPoll: (id: number): void => { this.stopPoll(id); },
                 onReplaceMedia: (id: number): void => { this.replaceMedia(id); },
@@ -7120,6 +7570,9 @@ struct ChatPage {
                 },
                 onSpecialPhotoRetry: (id: number): void => {
                   this.store?.retryPhoto(id);
+                },
+                onVideoRetry: (id: number): void => {
+                  this.store?.requestVideoDownload(id, true);
                 },
                 onGiftCodeCopy: (code: string): void => {
                   this.onGiftCodeCopy(code);
@@ -7194,8 +7647,9 @@ struct ChatPage {
               });
               }
             }
-          }, (g: AlbumGroup): string =>
-            `message_group_${g.head.id}_${g.memberIds.join('_')}`);
+          }, (g: AlbumGroup, index: number): string =>
+            // Format lives in rowKeyOf — see its comment.
+            guardKey(this.groupsData.keyTableId, index, this.rowKeyOf(g)));
         }
         .width('100%').height('100%')
         // 顶部 chrome 是悬浮的，用 contentStartOffset 让位——和底部的
@@ -7211,7 +7665,16 @@ struct ChatPage {
         .contentEndOffset(this.bottomChromeH + 8)
         // Pre-build a few offscreen rows so a fling doesn't pay the full
         // MessageBubble construction cost inside the visible frame.
-        .cachedCount(4)
+        // Starts small and grows once the chat is on screen.
+        //
+        // Measurement put the first-open jank at page-build time, before any
+        // image decode and on the UI thread — and cachedCount is the biggest
+        // multiplier there: at 4 the list builds the visible rows plus four
+        // above and four below before it can present anything, each one a
+        // MessageBubble with its whole content-type branch tree. Deferring the
+        // off-screen ones costs nothing visually and takes them off the path
+        // between the tap and the first frame.
+        .cachedCount(this.listCachedCount)
         // Keep the visible messages pinned in place when an older page is
         // prepended above — without this, the List stays index-anchored and
         // visibly jumps to the top of the newly loaded page.
@@ -7240,8 +7703,16 @@ struct ChatPage {
         .onScrollIndex((start: number, end: number) => {
           this.refreshAtBottom();
           this.curStartIdx = start;
+          this.curEndIdx = end;
           this.markVisibleRead(end);
           this.updatePinnedFromScroll(start);
+          this.growCachedCount();
+          // Image prefetch: the data source decodes the photos of rows about to
+          // arrive and cancels the ones scrolled past. Distinct from the page
+          // prefetch below, which loads MESSAGES.
+          this.imagePrefetcher.visibleAreaChanged(start, end);
+          // 整聊天翻译与图片预取同源驱动：翻到哪儿译到哪儿。
+          this.driveTranslations(start, end);
           // Prefetch: kick off the previous/next page a few rows before the edge,
           // so scrolling never actually hits an empty top/bottom. loadOlder is
           // one-shot per arm (see maybeLoadOlder) so a fling that stays pinned
@@ -7577,6 +8048,12 @@ struct ChatPage {
           onSaveMedia: (): void => { this.saveViewerMedia(); }
         })
       }
-    }.width('100%').height('100%');
+    }
+    .width('100%').height('100%')
+    .bindSheet($$this.translateSheetOpen, this.translateSheet(), {
+      detents: [SheetSize.MEDIUM, SheetSize.LARGE],
+      backgroundColor: $r('app.color.surface'),
+      dragBar: true
+    });
   }
 }

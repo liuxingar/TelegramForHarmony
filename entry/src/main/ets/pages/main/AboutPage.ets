@@ -6,6 +6,7 @@ import {
 } from '../../services/UpdateChecker';
 import { MdBlock, MdSpan, parseMarkdownBlocks } from '../../util/markdownBlocks';
 import { str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const CARD_BG: ResourceColor = $r('app.color.surface');
 const CARD_RADIUS: number = 14;
@@ -13,6 +14,7 @@ const CARD_RADIUS: number = 14;
 @Entry
 @Component
 struct AboutPage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @StorageProp(STORAGE_UPDATE_AVAILABLE) hasUpdate: boolean = false;

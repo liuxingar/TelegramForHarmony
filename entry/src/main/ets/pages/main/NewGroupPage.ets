@@ -16,6 +16,7 @@ import {
   newGroupCreationOutcomeUncertain, newGroupTitleError, parseNewBasicGroupResult
 } from '../../util/newGroupLogic';
 import { plural, str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const PAGE_BG: ResourceColor = $r('app.color.page_bg');
 const CARD_BG: ResourceColor = $r('app.color.surface');
@@ -27,6 +28,7 @@ const SKELETON_ROWS: number[] = [0, 1, 2, 3, 4];
 @Entry
 @Component
 struct NewGroupPage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @State contacts: ContactItem[] = [];

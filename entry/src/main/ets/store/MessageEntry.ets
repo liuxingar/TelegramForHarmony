@@ -94,6 +94,13 @@ export interface MessageEntry {
   // 语音转文字。'' 表示未识别过；pending 期间可能已有部分文本。
   speechState: string;          // '' | 'pending' | 'done' | 'error'
   speechText: string;
+  // 整聊天翻译。translatedText 为空表示无译文（未翻译/与原文相同）；
+  // translationHidden 是用户点「隐藏译文」后的单条折叠状态。
+  // 译文属于展示层缓存而非消息内容，消息被编辑后由 editDate 变化使其失效
+  // （TranslationService 的缓存键含 editDate）。
+  translatedText: string;
+  translatedLang: string;       // 译文对应的目标语言码，防止切目标语言后误用
+  translationHidden: boolean;
   audioTitle: string;           // music metadata; '' falls back to file name
   audioPerformer: string;       // music artist/performer; '' = unknown
   stickerFileId: number;        // animated (TGS) sticker source file id, 0 otherwise
@@ -255,6 +262,8 @@ export function cloneMessage(m: MessageEntry): MessageEntry {
     mediaDownloadActive: m.mediaDownloadActive,
     voiceWaveform: m.voiceWaveform, voiceListened: m.voiceListened,
     speechState: m.speechState, speechText: m.speechText,
+    translatedText: m.translatedText, translatedLang: m.translatedLang,
+    translationHidden: m.translationHidden,
     audioTitle: m.audioTitle, audioPerformer: m.audioPerformer,
     stickerFileId: m.stickerFileId, stickerFormat: m.stickerFormat,
     isEmojiSticker: m.isEmojiSticker, stickerPath: m.stickerPath,
@@ -1033,6 +1042,12 @@ export function buildMessageEntry(message: TdObject, users: UserStore): MessageE
     voiceListened: isOutgoing || (c.voiceListened ?? false),
     speechState: c.speechState ?? '',
     speechText: c.speechText ?? '',
+    // 译文不从 TDLib 消息构建——它由 TranslationService 事后写入。
+    // buildMessageEntry 重建条目（内容更新/发送成功）时译文清空，由可见范围
+    // 驱动器按新内容重新翻译。
+    translatedText: '',
+    translatedLang: '',
+    translationHidden: false,
     audioTitle: c.audioTitle ?? '',
     audioPerformer: c.audioPerformer ?? '',
     stickerFileId: c.stickerFileId ?? 0,

@@ -151,7 +151,7 @@ struct EmojiStatusPage {
           boxWidth: CELL - 10, boxHeight: CELL - 10, powerCategory: 'emoji'
         });
       } else if (row.thumbPath !== '') {
-        Image(`file://${row.thumbPath}`).width(CELL - 12).height(CELL - 12)
+        Image(`file://${row.thumbPath}`).draggable(false).width(CELL - 12).height(CELL - 12)
           .objectFit(ImageFit.Contain);
       } else {
         Text(row.fallback).fontSize(24);

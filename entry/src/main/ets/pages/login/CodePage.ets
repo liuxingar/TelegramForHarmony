@@ -6,10 +6,12 @@ import { TdError } from '../../tdkit/TdTypes';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
 import { LoginHero } from './LoginHero';
 import { plural, str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 @Preview
 @Component
 export struct CodePage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @State code: string = '';
   @State errorText: string = '';
   @State resendText: string = '';

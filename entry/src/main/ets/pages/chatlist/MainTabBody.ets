@@ -1,30 +1,38 @@
 import { router } from '@kit.ArkUI';
-import { getChatStore, getStoryStore } from '../../tdkit/Globals';
-import { StoryRingEntry } from '../../store/StoryStore';
-import { AvatarView } from './AvatarView';
+import { getChatStore } from '../../tdkit/Globals';
 import { ChatEntry } from '../../store/ChatEntry';
 import { ChatRow } from './ChatRow';
+import { ChatListDataSource } from './ChatListDataSource';
+import { guardKey } from '../../util/keyGuard';
 import { CHAT_MENU_OPEN, ChatListFreeze } from './ChatListFreeze';
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const ARCHIVE_ROW_HEIGHT: number = 56;
 
 @Preview
 @Component
 export struct MainTabBody {
+  // See ChatPage: the row key embeds this, so the data source must be told.
+  @StorageProp(LANGUAGE_EPOCH) @Watch('onLanguageEpochChanged') langEpoch: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   // Set when the floating folder bar overlays this list (see ChatListView).
   @Prop reserveFolderBarSpace: boolean = false;
   // Rebuilding rows while a row's context menu is open would close it.
   @StorageProp(CHAT_MENU_OPEN) @Watch('onMenuToggle') menuOpen: boolean = false;
   @State chats: ChatEntry[] = [];
+  private chatsData: ChatListDataSource = new ChatListDataSource();
   @State showArchive: boolean = false;
   @State archiveLoadFailed: boolean = false;
   @State refreshing: boolean = false;
   private updateGate: ChatListFreeze = new ChatListFreeze();
   private unsubscribe: (() => void) | null = null;
   private unsubArchive: (() => void) | null = null;
+
+  private onLanguageEpochChanged(): void {
+    this.chatsData.reload();
+  }
 
   private onMenuToggle(): void {
     if (this.menuOpen) {
@@ -54,13 +62,11 @@ export struct MainTabBody {
     store.ensureLoaded('archive').then((success: boolean): void => {
       this.archiveLoadFailed = !success;
     });
-    this.bindStories();
   }
 
   aboutToDisappear(): void {
     if (this.unsubscribe !== null) { this.unsubscribe(); this.unsubscribe = null; }
     if (this.unsubArchive !== null) { this.unsubArchive(); this.unsubArchive = null; }
-    if (this.unsubStories !== null) { this.unsubStories(); this.unsubStories = null; }
   }
 
   private applyChats(next: ChatEntry[]): void {
@@ -70,15 +76,22 @@ export struct MainTabBody {
       animateTo({
         duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
         curve: Curve.EaseOut
-      }, (): void => { this.chats = next; });
+      }, (): void => { this.publishChats(next); });
     } else {
-      this.chats = next;
+      this.publishChats(next);
     }
   }
 
+  private publishChats(next: ChatEntry[]): void {
+    this.chats = next;
+    this.chatsData.update(next, next.map((item: ChatEntry): string => this.rowKey(item)));
+  }
+
+  // langEpoch is in the key so a language switch rebuilds the rows once, rather
+  // than every ChatRow carrying its own AppStorage observer for it.
   private rowKey(item: ChatEntry): string {
     const pinned = getChatStore().isPinned('main', item.id) ? 1 : 0;
-    return `${item.id}_${item.revision}_${pinned}`;
+    return `${item.id}_${item.revision}_${pinned}_${this.langEpoch}`;
   }
 
   private openArchive(): void {
@@ -108,67 +121,17 @@ export struct MainTabBody {
     });
   }
 
-  // --- 故事环 ---
-  @State storyEntries: StoryRingEntry[] = [];
-  private unsubStories: (() => void) | null = null;
-
-  private bindStories(): void {
-    if (this.unsubStories !== null) {
-      return;
-    }
-    this.unsubStories = getStoryStore().subscribe((entries: StoryRingEntry[]): void => {
-      this.storyEntries = entries;
-    });
-  }
-
-  private openStoryViewer(chatId: number): void {
-    const params: Record<string, Object> = { 'chatId': chatId };
-    router.pushUrl({ url: 'pages/story/StoryViewerPage', params }).catch((error: Error): void => {
-      console.error(`MainTabBody.openStoryViewer failed: ${error.message}`);
-    });
-  }
-
-  @Builder
-  storyRing() {
-    Scroll() {
-      Row({ space: 14 }) {
-        ForEach(this.storyEntries, (entry: StoryRingEntry) => {
-          Column({ space: 4 }) {
-            Stack() {
-              // 未读：主色渐变环；已读：灰环。
-              Circle({ width: 62, height: 62 })
-                .fill(Color.Transparent)
-                .stroke(entry.hasUnread ? COLOR_PRIMARY : '#4D8E8E93')
-                .strokeWidth(2.5);
-              AvatarView({
-                avatarPath: getChatStore().entryOf(entry.chatId)?.avatarPath ?? '',
-                initials: getChatStore().entryOf(entry.chatId)?.initials ?? '?',
-                colorSeed: entry.chatId, avatarSize: 54
-              });
-            }
-            .width(62).height(62);
-            Text(getChatStore().entryOf(entry.chatId)?.title ?? '')
-              .fontSize(11).fontColor(COLOR_TEXT_SECONDARY)
-              .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-              .constraintSize({ maxWidth: 64 });
-          }
-          .onClick((): void => this.openStoryViewer(entry.chatId));
-        }, (entry: StoryRingEntry): string =>
-          `story_${entry.chatId}_${entry.hasUnread}_${entry.storyIds.length}`);
-      }
-      .padding({ left: 14, right: 14, top: 6, bottom: 4 });
-    }
-    .scrollable(ScrollDirection.Horizontal)
-    .scrollBar(BarState.Off)
-    .width('100%');
-  }
 
   @Builder
   chatList() {
     List() {
-      ForEach(this.chats, (item: ChatEntry) => {
+      // LazyForEach, not ForEach: ForEach builds every row up front, which for
+      // a real account meant hundreds of live ChatRow components for the eight
+      // that are visible.
+      LazyForEach(this.chatsData, (item: ChatEntry) => {
         ListItem() { ChatRow({ chat: item, listKey: 'main' }); }
-      }, (item: ChatEntry) => this.rowKey(item));
+      }, (item: ChatEntry, index: number) =>
+        guardKey(this.chatsData.keyTableId, index, this.rowKey(item)));
     }
     .layoutWeight(1).width('100%')
     .cachedCount(8)
@@ -182,9 +145,8 @@ export struct MainTabBody {
 
   build() {
     Column() {
-    if (this.storyEntries.length > 0) {
-      this.storyRing();
-    }
+    // No story ring here — stories live on the profile pages. StoryStore and
+    // StoryViewerPage are kept, but nothing on the chat list launches them.
     if (this.showArchive || this.archiveLoadFailed) {
       Refresh({ refreshing: $$this.refreshing, builder: this.archiveHeader() }) {
         this.chatList();

@@ -1,4 +1,8 @@
+import { IDataSourcePrefetching } from '@kit.ArkUI';
 import { AlbumGroup } from '../../util/collapseAlbums';
+import { mediaBoxFor } from '../../util/mediaBox';
+import { cancelPixelMap, loadPixelMap, PixelRequest } from '../../util/pixelCache';
+import { keyTableAdd, keyTableDelete, keyTableReload, newKeyTableId } from '../../util/keyGuard';
 
 // LazyForEach data source for the message list.
 //
@@ -16,9 +20,130 @@ import { AlbumGroup } from '../../util/collapseAlbums';
 // only 'reload' rebuilds the list and needs a manual anchor restore.
 export type DataSourceUpdateKind = 'none' | 'incremental' | 'reload';
 
-export class AlbumGroupDataSource implements IDataSource {
+// Builds the LazyForEach key for a row. ChatPage owns the format because the
+// key embeds the language epoch, which is page state; the data source needs it
+// so it can name the rows its operations affect.
+export type GroupKeyBuilder = (g: AlbumGroup) => string;
+
+// Short fingerprint of a row's content signature, for embedding in the
+// LazyForEach key.
+//
+// The framework's reuse machinery is entirely key-driven — the SDK contract for
+// reload is "for data items whose key remains unchanged, the ORIGINAL child
+// component is used". A key built from identity alone therefore makes every
+// RELOAD resurrect the old component with its old content, and after a
+// background stretch (where the framework's key -> node table is already
+// inconsistent — "Use repeat key") the resurrected node can be a NEIGHBOR'S:
+// on the device, one sender's adjacent messages came back wearing each other's
+// content. Embedding the content fingerprint makes a changed row's key a new
+// key, which is the one thing the reload contract promises to rebuild.
+//
+// g.key itself is the precise signature but runs to kilobytes (message text,
+// entity JSON, file paths); the framework stores and compares every key, so it
+// is hashed down. The identity prefix stays plaintext in the final key, so a
+// hash collision could at worst miss one rebuild of one row — it can never
+// mix two different rows.
+export function contentFingerprint(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) {
+    h = ((h << 5) + h + s.charCodeAt(i)) & 0x7fffffff;
+  }
+  return h.toString(36);
+}
+
+// What the list's LazyForEach key is built from (see ChatPage). Two rows are
+// the same item only if these match; anything else is a different row wearing
+// the same index.
+function sameIdentity(a: AlbumGroup, b: AlbumGroup): boolean {
+  if (a.head.id !== b.head.id || a.memberIds.length !== b.memberIds.length) {
+    return false;
+  }
+  for (let i = 0; i < a.memberIds.length; i++) {
+    if (a.memberIds[i] !== b.memberIds[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export class AlbumGroupDataSource implements IDataSourcePrefetching {
   private groups: AlbumGroup[] = [];
   private listeners: DataChangeListener[] = [];
+  // Diagnostic only: names this instance's key table, which must be per-page
+  // because each page has its own LazyForEach. ChatPage passes it to guardKey.
+  readonly keyTableId: string = newKeyTableId('messages');
+
+  // Named keys on ADD/CHANGE, rather than letting the framework infer them.
+  //
+  // Inference is where the list came apart. A prepend inserts at index 0 and
+  // every row below shifts down; the framework has to re-associate its whole
+  // key -> index table, and the device log showed it not keeping up — "Use
+  // repeat key for index: 18" while that key was still registered at 48, always
+  // after a prepend, always at an index inside the shifted region. Spelling the
+  // keys out in the operation leaves nothing to infer.
+  private keyOf: GroupKeyBuilder = (g: AlbumGroup): string =>
+    `message_group_${g.head.id}_${g.memberIds.join('_')}_${contentFingerprint(g.key)}`;
+
+  // ChatPage supplies the real builder (its key also carries the language
+  // epoch) and MUST use the same one for the LazyForEach key generator — two
+  // spellings of the format would put the framework's table and ours out of
+  // step in a way nothing in the toolchain would catch.
+  setKeyBuilder(builder: GroupKeyBuilder): void {
+    this.keyOf = builder;
+  }
+
+  private keysIn(list: AlbumGroup[], from: number, count: number): string[] {
+    const keys: string[] = [];
+    for (let i = from; i < from + count; i++) {
+      keys.push(this.keyOf(list[i]));
+    }
+    return keys;
+  }
+
+  // --- prefetching -----------------------------------------------------------
+  //
+  // BasicPrefetcher drives these from the visible range: prefetch() for rows
+  // about to arrive, cancel() for rows the user has scrolled past. Decoding a
+  // row's photo before it is on screen is the difference between a bubble that
+  // appears with its image and one that appears empty and fills in.
+  //
+  // The size has to match what MessageBubble will ask for exactly, or the
+  // decode lands under a key the bubble never looks up — hence the shared
+  // mediaBoxFor(). Albums are deliberately not prefetched: their cell sizes
+  // come out of a packing pass over the whole row, and getting that subtly
+  // wrong would decode a second, unused copy of every picture.
+  private imageRequestFor(index: number): PixelRequest | null {
+    const group = this.groups[index];
+    if (group === undefined || group.memberIds.length > 1) {
+      return null;
+    }
+    const head = group.head;
+    if (head.photoPath === '' ||
+      (head.contentType !== 'photo' && head.contentType !== 'video')) {
+      return null;
+    }
+    const screenW = AppStorage.get<number>('screenWidthVp') ?? 0;
+    if (screenW <= 0) {
+      return null;
+    }
+    const box = mediaBoxFor(screenW, head.photoWidth, head.photoHeight,
+      head.contentType === 'video');
+    return { path: head.photoPath, width: vp2px(box.width), height: vp2px(box.height) };
+  }
+
+  prefetch(index: number): void {
+    const req = this.imageRequestFor(index);
+    if (req !== null) {
+      loadPixelMap(req);
+    }
+  }
+
+  cancel(index: number): void {
+    const req = this.imageRequestFor(index);
+    if (req !== null) {
+      cancelPixelMap(req);
+    }
+  }
 
   totalCount(): number {
     return this.groups.length;
@@ -38,8 +163,56 @@ export class AlbumGroupDataSource implements IDataSource {
     this.listeners = this.listeners.filter((l: DataChangeListener) => l !== listener);
   }
 
+  // Force a rebuild when the ROW KEY changes for a reason the data itself
+  // cannot express. The list's key embeds the language epoch, so bumping that
+  // renames every row at once — and a LazyForEach whose keys all change without
+  // any notification is left holding a key table that matches nothing, which
+  // shows up as rows rendering the wrong messages. onConfigurationUpdate bumps
+  // the epoch for any configuration change (dark mode, font scale, locale),
+  // and returning from the background is a common moment for one.
+  reload(): void {
+    this.notify([{ type: DataOperationType.RELOAD } as DataReloadOperation]);
+  }
+
   update(next: AlbumGroup[]): DataSourceUpdateKind {
+    const kind = this.updateInner(next);
+    // Diagnostic. The message list scrambles after a background/foreground
+    // round trip and the notifications this emits are the prime suspect, but
+    // nothing so far has shown WHICH one is wrong. Temporary.
+    console.info(`[DS] kind=${kind} prevLen=${this.lastPrevLen} nextLen=${next.length}` +
+      ` p=${this.lastP} s=${this.lastS} oldMid=${this.lastOldMid} newMid=${this.lastNewMid}` +
+      ` ops=${this.lastOps}`);
+    return kind;
+  }
+
+  private lastPrevLen: number = 0;
+  private lastP: number = 0;
+  private lastS: number = 0;
+  private lastOldMid: number = 0;
+  private lastNewMid: number = 0;
+  private lastOps: string = '';
+
+  private updateInner(next: AlbumGroup[]): DataSourceUpdateKind {
+    // Authoritative on its own: this looks at ONE snapshot, so a hit here means
+    // two rows in the same dataset carry the same LazyForEach key — a data bug,
+    // no notification timing involved. Silence means the data is clean and any
+    // "Use repeat key" the framework reports is about its table, not ours.
+    // NOTE: not group.key — that is the content signature used for diffing,
+    // while the LazyForEach key is identity only. keyOf is the one the list
+    // actually uses.
+    const keysSeen: Map<string, number> = new Map();
+    for (let i = 0; i < next.length; i++) {
+      const rowKey = this.keyOf(next[i]);
+      const at = keysSeen.get(rowKey);
+      if (at !== undefined) {
+        console.error(`[DS] duplicate row key in snapshot at ${i} and ${at} -> ${rowKey}`);
+      } else {
+        keysSeen.set(rowKey, i);
+      }
+    }
     const prev = this.groups;
+    this.lastPrevLen = prev.length;
+    this.lastOps = '';
     this.groups = next;
     const minLen = Math.min(prev.length, next.length);
     let p = 0;
@@ -52,22 +225,64 @@ export class AlbumGroupDataSource implements IDataSource {
     }
     const oldMid = prev.length - p - s;
     const newMid = next.length - p - s;
+    this.lastP = p;
+    this.lastS = s;
+    this.lastOldMid = oldMid;
+    this.lastNewMid = newMid;
     if (oldMid === 0 && newMid === 0) {
       return 'none'; // keys identical — nothing to tell the list
     }
     if (oldMid === newMid) {
+      // CHANGE means "this same item's content changed". If the row at an
+      // index is a DIFFERENT message — a delete plus an append leaves the
+      // length untouched — then saying CHANGE tells the list the identity is
+      // unchanged while its LazyForEach key has become one that is registered
+      // at another index. The framework logs "Use repeat key" and reuses the
+      // wrong row. Identity shifts have to be a reload.
+      for (let i = 0; i < oldMid; i++) {
+        if (!sameIdentity(prev[p + i], next[p + i])) {
+          this.notify([{ type: DataOperationType.RELOAD } as DataReloadOperation]);
+          return 'reload';
+        }
+      }
       // Same-length middle region: in-place item changes (photo arrived,
       // send state advanced, reactions updated, ...).
+      //
+      // Only the rows whose keys actually differ. The prefix/suffix scan finds
+      // the FIRST and LAST changed rows, so the span between them also covers
+      // every untouched row in between — and this used to raise CHANGE for all
+      // of them. With two images downloading ten rows apart, every row between
+      // was rebuilt on every progress tick, which is why unrelated photos and
+      // inline emoji flickered for as long as anything was still loading.
+      // Every CHANGE row's content signature differs here, so keyOf yields a
+      // genuinely NEW key — which is exactly what DataChangeOperation.key is
+      // for ("new key to assign to the changed data"). A key identical to the
+      // registered one must never be passed: that made the framework
+      // re-register the entry against itself and mis-reuse the node.
       const ops: DataOperation[] = [];
       for (let i = 0; i < oldMid; i++) {
-        ops.push({ type: DataOperationType.CHANGE, index: p + i } as DataChangeOperation);
+        if (prev[p + i].key !== next[p + i].key) {
+          ops.push({
+            type: DataOperationType.CHANGE,
+            index: p + i,
+            key: this.keyOf(next[p + i])
+          } as DataChangeOperation);
+        }
+      }
+      if (ops.length === 0) {
+        return 'none';
       }
       this.notify(ops);
       return 'incremental';
     }
     if (oldMid === 0) {
       // Pure insert (prepend when p === 0 — the case scroll position must survive).
-      this.notify([{ type: DataOperationType.ADD, index: p, count: newMid } as DataAddOperation]);
+      this.notify([{
+        type: DataOperationType.ADD,
+        index: p,
+        count: newMid,
+        key: this.keysIn(next, p, newMid)
+      } as DataAddOperation]);
       return 'incremental';
     }
     if (newMid === 0) {
@@ -101,17 +316,51 @@ export class AlbumGroupDataSource implements IDataSource {
           }
         }
       }
+      if (!frontAligned && !backAligned) {
+        // Diagnostic: every older-page prepend is landing here instead of on the
+        // incremental path, and the RELOAD it falls through to is what rebuilds
+        // the list. Name the rows that failed to line up. Temporary.
+        console.info(`[DS] misaligned added=${added} prevHead=${prev[p].head.id}` +
+          ` frontCand=${next[p].head.id} backCand=${next[p + added].head.id}` +
+          ` prevMembers=${prev[p].memberIds.join('/')}` +
+          ` backMembers=${next[p + added].memberIds.join('/')}`);
+      }
       if (frontAligned || backAligned) {
+        // Two notifications, structure first — NOT one mixed batch.
+        //
+        // Mixing them meant CHANGE and ADD indexes both referred to the
+        // original dataset while the ADD was shifting everything after its
+        // insertion point. Whether that lands correctly depends on the order
+        // the framework applies the operations in, and the device log caught it
+        // going wrong on exactly this path: a prepend of 30 rows onto 31,
+        // emitted as `change,add`, left the list showing the wrong rows.
+        //
+        // Split, each notification is unambiguous: the ADD reshapes the list,
+        // then the CHANGE indexes are plain positions in the list as it now is.
+        const addAt: number = backAligned ? p : p + oldMid;
+        this.notify([{
+          type: DataOperationType.ADD,
+          index: addAt,
+          count: added,
+          key: this.keysIn(next, addAt, added)
+        } as DataAddOperation]);
+        // Same narrowing as above: an insert does not make the surviving rows
+        // around it dirty, only the ones whose keys really moved — and those
+        // carry their new content-fingerprinted key, same as the branch above.
         const ops: DataOperation[] = [];
         for (let i = 0; i < oldMid; i++) {
-          ops.push({ type: DataOperationType.CHANGE, index: p + i } as DataChangeOperation);
+          const newIndex = backAligned ? p + added + i : p + i;
+          if (prev[p + i].key !== next[newIndex].key) {
+            ops.push({
+              type: DataOperationType.CHANGE,
+              index: newIndex,
+              key: this.keyOf(next[newIndex])
+            } as DataChangeOperation);
+          }
         }
-        ops.push({
-          type: DataOperationType.ADD,
-          index: backAligned ? p : p + oldMid,
-          count: added
-        } as DataAddOperation);
-        this.notify(ops);
+        if (ops.length > 0) {
+          this.notify(ops);
+        }
         return 'incremental';
       }
     }
@@ -121,6 +370,23 @@ export class AlbumGroupDataSource implements IDataSource {
   }
 
   private notify(ops: DataOperation[]): void {
+    // Append, not replace: one update() can now emit two notifications (ADD then
+    // CHANGE) and recording only the last one hid the ADD from the log.
+    const batch = ops.map((o: DataOperation): string => `${o.type}`).join(',');
+    this.lastOps = this.lastOps === '' ? batch : `${this.lastOps} | ${batch}`;
+    // Keep the diagnostic key table in step with what the framework is being
+    // told, so its duplicate reports mean what they say.
+    for (const op of ops) {
+      if (op.type === DataOperationType.RELOAD) {
+        keyTableReload(this.keyTableId);
+      } else if (op.type === DataOperationType.ADD) {
+        const add = op as DataAddOperation;
+        keyTableAdd(this.keyTableId, add.index, add.count ?? 1);
+      } else if (op.type === DataOperationType.DELETE) {
+        const del = op as DataDeleteOperation;
+        keyTableDelete(this.keyTableId, del.index, del.count ?? 1);
+      }
+    }
     for (const l of this.listeners) {
       l.onDatasetChange(ops);
     }

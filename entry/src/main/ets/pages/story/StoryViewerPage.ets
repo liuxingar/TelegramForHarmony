@@ -279,7 +279,7 @@ struct StoryViewerPage {
     Stack({ alignContent: Alignment.TopStart }) {
       Column().width('100%').height('100%').backgroundColor(Color.Black);
       if (this.mediaPath !== '' && !this.isVideo) {
-        Image(this.mediaPath)
+        Image(this.mediaPath).draggable(false)
           .width('100%').height('100%')
           .objectFit(ImageFit.Contain);
       }

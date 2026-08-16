@@ -190,11 +190,11 @@
     },
     {
       "name": "EntryAbility_desc",
-      "value": "description"
+      "value": "An unofficial third-party client for the Telegram network. Not affiliated with Telegram Messenger LLP."
     },
     {
       "name": "EntryAbility_label",
-      "value": "TelegramForHarmony"
+      "value": "Petrelgram"
     },
     {
       "name": "file_download_failed",
@@ -542,7 +542,7 @@
     },
     {
       "name": "language_title",
-      "value": "Language"
+      "value": "Language & Translation"
     },
     {
       "name": "last_seen_date",
@@ -1022,7 +1022,7 @@
     },
     {
       "name": "module_desc",
-      "value": "module description"
+      "value": "An unofficial third-party client for the Telegram network. Not affiliated with Telegram Messenger LLP."
     },
     {
       "name": "new_group_error_bad_name",
@@ -8525,6 +8525,54 @@
       "value": "Auto-translate off"
     },
     {
+      "name": "cp_translate_chat_on",
+      "value": "Translate this chat"
+    },
+    {
+      "name": "cp_translate_chat_off",
+      "value": "Stop translating"
+    },
+    {
+      "name": "cp_translate_original",
+      "value": "Original"
+    },
+    {
+      "name": "cp_translate_retry",
+      "value": "Retry"
+    },
+    {
+      "name": "mb_translated_into",
+      "value": "Translated into %1$s"
+    },
+    {
+      "name": "mb_show_translation",
+      "value": "Show translation"
+    },
+    {
+      "name": "mb_hide_translation",
+      "value": "Hide translation"
+    },
+    {
+      "name": "language_translate_section",
+      "value": "Translation"
+    },
+    {
+      "name": "language_app_section",
+      "value": "App language"
+    },
+    {
+      "name": "language_translate_target",
+      "value": "Translate into"
+    },
+    {
+      "name": "language_translate_chats",
+      "value": "Translate entire chats"
+    },
+    {
+      "name": "language_translate_chats_hint",
+      "value": "Adds a translate option to chat menus"
+    },
+    {
       "name": "cp_transcribe_premium",
       "value": "Transcription is a Telegram Premium feature"
     },
@@ -10807,6 +10855,10 @@
     {
       "name": "gs_no_voice",
       "value": "No voice messages"
+    },
+    {
+      "name": "cl_my_story",
+      "value": "My story"
     }
   ]
 }

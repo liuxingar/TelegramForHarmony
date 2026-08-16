@@ -183,7 +183,7 @@ struct ChatBackgroundPage {
     Stack({ alignContent: Alignment.BottomStart }) {
       if (row.preview.kind === 'wallpaper') {
         if ((this.thumbPaths.get(row.preview.backgroundId) ?? '') !== '') {
-          Image(`file://${this.thumbPaths.get(row.preview.backgroundId)}`)
+          Image(`file://${this.thumbPaths.get(row.preview.backgroundId)}`).draggable(false)
             .width('100%').height('100%').objectFit(ImageFit.Cover);
         } else {
           Column() {

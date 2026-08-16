@@ -64,9 +64,30 @@ function albumHead(members: MessageEntry[]): MessageEntry {
   return head;
 }
 
+// Download progress lands in the key at 5% steps, not per byte.
+//
+// TDLib emits updateFile many times a second. At full resolution every one of
+// them changed the row key, so the data source raised CHANGE, LazyForEach
+// rebuilt the row's subtree, and the thumbnail Image came back as a NEW node —
+// replaying its appear transition. That is the "preview flickers while a video
+// downloads" bug: the flicker rate was the updateFile rate. Bucketing keeps the
+// progress ring moving (20 steps is finer than the ring reads) while cutting
+// the rebuilds by an order of magnitude. 100 stays its own bucket so arriving
+// at "done" is never merged into the 95% step.
+function progressBucket(percent: number): number {
+  return percent >= 100 ? 100 : Math.floor(percent / 5);
+}
+
 // Signature of the mutable fields a bubble renders that aren't already part of
 // the key. Keys MUST change whenever rendered content changes: the LazyForEach
 // data source diffs by key and skips notifications for key-equal rows.
+//
+// Deliberately NOT memoised per entry object. Caching on identity assumes the
+// store only ever replaces entries via cloneMessage(), and entries are also
+// mutated in place (see the sticker_state_changes test) — a stale signature
+// there means the row silently stops updating, which is worse than the cost of
+// rebuilding it. The rebuild frequency is bounded by coalescing notifies in
+// MessageStore instead.
 function mutableSig(m: MessageEntry): string {
   // videoPath: voice/file/video rows change rendering once the file lands.
   // senderName: chat-sender (posting-as-channel) names resolve async.
@@ -74,11 +95,14 @@ function mutableSig(m: MessageEntry): string {
     `_${m.placeholderLabel}_${m.systemKind}_${m.isUnsupportedMessage}` +
     `_${m.linkPreviewType}_${m.linkUrl}_${m.linkSiteName}_${m.linkTitle}_${m.linkDescription}` +
     `_${m.linkPhotoFileId}_${m.linkPhotoPath !== '' ? 'lp' : ''}_${m.linkPhotoWidth}_${m.linkPhotoHeight}` +
-    `_${m.linkPhotoProgress}_${m.linkPhotoFailed}_${m.linkPhotoDownloadActive}` +
-    `_${m.photoFileId}_${m.videoFileId}_${m.videoDuration}_${m.videoProgress}_${m.videoFailed}` +
+    `_${progressBucket(m.linkPhotoProgress)}_${m.linkPhotoFailed}_${m.linkPhotoDownloadActive}` +
+    `_${m.photoFileId}_${m.videoFileId}_${m.videoDuration}_${progressBucket(m.videoProgress)}_${m.videoFailed}` +
     `_${m.videoPath !== '' ? 'v' : ''}_${m.stickerPath !== '' ? 's' : ''}` +
-    `_${m.stickerProgress}_${m.stickerFailed}_${m.stickerDownloadActive}_${m.isEmojiSticker}` +
+    `_${progressBucket(m.stickerProgress)}_${m.stickerFailed}_${m.stickerDownloadActive}_${m.isEmojiSticker}` +
     `_${m.editDate}` +
+    // 译文长度 + 语言 + 折叠态足以表达"这行的翻译展示变了"；全文进签名徒增
+    // 每次 diff 的字符串比较成本。
+    `_${m.translatedText.length}_${m.translatedLang}_${m.translationHidden}` +
     `_${m.inlineCustomEmojiPaths.join('|')}_${m.voiceListened}_${m.voiceWaveform}` +
     `_${m.mediaDownloadActive}_${m.audioTitle}_${m.audioPerformer}` +
     `_${m.contactPhone}_${m.contactFirstName}_${m.contactLastName}_${m.contactUserId}` +
@@ -166,7 +190,7 @@ export function collapseAlbums(list: MessageEntry[]): AlbumGroup[] {
       }
       const displayHead = albumHead(albumMembers);
       groups.push({
-        key: `a_${m.albumId}_${m.id}_${memberIds.join(',')}_${photoFileIds.join(',')}_${photoPaths.join('|')}_${photoProgress.join(',')}_${photoFailed.join(',')}_${albumMembers.map((item: MessageEntry): string => item.sendState).join(',')}_${caption}_${captionEntities.map((entity: TdObject): string => JSON.stringify(entity)).join('|')}_${dateLabel}_${mutableSig(displayHead)}`,
+        key: `a_${m.albumId}_${m.id}_${memberIds.join(',')}_${photoFileIds.join(',')}_${photoPaths.join('|')}_${photoProgress.map(progressBucket).join(',')}_${photoFailed.join(',')}_${albumMembers.map((item: MessageEntry): string => item.sendState).join(',')}_${caption}_${captionEntities.map((entity: TdObject): string => JSON.stringify(entity)).join('|')}_${dateLabel}_${mutableSig(displayHead)}`,
         head: displayHead,
         memberIds,
         photoPaths,
@@ -184,7 +208,10 @@ export function collapseAlbums(list: MessageEntry[]): AlbumGroup[] {
       i = j;
     } else {
       groups.push({
-        key: `${m.id}_${m.sendState}_${m.photoPath}_${m.photoProgress}_${m.photoFailed}_${m.text}_${m.replyText}_${m.senderAvatarPath}_${dateLabel}_${mutableSig(m)}`,
+        // senderAvatarPath 刻意不进 key：头像路径经 senderAvatarChannel 旁路
+        // 直达气泡里的头像组件，进 key 意味着整群头像解析完的那一刻全页行
+        // 重建（实测 change×31 + 掉帧）。
+        key: `${m.id}_${m.sendState}_${m.photoPath}_${progressBucket(m.photoProgress)}_${m.photoFailed}_${m.text}_${m.replyText}_${dateLabel}_${mutableSig(m)}`,
         head: m,
         memberIds: [m.id],
         photoPaths: [],

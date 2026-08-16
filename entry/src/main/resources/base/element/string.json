@@ -190,11 +190,11 @@
     },
     {
       "name": "EntryAbility_desc",
-      "value": "description"
+      "value": "连接 Telegram 网络的非官方第三方客户端，与 Telegram Messenger LLP 无关联。"
     },
     {
       "name": "EntryAbility_label",
-      "value": "TelegramForHarmony"
+      "value": "Petrelgram"
     },
     {
       "name": "file_download_failed",
@@ -542,7 +542,7 @@
     },
     {
       "name": "language_title",
-      "value": "语言"
+      "value": "语言和翻译"
     },
     {
       "name": "last_seen_date",
@@ -1022,7 +1022,7 @@
     },
     {
       "name": "module_desc",
-      "value": "module description"
+      "value": "连接 Telegram 网络的非官方第三方客户端，与 Telegram Messenger LLP 无关联。"
     },
     {
       "name": "new_group_error_bad_name",
@@ -8525,6 +8525,54 @@
       "value": "已关闭自动翻译"
     },
     {
+      "name": "cp_translate_chat_on",
+      "value": "翻译此聊天"
+    },
+    {
+      "name": "cp_translate_chat_off",
+      "value": "关闭翻译"
+    },
+    {
+      "name": "cp_translate_original",
+      "value": "原文"
+    },
+    {
+      "name": "cp_translate_retry",
+      "value": "重试"
+    },
+    {
+      "name": "mb_translated_into",
+      "value": "已翻译成%1$s"
+    },
+    {
+      "name": "mb_show_translation",
+      "value": "显示译文"
+    },
+    {
+      "name": "mb_hide_translation",
+      "value": "隐藏译文"
+    },
+    {
+      "name": "language_translate_section",
+      "value": "翻译"
+    },
+    {
+      "name": "language_app_section",
+      "value": "应用语言"
+    },
+    {
+      "name": "language_translate_target",
+      "value": "翻译目标语言"
+    },
+    {
+      "name": "language_translate_chats",
+      "value": "整个聊天翻译"
+    },
+    {
+      "name": "language_translate_chats_hint",
+      "value": "打开后可在会话菜单中翻译整个聊天"
+    },
+    {
       "name": "cp_transcribe_premium",
       "value": "转文字是 Telegram Premium 功能"
     },
@@ -10807,6 +10855,10 @@
     {
       "name": "gs_no_voice",
       "value": "没有语音消息"
+    },
+    {
+      "name": "cl_my_story",
+      "value": "我的动态"
     }
   ]
 }

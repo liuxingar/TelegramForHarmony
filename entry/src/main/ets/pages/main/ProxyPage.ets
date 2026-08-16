@@ -19,6 +19,7 @@ import {
   KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration
 } from '../../store/AppSettings';
 import { plural, str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const CARD_RADIUS: number = 14;
 const TOP_ACTION_SIZE: number = 44;
@@ -44,6 +45,7 @@ const TYPES: TypeOption[] = [
 @Entry
 @Component
 struct ProxyPage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @State proxies: ProxyEntry[] = [];

@@ -14,6 +14,7 @@ import { KEY_BG_PLAY_VIDEO } from '../../store/AppSettings';
 import { VideoRangeServer } from '../../services/VideoRangeServer';
 import { VideoStreamSession } from '../../services/VideoStreamSession';
 import { str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const CONTROL_BAR_BG: string = '#6e3e3e40';
 const CONTROL_ACCENT: string = '#FFFFFF';
@@ -62,6 +63,7 @@ function formatSpeed(bytesPerSec: number): string {
 
 @Component
 export struct StreamingVideoPlayer {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @Prop fileId: number;
   @Prop fileSize: number;
   @Prop mimeType: string = '';
@@ -760,7 +762,7 @@ export struct StreamingVideoPlayer {
   build() {
     Stack() {
       if (this.posterPath !== '') {
-        Image(this.posterSrc())
+        Image(this.posterSrc()).draggable(false)
           .width(this.surfaceWidth())
           .height(this.surfaceHeight())
           .objectFit(ImageFit.Contain)

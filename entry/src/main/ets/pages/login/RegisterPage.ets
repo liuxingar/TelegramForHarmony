@@ -5,6 +5,7 @@ import { TdError } from '../../tdkit/TdTypes';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
 import { LoginHero } from './LoginHero';
 import { str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 // 号码尚未注册 Telegram 时走到这里（authorizationStateWaitRegistration）。
 // 此前没有这个页面，该状态映射不到任何 stage，界面会停在验证码页毫无反应 ——
@@ -14,6 +15,7 @@ import { str } from '../../util/strings';
 @Preview
 @Component
 export struct RegisterPage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @State firstName: string = '';
   @State lastName: string = '';
   @State termsText: string = '';

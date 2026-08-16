@@ -23,6 +23,7 @@ import { common } from '@kit.AbilityKit';
 import { publicLink } from '../../util/telegramLink';
 import { MUTE_LONG, setMute } from '../../store/ChatActions';
 import { str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const CARD_BG: ResourceColor = $r('app.color.surface');
 const CARD_RADIUS: number = 14;
@@ -61,6 +62,7 @@ const USER_PROFILE_TABS: UserProfileTab[] = [
 @Preview
 @Component
 struct ProfilePage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('screenWidthVp') screenW: number = 360;
   @State profTab: number = 0;
@@ -870,7 +872,7 @@ struct ProfilePage {
         ForEach(this.stories, (it: StoryItem) => {
           Stack({ alignContent: Alignment.BottomStart }) {
             if (it.thumbPath !== '') {
-              Image(it.thumbPath.startsWith('/') ? `file://${it.thumbPath}` : it.thumbPath)
+              Image(it.thumbPath.startsWith('/') ? `file://${it.thumbPath}` : it.thumbPath).draggable(false)
                 .width(this.storyCell()).height(this.storyCell() * 1.33).objectFit(ImageFit.Cover);
             } else {
               Column().width(this.storyCell()).height(this.storyCell() * 1.33).backgroundColor('#D8D8D8');
@@ -898,7 +900,7 @@ struct ProfilePage {
       Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
         ForEach(this.gifts, (g: GiftItem) => {
           if (g.stickerPath !== '') {
-            Image(g.stickerPath.startsWith('/') ? `file://${g.stickerPath}` : g.stickerPath)
+            Image(g.stickerPath.startsWith('/') ? `file://${g.stickerPath}` : g.stickerPath).draggable(false)
               .width(this.storyCell()).height(this.storyCell()).objectFit(ImageFit.Contain)
               .padding(10);
           } else {
@@ -1003,7 +1005,7 @@ struct ProfilePage {
       ForEach(this.sharedItems, (item: ProfileContentItem) => {
         Stack({ alignContent: Alignment.BottomEnd }) {
           if (item.thumbPath !== '') {
-            Image(`file://${item.thumbPath}`).width('100%').height('100%')
+            Image(`file://${item.thumbPath}`).draggable(false).width('100%').height('100%')
               .objectFit(ImageFit.Cover);
           } else {
             Column() {
@@ -1045,7 +1047,7 @@ struct ProfilePage {
           Row({ space: 11 }) {
             Stack() {
               if (item.thumbPath !== '') {
-                Image(`file://${item.thumbPath}`).width(46).height(46)
+                Image(`file://${item.thumbPath}`).draggable(false).width(46).height(46)
                   .objectFit(ImageFit.Cover).borderRadius(10);
               } else {
                 SymbolGlyph($r(this.sharedContentIcon(item)))
@@ -1140,7 +1142,7 @@ struct ProfilePage {
             ForEach(this.availGifts, (g: AvailGift) => {
               Column({ space: 4 }) {
                 if (g.stickerPath !== '') {
-                  Image(g.stickerPath.startsWith('/') ? `file://${g.stickerPath}` : g.stickerPath)
+                  Image(g.stickerPath.startsWith('/') ? `file://${g.stickerPath}` : g.stickerPath).draggable(false)
                     .width(56).height(56).objectFit(ImageFit.Contain);
                 } else {
                   Text('🎁').fontSize(40).width(56).height(56).textAlign(TextAlign.Center);
@@ -1177,7 +1179,7 @@ struct ProfilePage {
         webmPath: this.statusEmojiPath, boxWidth: 24, boxHeight: 24, powerCategory: 'emojiStatus'
       });
     } else {
-      Image(`file://${this.statusEmojiPath}`).width(24).height(24).objectFit(ImageFit.Contain);
+      Image(`file://${this.statusEmojiPath}`).draggable(false).width(24).height(24).objectFit(ImageFit.Contain);
     }
   }
 

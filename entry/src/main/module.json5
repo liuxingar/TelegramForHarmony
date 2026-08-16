@@ -61,7 +61,12 @@
         "description": "$string:EntryAbility_desc",
         "icon": "$media:layered_image",
         "label": "$string:EntryAbility_label",
-        "startWindowIcon": "$media:startIcon",
+        // 新版启动窗配置档：旧字段 startWindowIcon 的显示尺寸被系统钉死，
+        // 给多大的图都渲染成小图标。配置档里的 illustration 是启动页的
+        // 大幅中央插图，用图标原图（1024px）填充。
+        // 旧字段保留作为低版本回退（系统不认配置档时用）。
+        "startWindow": "$profile:start_window",
+        "startWindowIcon": "$media:foreground",
         "startWindowBackground": "$color:start_window_background",
         "backgroundModes": [
           "audioPlayback",

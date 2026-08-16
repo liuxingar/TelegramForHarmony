@@ -40,6 +40,7 @@ import {
 } from '../../util/liveInteractionPresentation';
 import { LiveInteractionBubble } from './LiveInteractionBubble';
 import { plural, str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const CALL_BACKGROUND: string = '#0D141B';
 const CALL_PANEL: string = '#141E27';
@@ -355,6 +356,7 @@ struct LocalVideoPreviewTile {
 @Entry
 @Component
 struct LiveStreamViewerPage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @StorageProp('cutoutTopSafeHeight') cutoutTopSafe: number = 0;

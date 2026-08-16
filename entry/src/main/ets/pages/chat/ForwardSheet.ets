@@ -8,6 +8,7 @@ import {
   KEY_POWER_EFFECT_REPLY, KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration
 } from '../../store/AppSettings';
 import { plural, str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 // "Forward to…" chat picker, extracted from ChatPage.
 //
@@ -19,6 +20,7 @@ import { plural, str } from '../../util/strings';
 // query box and in-flight send state reset per open without explicit teardown.
 @Component
 export struct ForwardSheet {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   // Two-way: the close button and a successful send both dismiss from in here.
   @Link show: boolean;
 

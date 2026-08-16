@@ -101,7 +101,7 @@ export struct SmartLoopVideo {
   build() {
     if (this.suspended()) {
       if (this.thumbPath !== '') {
-        Image(this.thumbPath.startsWith('/') ? `file://${this.thumbPath}` : this.thumbPath)
+        Image(this.thumbPath.startsWith('/') ? `file://${this.thumbPath}` : this.thumbPath).draggable(false)
           .width(this.boxWidth).height(this.boxHeight)
           .objectFit(this.isTransparentAsset() ? ImageFit.Contain : ImageFit.Cover);
       } else {
@@ -114,7 +114,7 @@ export struct SmartLoopVideo {
         // Keep the thumbnail mounted below the texture. Download progress can
         // update the parent row without flashing an empty player surface.
         if (this.thumbPath !== '') {
-          Image(this.thumbPath.startsWith('/') ? `file://${this.thumbPath}` : this.thumbPath)
+          Image(this.thumbPath.startsWith('/') ? `file://${this.thumbPath}` : this.thumbPath).draggable(false)
             .width(this.boxWidth).height(this.boxHeight)
             .objectFit(this.isTransparentAsset() ? ImageFit.Contain : ImageFit.Cover);
         } else {

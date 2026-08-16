@@ -1,4 +1,5 @@
 import { getTdClient } from '../../tdkit/Globals';
+import { guardKey } from '../../util/keyGuard';
 import { TgsStickerView } from './TgsStickerView';
 import { SmartLoopVideo } from '../common/SmartLoopVideo';
 import { TdObject, TdRequest, TdError } from '../../tdkit/TdTypes';
@@ -12,6 +13,7 @@ import {
 } from '../../store/StickerApi';
 import { promptAction } from '@kit.ArkUI';
 import { str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 export interface StickerItem {
   fileId: number;   // the sticker's own file (what gets sent)
@@ -30,6 +32,13 @@ interface FlatEntry {
   kind: string;   // 'header' | 'sticker'
   title: string;
   setIdx: number; // owning pack index — drives the tab highlight while scrolling
+  // Position within the owning pack. It exists only to make the grid key
+  // unique: the same sticker legitimately appears in several packs — recents
+  // and favourites repeat what the packs already hold — so a key built from
+  // fileId and paths produced two cells with the SAME key. That is the
+  // "Use repeat key" warning in the device log, and it makes the grid reuse
+  // the wrong cell.
+  pos: number;
   sticker: StickerItem | null;
 }
 
@@ -92,6 +101,7 @@ const SET_LIMIT: number = 20;
 // server's trending packs, like the official client.
 @Component
 export struct StickerPicker {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   onPick: (s: StickerItem, x: number, y: number) => void = (): void => {};
   stickerType: string = 'regular'; // 'regular' | 'custom_emoji'
   includeTrending: boolean = false;
@@ -564,9 +574,11 @@ export struct StickerPicker {
       if (!t.loaded) {
         break; // contiguity: stop at the first not-yet-loaded pack
       }
-      out.push({ kind: 'header', title: t.title, setIdx: i, sticker: null });
+      out.push({ kind: 'header', title: t.title, setIdx: i, pos: -1, sticker: null });
+      let pos = 0;
       for (const st of t.stickers) {
-        out.push({ kind: 'sticker', title: '', setIdx: i, sticker: st });
+        out.push({ kind: 'sticker', title: '', setIdx: i, pos: pos, sticker: st });
+        pos++;
       }
     }
     return out;
@@ -735,8 +747,8 @@ export struct StickerPicker {
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = -1;
       if (this.searchQuery.trim() !== '') {
-        this.flatEntries = this.searchItems.map((st: StickerItem): FlatEntry =>
-          ({ kind: 'sticker', title: '', setIdx: -1, sticker: st }));
+        this.flatEntries = this.searchItems.map((st: StickerItem, idx: number): FlatEntry =>
+          ({ kind: 'sticker', title: '', setIdx: -1, pos: idx, sticker: st }));
       } else {
         this.flatEntries = this.flatten();
       }
@@ -831,7 +843,7 @@ export struct StickerPicker {
         .width('100%').height('100%')
         .justifyContent(FlexAlign.Center);
       } else if (s.thumbPath !== '') {
-        Image(`file://${s.thumbPath}`)
+        Image(`file://${s.thumbPath}`).draggable(false)
           .width('100%').height('100%').objectFit(ImageFit.Contain);
       } else {
         Text(s.emoji)
@@ -904,7 +916,7 @@ export struct StickerPicker {
             ForEach(this.sets, (t: StickerSetTab, idx: number) => {
               Column() {
                 if (t.iconPath !== '') {
-                  Image(`file://${t.iconPath}`)
+                  Image(`file://${t.iconPath}`).draggable(false)
                     .width(30).height(30).objectFit(ImageFit.Contain);
                 } else if (t.iconText !== '') {
                   Text(t.iconText).fontSize(22);
@@ -1018,9 +1030,12 @@ export struct StickerPicker {
                   this.stickerCell(e.sticker);
                 }
               }
-            }, (e: FlatEntry) => e.kind === 'header'
-              ? `h_${e.setIdx}_${e.title}`
-              : `${e.sticker!.fileId}_${e.sticker!.emoji}_${e.sticker!.thumbPath}_${e.sticker!.srcPath}`);
+            }, (e: FlatEntry, index: number) => guardKey('stickers', index,
+              e.kind === 'header'
+                ? `h_${e.setIdx}_${e.title}`
+                // setIdx + pos are what make this unique; the paths stay in so
+                // the cell still rebuilds as its files arrive.
+                : `s_${e.setIdx}_${e.pos}_${e.sticker!.fileId}_${e.sticker!.thumbPath}_${e.sticker!.srcPath}`));
           }
           .columnsTemplate(this.stickerType === 'custom_emoji'
             ? '1fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr' : '1fr 1fr 1fr 1fr 1fr')

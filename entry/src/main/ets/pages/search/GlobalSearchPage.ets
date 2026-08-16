@@ -26,6 +26,7 @@ import {
   setAllDownloadsPaused, setDownloadPaused
 } from '../../store/DownloadApi';
 import { plural, str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 interface FoundItem {
   chatId: number;
@@ -115,6 +116,7 @@ interface DownloadItem {
 @Entry
 @Component
 struct GlobalSearchPage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @State query: string = '';
   @State tab: number = 0;
@@ -2147,7 +2149,7 @@ struct GlobalSearchPage {
       }
       Row({ space: 12 }) {
         if (it.kind === 'photo') {
-          Image(`file://${it.path}`)
+          Image(`file://${it.path}`).draggable(false)
             .width(48).height(48).borderRadius(8).objectFit(ImageFit.Cover);
         } else {
           Row() {
@@ -2660,7 +2662,7 @@ struct GlobalSearchPage {
           GridItem() {
             Stack({ alignContent: Alignment.BottomEnd }) {
               if (it.thumbPath !== '') {
-                Image(`file://${it.thumbPath}`)
+                Image(`file://${it.thumbPath}`).draggable(false)
                   .width('100%').height('100%').objectFit(ImageFit.Cover);
               } else {
                 Column().width('100%').height('100%').backgroundColor($r('app.color.surface_alt'));

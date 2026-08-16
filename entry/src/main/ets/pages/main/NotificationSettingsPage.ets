@@ -11,12 +11,14 @@ import {
   KEY_NOTIFY_PRIVATE, KEY_NOTIFY_GROUP, KEY_NOTIFY_CHANNEL, KEY_WEBPUSH_ENABLED, setBoolean
 } from '../../store/AppSettings';
 import { str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const CARD_RADIUS: number = 14;
 
 @Entry
 @Component
 struct NotificationSettingsPage {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @State privateSettings: ScopeSettings = defaultScopeSettings();

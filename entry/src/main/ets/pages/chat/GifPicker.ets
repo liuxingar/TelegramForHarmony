@@ -6,6 +6,7 @@ import {
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
 import { SmartLoopVideo } from '../common/SmartLoopVideo';
 import { str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 export interface GifItem {
   fileId: number;    // the animation file (what gets sent)
@@ -22,6 +23,7 @@ const GIF_SKELETONS: number[] = [0, 1, 2, 3, 4, 5];
 // autoplay/reduced-motion/power-saving settings disable playback.
 @Component
 export struct GifPicker {
+  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   onPick: (g: GifItem) => void = (): void => {};
   @StorageProp(KEY_POWER_AUTOPLAY_GIF) @Watch('onPlaybackSettingChanged') autoplayGif: boolean = true;
   @StorageProp(KEY_POWER_ACTIVE) @Watch('onPlaybackSettingChanged') powerSaving: boolean = false;
@@ -256,7 +258,7 @@ export struct GifPicker {
                     boxWidth: 112, boxHeight: 112, powerCategory: 'gif'
                   });
                 } else if (g.thumbPath !== '') {
-                  Image(`file://${g.thumbPath}`)
+                  Image(`file://${g.thumbPath}`).draggable(false)
                     .width('100%').height('100%').objectFit(ImageFit.Cover);
                 } else {
                   Column() {

@@ -24,7 +24,7 @@ export const APP_SCOPE_STRINGS = 'AppScope/resources/base/element/string.json';
 // zh_CN for Chinese — would block every migration step on having an English
 // translation ready, which would stall the migration itself. Revisit once the
 // English catalogue is complete.
-export const LOCALES = ['en_US', 'zh_Hant'];
+export const LOCALES = ['en_US', 'zh_Hant', 'ru', 'uk', 'fa', 'ar', 'id', 'ms', 'tr', 'vi', 'th', 'ja', 'ko', 'de', 'fr', 'es', 'pt', 'it', 'hi'];
 
 // Source directory → key domain. Longest prefix wins.
 const DOMAIN_RULES = [

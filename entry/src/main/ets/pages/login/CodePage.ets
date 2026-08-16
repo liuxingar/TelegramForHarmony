@@ -96,6 +96,9 @@ export struct CodePage {
   }
 
   private deliveryDescription(): string {
+    // str() 出来的是普通字符串，节点只有在构建时读过某个状态才会随它重建。
+    // langEpoch 光声明不读，切语言时这段文案纹丝不动 —— 显式读一次建依赖。
+    void this.langEpoch;
     switch (this.codeType) {
       case 'authenticationCodeTypeTelegramMessage':
         return str('lg_code_other_device');
@@ -124,6 +127,7 @@ export struct CodePage {
   }
 
   private resendButtonText(): string {
+    void this.langEpoch; // 同 deliveryDescription：建立语言依赖
     // 倒计时优先：它反映的是服务端给的等待时间，跟"有没有下一种通道"是两回事。
     if (this.resendCountdown > 0) {
       return plural('lg_resend_in', this.resendCountdown, this.resendCountdown);

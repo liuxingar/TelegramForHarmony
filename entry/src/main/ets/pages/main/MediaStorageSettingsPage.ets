@@ -161,6 +161,13 @@ struct MediaStorageSettingsPage {
     return best;
   }
 
+  // 拖动过程中的即时反馈：只动 @State，不落盘、不同步服务端。
+  private previewLimit(kind: string, index: number): void {
+    const safeIndex = Math.max(0, Math.min(LIMITS.length - 1, Math.round(index)));
+    const value = LIMITS[safeIndex];
+    if (kind === 'video') { this.videoLimit = value; } else { this.fileLimit = value; }
+  }
+
   private setLimit(kind: string, index: number): void {
     const safeIndex = Math.max(0, Math.min(LIMITS.length - 1, Math.round(index)));
     const value = LIMITS[safeIndex];
@@ -264,17 +271,43 @@ struct MediaStorageSettingsPage {
     }.width('100%').padding({ left: 14, right: 14, top: 10, bottom: 10 });
   }
 
+  // 同 toggleRow，但副标题里的"上限"在 Builder 体内读 @State，改完限制后
+  // 副标题会跟着变（按值传参那版会停在旧数字）。
   @Builder
-  limitRow(title: string, value: number, kind: string) {
+  limitToggleRow(title: string, kind: string, value: boolean, change: (next: boolean) => void) {
+    Row({ space: 10 }) {
+      Column({ space: 2 }) {
+        Text(title).fontSize(15).fontColor(COLOR_TEXT_PRIMARY);
+        Text(str('ms_up_to', formatBytes(kind === 'video' ? this.videoLimit : this.fileLimit)))
+          .fontSize(11).fontColor(COLOR_TEXT_SECONDARY).maxLines(2);
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+      Toggle({ type: ToggleType.Switch, isOn: value }).selectedColor(COLOR_PRIMARY)
+        .onChange((next: boolean): void => change(next));
+    }.width('100%').padding({ left: 14, right: 14, top: 10, bottom: 10 });
+  }
+
+  // 当前值只能在 Builder 体内从 @State 读，不能当参数传进来：按值传参的
+  // @Builder 不会随状态更新重新渲染 —— 拖完滑块值其实已经存下了，但这一行
+  // 不重建，数字和滑块位置都不动，看起来就是"滑动条不好使"。
+  @Builder
+  limitRow(title: string, kind: string) {
     Column({ space: 5 }) {
       Row() {
         Text(title).fontSize(14).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
-        Text(formatBytes(value)).fontSize(13).fontColor(COLOR_PRIMARY);
+        Text(formatBytes(kind === 'video' ? this.videoLimit : this.fileLimit))
+          .fontSize(13).fontColor(COLOR_PRIMARY);
       }.width('100%');
-      Slider({ value: this.limitIndex(value), min: 0, max: LIMITS.length - 1, step: 1 })
+      Slider({
+        value: this.limitIndex(kind === 'video' ? this.videoLimit : this.fileLimit),
+        min: 0, max: LIMITS.length - 1, step: 1
+      })
         .width('100%').selectedColor(COLOR_PRIMARY).blockColor(COLOR_PRIMARY)
         .onChange((next: number, mode: SliderChangeMode): void => {
-          if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+          // 拖动中只跟界面，松手/点击才落盘并同步服务端：每档都写一次
+          // preferences + syncAutoDownloadSettings 会把拖动本身拖卡。
+          if (mode === SliderChangeMode.Moving) {
+            this.previewLimit(kind, next);
+          } else if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
             this.setLimit(kind, next);
           }
         });
@@ -292,13 +325,13 @@ struct MediaStorageSettingsPage {
       this.toggleRow(str('storage_photo'), str('ms_photo_sub'), this.photos,
         (next: boolean): void => this.setMediaBoolean('photo', next));
       Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
-      this.toggleRow(str('ms_video_gif'), str('ms_up_to', formatBytes(this.videoLimit)), this.videos,
+      this.limitToggleRow(str('ms_video_gif'), 'video', this.videos,
         (next: boolean): void => this.setMediaBoolean('video', next));
-      if (this.videos) { this.limitRow(str('ms_video_limit'), this.videoLimit, 'video'); }
+      if (this.videos) { this.limitRow(str('ms_video_limit'), 'video'); }
       Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
-      this.toggleRow(str('ms_file_music'), str('ms_up_to', formatBytes(this.fileLimit)), this.files,
+      this.limitToggleRow(str('ms_file_music'), 'file', this.files,
         (next: boolean): void => this.setMediaBoolean('file', next));
-      if (this.files) { this.limitRow(str('ms_file_limit'), this.fileLimit, 'file'); }
+      if (this.files) { this.limitRow(str('ms_file_limit'), 'file'); }
     }.width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS).clip(true);
   }
 

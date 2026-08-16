@@ -5,23 +5,32 @@ import {
 } from '../../tdkit/Globals';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
 import { str } from '../../util/strings';
+import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 interface QrLoginStep {
   index: string;
   text: string;
 }
 
-const QR_STEPS: QrLoginStep[] = [
-  { index: '1', text: str('lg_qr_step1') },
-  { index: '2', text: str('lg_qr_step2') },
-  { index: '3', text: str('lg_qr_step3') }
-];
+// 函数而非 const：文案来自 str()，调用时才解析。模块级数组在首次 import 时
+// 就求值一次，之后语言再怎么变都不会更新（CountryData 里同样的坑）。
+function qrSteps(): QrLoginStep[] {
+  return [
+    { index: '1', text: str('lg_qr_step1') },
+    { index: '2', text: str('lg_qr_step2') },
+    { index: '3', text: str('lg_qr_step3') }
+  ];
+}
 
 const QR_PIXEL_SIZE: number = 400;
 
 @Preview
 @Component
 export struct QrLoginPage {
+  // 语言变了要把三条步骤说明重新解析一遍；@Watch 的回调和 build 里读没读过
+  // 它无关，所以不需要再 void 一次。
+  @StorageProp(LANGUAGE_EPOCH) @Watch('onLanguageChanged') langEpoch: number = 0;
+  @State steps: QrLoginStep[] = qrSteps();
   @State link: string = '';
   @State code: image.PixelMap | null = null;
   @State failed: boolean = false;
@@ -48,6 +57,10 @@ export struct QrLoginPage {
       this.unsubscribeLink();
       this.unsubscribeLink = null;
     }
+  }
+
+  private onLanguageChanged(): void {
+    this.steps = qrSteps();
   }
 
   private renderCode(link: string): void {
@@ -120,7 +133,7 @@ export struct QrLoginPage {
         this.qrSurface();
 
         Column({ space: 12 }) {
-          ForEach(QR_STEPS, (step: QrLoginStep) => {
+          ForEach(this.steps, (step: QrLoginStep) => {
             Row({ space: 12 }) {
               Text(step.index)
                 .fontSize(14).fontWeight(FontWeight.Medium).fontColor(Color.White)
@@ -132,7 +145,9 @@ export struct QrLoginPage {
             }
             .width('100%')
             .alignItems(VerticalAlign.Center);
-          }, (step: QrLoginStep): string => step.index);
+            // 键里带上文案：ForEach 对键没变的项直接复用旧节点，只用序号做键
+            // 的话切了语言文字不会更新。
+          }, (step: QrLoginStep): string => `${step.index}_${step.text}`);
         }
         .width('100%')
         .padding(16)

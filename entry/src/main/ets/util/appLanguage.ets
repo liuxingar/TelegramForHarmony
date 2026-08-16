@@ -38,7 +38,24 @@ export function appLanguages(): AppLanguage[] {
     { tag: LANGUAGE_SYSTEM, label: str('language_system') },
     { tag: 'zh-Hans', label: '简体中文' }, // i18n-exempt: endonym, never translated
     { tag: 'zh-Hant', label: '繁體中文' }, // i18n-exempt: endonym, never translated
-    { tag: 'en-US', label: 'English' }
+    { tag: 'en-US', label: 'English' },
+    { tag: 'ru', label: 'Русский' }, // i18n-exempt: endonym, never translated
+    { tag: 'uk', label: 'Українська' }, // i18n-exempt: endonym, never translated
+    { tag: 'fa', label: 'فارسی' }, // i18n-exempt: endonym, never translated
+    { tag: 'ar', label: 'العربية' }, // i18n-exempt: endonym, never translated
+    { tag: 'id', label: 'Indonesia' }, // i18n-exempt: endonym, never translated
+    { tag: 'ms', label: 'Melayu' }, // i18n-exempt: endonym, never translated
+    { tag: 'tr', label: 'Türkçe' }, // i18n-exempt: endonym, never translated
+    { tag: 'vi', label: 'Tiếng Việt' }, // i18n-exempt: endonym, never translated
+    { tag: 'th', label: 'ไทย' }, // i18n-exempt: endonym, never translated
+    { tag: 'ja', label: '日本語' }, // i18n-exempt: endonym, never translated
+    { tag: 'ko', label: '한국어' }, // i18n-exempt: endonym, never translated
+    { tag: 'de', label: 'Deutsch' }, // i18n-exempt: endonym, never translated
+    { tag: 'fr', label: 'Français' }, // i18n-exempt: endonym, never translated
+    { tag: 'es', label: 'Español' }, // i18n-exempt: endonym, never translated
+    { tag: 'pt', label: 'Português' }, // i18n-exempt: endonym, never translated
+    { tag: 'it', label: 'Italiano' }, // i18n-exempt: endonym, never translated
+    { tag: 'hi', label: 'हिन्दी' } // i18n-exempt: endonym, never translated
   ];
 }
 

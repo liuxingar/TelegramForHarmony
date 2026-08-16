@@ -457,9 +457,6 @@ export struct ChatRow {
         return;
       }
       const params: Record<string, Object> = { 'chatId': this.chat.id };
-      // 打点：首次进入卡顿的定位用。到 ChatPage.aboutToAppear 之间的间隔就是
-      // 页面模块加载+路由成本，只有首次导航才付。
-      AppStorage.setOrCreate('chatOpenTapAt', Date.now());
       router.pushUrl({ url: 'pages/chat/ChatPage', params: params });
     })
     .onTouch((event: TouchEvent): void => {

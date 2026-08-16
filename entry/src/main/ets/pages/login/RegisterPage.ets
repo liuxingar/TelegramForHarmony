@@ -48,9 +48,17 @@ export struct RegisterPage {
   }
 
   private agreementLabel(): string {
+    void this.langEpoch;
     return this.minUserAge > 0
       ? str('lg_terms_with_age', this.minUserAge)
       : str('lg_terms');
+  }
+
+  // str() 出来的是普通字符串，节点只有在构建时读过某个状态才会随它重建。
+  // langEpoch 光声明不读，切语言时这些文案纹丝不动 —— 经这里显式读一次。
+  private label(key: string): string {
+    void this.langEpoch;
+    return str(key);
   }
 
   @Builder
@@ -87,9 +95,9 @@ export struct RegisterPage {
           .textAlign(TextAlign.Center).lineHeight(21)
           .padding({ left: 18, right: 18 });
 
-        this.nameField(str('ct_first_name'), this.firstName, true,
+        this.nameField(this.label('ct_first_name'), this.firstName, true,
           (v: string): void => { this.firstName = v; });
-        this.nameField(str('lg_last_name_optional'), this.lastName, false,
+        this.nameField(this.label('lg_last_name_optional'), this.lastName, false,
           (v: string): void => { this.lastName = v; });
 
         if (this.termsText !== '') {

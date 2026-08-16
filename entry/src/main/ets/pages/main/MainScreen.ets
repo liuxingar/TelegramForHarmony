@@ -181,8 +181,12 @@ export struct MainScreen {
     .scale({ x: 0.92, y: 0.92 })
   }
 
+  // label 是 ResourceStr 而不是 string：$r() 由框架在渲染时解析，天然跟随
+  // 语言切换。原来传 str() 出来的普通字符串，切语言后要重启才更新 —— 依赖
+  // langEpoch 触发重建的做法在这里不可靠，因为 setAppPreferredLanguage 是
+  // 应用级设置，未必触发 Ability 的配置变更回调。
   @Builder
-  dockItem(index: number, icon: string, label: string) {
+  dockItem(index: number, icon: string, label: ResourceStr, labelKey: string) {
     Column({ space: 2 }) {
       Stack({ alignContent: Alignment.TopEnd }) {
         SymbolGlyph($r(icon)).fontSize(24)
@@ -221,9 +225,13 @@ export struct MainScreen {
       normal: this.dockItemNormalStyle,
       pressed: this.dockItemPressedStyle
     })
+    // 无障碍文本必须是普通字符串，所以这里另外收一个资源 key 现场取词；
+    // 可见文案走上面的 $r()，两者语言一致。
     .accessibilityText(index === 0 && this.unread > 0
-      ? str('a11y_tab_unread', label, this.unread, this.tab === index ? str('a11y_selected') : '')
-      : str('a11y_option_state', label, this.tab === index ? str('a11y_selected') : ''))
+      ? str('a11y_tab_unread', this.dockLabel(labelKey), this.unread,
+        this.tab === index ? str('a11y_selected') : '')
+      : str('a11y_option_state', this.dockLabel(labelKey),
+        this.tab === index ? str('a11y_selected') : ''))
     .onClick(() => { this.select(index); });
   }
 
@@ -282,9 +290,9 @@ export struct MainScreen {
             .hitTestBehavior(HitTestMode.None);
         }
         Row() {
-          this.dockItem(0, 'sys.symbol.message', this.dockLabel('tab_chats'));
-          this.dockItem(1, 'sys.symbol.person_2', this.dockLabel('tab_contacts'));
-          this.dockItem(2, 'sys.symbol.gearshape', this.dockLabel('settings_title'));
+          this.dockItem(0, 'sys.symbol.message', $r('app.string.tab_chats'), 'tab_chats');
+          this.dockItem(1, 'sys.symbol.person_2', $r('app.string.tab_contacts'), 'tab_contacts');
+          this.dockItem(2, 'sys.symbol.gearshape', $r('app.string.settings_title'), 'settings_title');
           this.profileDockItem();
         }
         .width('100%').height('100%')

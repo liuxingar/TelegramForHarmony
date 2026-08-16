@@ -4,6 +4,7 @@ import { TdObject, TdBridge } from '../main/ets/tdkit/TdTypes';
 import { UserStore } from '../main/ets/store/UserStore';
 import { ChatStore } from '../main/ets/store/ChatStore';
 import { CallSession } from '../main/ets/services/CallSession';
+import { FileService } from '../main/ets/services/FileService';
 import { NullCallMedia } from '../main/ets/services/CallMediaBridge';
 import {
   NotificationService, NotificationPublisher, LocalNotice, CALL_NOTIFICATION_ID
@@ -97,6 +98,86 @@ function feedNewMessage(b: FakeBridge, chatId: number, messageId: number,
   b.onReceive(JSON.stringify(u));
 }
 
+interface GroupEnv {
+  bridge: FakeBridge;
+  publisher: FakePublisher;
+  service: NotificationService;
+  foreground: boolean;
+}
+
+// 群会话 + 挂上发信人来源。setup() 的会话没有 type，chatKindOf 判为 private，
+// 走不到发信人分支。
+function setupGroup(): GroupEnv {
+  const b = new FakeBridge();
+  const c = new TdClient(b);
+  const users = new UserStore(c);
+  const chats = new ChatStore(c, users);
+  const files = new FileService(c, chats);
+  const publisher = new FakePublisher();
+  const env: GroupEnv = { bridge: b, publisher: publisher, service: null!, foreground: false };
+  env.service = new NotificationService(c, chats, publisher, (): boolean => env.foreground);
+  env.service.attachSenderSources(users, files);
+  c.start();
+  const type: TdObject = { '@type': 'chatTypeSupergroup' };
+  type['is_channel'] = false;
+  const chat: TdObject = { '@type': 'chat' };
+  chat['id'] = 5;
+  chat['title'] = '技术群';
+  chat['type'] = type;
+  chat['positions'] = [];
+  chat['unread_count'] = 0;
+  const newChat: TdObject = { '@type': 'updateNewChat' };
+  newChat['chat'] = chat;
+  b.onReceive(JSON.stringify(newChat));
+  return env;
+}
+
+function feedUserWithPhoto(b: FakeBridge, userId: number, name: string, photoId: number): void {
+  const small: TdObject = { '@type': 'file' };
+  small['id'] = photoId;
+  const photo: TdObject = { '@type': 'profilePhoto' };
+  photo['small'] = small;
+  const user: TdObject = { '@type': 'user' };
+  user['id'] = userId;
+  user['first_name'] = name;
+  user['profile_photo'] = photo;
+  const u: TdObject = { '@type': 'updateUser' };
+  u['user'] = user;
+  b.onReceive(JSON.stringify(u));
+}
+
+function feedFileCompleted(b: FakeBridge, fileId: number, path: string): void {
+  const local: TdObject = { '@type': 'localFile' };
+  local['is_downloading_completed'] = true;
+  local['path'] = path;
+  const file: TdObject = { '@type': 'file' };
+  file['id'] = fileId;
+  file['local'] = local;
+  const u: TdObject = { '@type': 'updateFile' };
+  u['file'] = file;
+  b.onReceive(JSON.stringify(u));
+}
+
+function feedGroupMessage(b: FakeBridge, messageId: number, senderUserId: number,
+  text: string): void {
+  const ft: TdObject = { '@type': 'formattedText' };
+  ft['text'] = text;
+  const content: TdObject = { '@type': 'messageText' };
+  content['text'] = ft;
+  const sender: TdObject = { '@type': 'messageSenderUser' };
+  sender['user_id'] = senderUserId;
+  const message: TdObject = { '@type': 'message' };
+  message['id'] = messageId;
+  message['chat_id'] = 5;
+  message['date'] = 100;
+  message['is_outgoing'] = false;
+  message['sender_id'] = sender;
+  message['content'] = content;
+  const u: TdObject = { '@type': 'updateNewMessage' };
+  u['message'] = message;
+  b.onReceive(JSON.stringify(u));
+}
+
 function sentOptions(b: FakeBridge): string[] {
   return b.sent.map((json: string): TdObject => JSON.parse(json) as TdObject)
     .filter((o: TdObject): boolean => o['@type'] === 'setOption')
@@ -124,6 +205,38 @@ export default function notificationServiceTest() {
       expect(notice.title).assertEqual('工作群');
       expect(notice.text.indexOf('晚上开会') >= 0).assertTrue();
       expect(notice.isCall).assertFalse();
+    });
+    // 群消息的通知头像应该是发信人的，不是会话的 —— 一屏全是同一个群头像
+    // 认不出谁在说话。头像还没下完时先回退会话头像并把它拉下来。
+    it('group_message_uses_sender_avatar_once_downloaded', 0, () => {
+      const env = setupGroup();
+      env.foreground = false;
+      feedUserWithPhoto(env.bridge, 77, '小李', 555);
+
+      feedGroupMessage(env.bridge, 4194304, 77, '看一下这个 PR');
+      expect(env.publisher.published.length).assertEqual(1);
+      // 还没下完：回退会话头像（此处为空），但下载已经发出去了
+      expect(env.publisher.published[0].avatarPath).assertEqual('');
+      const requested: boolean = env.bridge.sent.some((json: string): boolean => {
+        const request = JSON.parse(json) as TdObject;
+        return request['@type'] === 'downloadFile' && request['file_id'] === 555;
+      });
+      expect(requested).assertTrue();
+      // 正文点出是谁，否则换成陌生头像后更难认
+      expect(env.publisher.published[0].text.indexOf('小李') >= 0).assertTrue();
+
+      feedFileCompleted(env.bridge, 555, '/data/avatars/u77.jpg');
+      feedGroupMessage(env.bridge, 8388608, 77, '合了');
+      expect(env.publisher.published.length).assertEqual(2);
+      expect(env.publisher.published[1].avatarPath).assertEqual('/data/avatars/u77.jpg');
+    });
+    // 私聊里发信人就是会话本身，不该绕远路，也不该给正文加名字前缀。
+    it('private_message_keeps_chat_avatar_and_no_prefix', 0, () => {
+      const env = setup();
+      env.foreground = false;
+      feedNewMessage(env.bridge, 5, 4194304, '在吗', false);
+      expect(env.publisher.published.length).assertEqual(1);
+      expect(env.publisher.published[0].text).assertEqual('在吗');
     });
     it('outgoing_message_does_not_publish', 0, () => {
       const env = setup();

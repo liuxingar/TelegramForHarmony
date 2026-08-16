@@ -151,12 +151,17 @@ export const KEY_WEBPUSH_AUTH: string = 'webPushAuth';
 // 不出现整聊天翻译入口（单条翻译不受它控制）。
 export const KEY_TRANSLATE_TARGET: string = 'translateTargetLang';
 export const KEY_TRANSLATE_CHATS: string = 'translateEntireChats';
+// 整聊天翻译打开后是全局生效的，这里存的是**例外**：被用户明确关掉翻译的
+// 会话 id，逗号分隔。做成排除名单而不是白名单，是因为白名单意味着每进一个
+// 新群都要手动点一次。纯本地设置，不占服务端的 is_translatable 字段。
+export const KEY_TRANSLATE_OPT_OUT: string = 'translateOptOutChats';
 
 const DATA_STRING_KEYS: string[] = [
   KEY_WEBPUSH_ENDPOINT,
   KEY_WEBPUSH_P256DH,
   KEY_WEBPUSH_AUTH,
-  KEY_TRANSLATE_TARGET
+  KEY_TRANSLATE_TARGET,
+  KEY_TRANSLATE_OPT_OUT
 ];
 
 // 后台播放：各媒体类别切后台是否继续播放（audioPlayback 长时任务）。
@@ -487,6 +492,34 @@ export function shouldAutoDownload(kind: string, size: number): boolean {
     return policy.files && safeSize <= policy.fileLimit;
   }
   return false;
+}
+
+// --- 整聊天翻译的会话例外 -----------------------------------------------
+//
+// 名单存成逗号分隔的字符串而不是数组：preferences 只收基本类型，而这个名单
+// 通常是空的或只有几项，解析成本可以忽略。
+
+function optOutList(): string[] {
+  const raw = AppStorage.get<string>(KEY_TRANSLATE_OPT_OUT) ?? '';
+  return raw === '' ? [] : raw.split(',');
+}
+
+export function translateOptedOut(chatId: number): boolean {
+  return optOutList().indexOf(`${chatId}`) >= 0;
+}
+
+export function setTranslateOptedOut(chatId: number, optedOut: boolean): void {
+  const id = `${chatId}`;
+  const list = optOutList();
+  const at = list.indexOf(id);
+  if (optedOut && at < 0) {
+    list.push(id);
+  } else if (!optedOut && at >= 0) {
+    list.splice(at, 1);
+  } else {
+    return; // 已经是目标状态
+  }
+  setString(KEY_TRANSLATE_OPT_OUT, list.join(','));
 }
 
 export function autosaveEnabled(scope: string): boolean {

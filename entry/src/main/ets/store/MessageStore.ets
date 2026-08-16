@@ -26,6 +26,9 @@ const REPLY_KB_PROBE_LIMIT: number = 500;
 // Re-request a still-missing thumbnail at most this often (stalled downloads
 // whose bounded retries were exhausted by a transient network failure).
 const THUMB_REKICK_MS: number = 8000;
+// 缩略图同时在途上限。放开时几十个请求互相抢带宽，首屏那几张反而最晚到；
+// 4 条既能压满一般家宽，又给整段媒体和消息同步留出余量。
+const THUMB_MAX_ACTIVE: number = 4;
 
 // 被回复消息的预览快照（发送者 + 摘要）。
 interface RepliedPreview {
@@ -34,11 +37,10 @@ interface RepliedPreview {
 }
 // 一帧的量级：下载进度的发布合并到这个窗口里，见 notifySoon()。
 const NOTIFY_COALESCE_MS: number = 16;
-// 初始历史发布后的安置期用更宽的合并窗。首页 30 行刚建好的 100ms 内，头像
-// 回填、回复引用、缩略图会各到一批——16ms 的窗口把它们放成两三波，每波都是
-// 近乎整页的 CHANGE 重建（实测每波 27-30 行、各吃一个掉帧）。150ms 把首批
-// 解析并成一波；安置期一过恢复 16ms，日常更新照旧灵敏。
-const INITIAL_SETTLE_COALESCE_MS: number = 150;
+// 初始历史发布后的安置期。首页刚建好的这段时间里，头像回填、回复引用、缩略
+// 图会各到一批——16ms 的窗口把它们放成两三波，每波都是近乎整页的 CHANGE 重建
+// （实测每波 27-30 行、各吃一个掉帧）。安置期内的发布整体压到窗口末尾一次
+// 放行，期满恢复 16ms，日常更新照旧灵敏。见 notifySoon()。
 const INITIAL_SETTLE_WINDOW_MS: number = 400;
 // 首屏历史页的条数。30 条一帧建完是实测的首帧掉帧来源；12 条先铺满屏幕，
 // 剩余由短页补链/滚动分页在后续帧补齐。
@@ -1775,6 +1777,9 @@ export class MessageStore {
     this.scanKeyboardMarkup([m]);
     const entry: MessageEntry = buildMessageEntry(m, this.users);
     this.upsert(entry);
+    // 实时到达（不是翻历史翻出来的）。整段媒体的可见窗口对这些消息放行：
+    // 它们一次就一条，用户多半正看着尾部，等滚动事件才下会明显发愣。
+    this.liveArrivals.add(entry.id);
     if (!entry.isOutgoing && (entry.contentType === 'photo' || entry.contentType === 'video' ||
       entry.contentType === 'audio' || entry.contentType === 'file')) {
       if (this.liveIncomingMediaIds.indexOf(entry.id) < 0) {
@@ -2142,17 +2147,70 @@ export class MessageStore {
     }
   }
 
+  // 缩略图下载闸。requestPhotos() 会对整页每张图各发一次 downloadFile，
+  // 图多的频道一进去就是几十个并发请求 —— 它们互相抢带宽，谁都不先完成，
+  // 首屏那几张反而最晚出来，同时挤占 TDLib 的网络线程让列表发卡。
+  // 这里排队：同时最多 THUMB_MAX_ACTIVE 个在途，其余按入队顺序等待。
+  private thumbActive: number = 0;
+  private thumbQueue: number[] = [];
+  private thumbQueued: Set<number> = new Set();
+
   // Download an inline thumbnail with up to 2 automatic retries (backoff),
   // so a transient failure doesn't leave the bubble stuck at 0% forever.
   private downloadThumb(fileId: number): void {
+    if (this.thumbQueued.has(fileId)) {
+      return; // 已在队列或在途
+    }
+    this.thumbQueued.add(fileId);
+    this.thumbQueue.push(fileId);
+    this.pumpThumbs();
+  }
+
+  private pumpThumbs(): void {
+    while (this.thumbActive < THUMB_MAX_ACTIVE && this.thumbQueue.length > 0) {
+      const fileId = this.thumbQueue.shift() as number;
+      this.thumbActive++;
+      this.startThumbDownload(fileId);
+    }
+  }
+
+  // 队列是先进先出，但滑动之后排在前面的都是已经划走的旧图。把当前可见
+  // 范围内的排到队头 —— 否则用户盯着的位置要等前面几十张下完才轮到。
+  private prioritiseVisibleThumbs(): void {
+    if (this.thumbQueue.length < 2) {
+      return;
+    }
+    const visible: number[] = [];
+    const rest: number[] = [];
+    for (const fileId of this.thumbQueue) {
+      const messageId = this.fileToMsg.get(fileId) ?? 0;
+      if (messageId !== 0 && this.inMediaWindow(messageId)) {
+        visible.push(fileId);
+      } else {
+        rest.push(fileId);
+      }
+    }
+    this.thumbQueue = visible.concat(rest);
+  }
+
+  private startThumbDownload(fileId: number): void {
     this.setThumbnailFailed(fileId, false);
     const attempt = (this.thumbAttempts.get(fileId) ?? 0) + 1;
     this.thumbAttempts.set(fileId, attempt);
     const req: TdRequest = { '@type': 'downloadFile' };
     req['file_id'] = fileId;
     req['priority'] = THUMBNAIL_PRIORITY;
-    this.client.send(req).then((f: TdObject) => this.applyFile(f)).catch((err: TdError) => {
+    const settle = (): void => {
+      this.thumbActive--;
+      this.thumbQueued.delete(fileId);
+      this.pumpThumbs();
+    };
+    this.client.send(req).then((f: TdObject) => {
+      this.applyFile(f);
+      settle();
+    }).catch((err: TdError) => {
       console.error(`MessageStore photo ${fileId} (attempt ${attempt}): ${err.message}`);
+      settle();
       if (attempt <= 2) {
         setTimeout(() => this.downloadThumb(fileId), 1000 * attempt);
       } else {
@@ -2469,6 +2527,75 @@ export class MessageStore {
     this.sendContent(content, 'sendCustomEmoji');
   }
 
+  // 媒体自动下载的可见窗口，由 ChatPage 的 onScrollIndex 推进（消息 id 区间）。
+  // 0/0 表示"还没有视口信息"，此时只允许缩略图，不碰整段媒体 —— 进频道那一
+  // 刻整页 30 条的动图/语音一起抢带宽，就是列表卡死的原因。
+  private mediaWindowFrom: number = 0;
+  private mediaWindowTo: number = 0;
+  // 聊天开着时实时到达的消息 id。见 onNewMessage。
+  private liveArrivals: Set<number> = new Set();
+  // 用户显式点过下载的文件：不受可见窗口约束，滑走也继续。
+  // 豁免可见窗口自动取消的文件。会被 releaseVideoPlayback 摘掉 —— 只加不删
+  // 的话，点开看过一次的视频就永远取消不掉了。
+  private userRequestedFiles: Set<number> = new Set();
+  // 已进 TDLib 下载管理器（addFileToDownloads）的文件。用户明确要留下来的，
+  // 本地不去取消它们。
+  private managedFiles: Set<number> = new Set();
+
+  setMediaWindow(fromId: number, toId: number): void {
+    if (this.mediaWindowFrom === fromId && this.mediaWindowTo === toId) {
+      return;
+    }
+    this.mediaWindowFrom = fromId;
+    this.mediaWindowTo = toId;
+    this.cancelMediaOutsideWindow();
+    this.prioritiseVisibleThumbs();
+    this.requestPhotos();
+  }
+
+  private inMediaWindow(id: number): boolean {
+    // 实时到达的消息一律放行 —— 判据是"怎么来的"，不是"在不在视口"：
+    // 翻历史整页涌入才需要窗口约束，新来的一条不该等滚动事件。
+    if (this.liveArrivals.has(id)) {
+      return true;
+    }
+    if (this.mediaWindowFrom === 0 && this.mediaWindowTo === 0) {
+      return false; // 视口未知且非实时到达：不预取整段媒体
+    }
+    return id >= this.mediaWindowFrom && id <= this.mediaWindowTo;
+  }
+
+  // 划走即停。TDLib 的 downloadFile 是有状态的后台任务，不主动取消就会把
+  // 整个可见区之外的视频也拉完 —— 用户看到的"下载不会停"。
+  private cancelMediaOutsideWindow(): void {
+    const stale: number[] = [];
+    this.videoFileToMsg.forEach((messageId: number, fileId: number): void => {
+      if (!this.inMediaWindow(messageId)) {
+        stale.push(fileId);
+      }
+    });
+    for (const fileId of stale) {
+      const messageId = this.videoFileToMsg.get(fileId) ?? 0;
+      const idx = this.indexOf(messageId);
+      // 已下完的不动；用户手动点过的也不动。
+      if (idx >= 0 && this.messages[idx].videoPath !== '') {
+        continue;
+      }
+      if (this.userRequestedFiles.has(fileId) || this.liveArrivals.has(messageId)) {
+        continue;
+      }
+      this.videoFileToMsg.delete(fileId);
+      const req: TdRequest = { '@type': 'cancelDownloadFile' };
+      req['file_id'] = fileId;
+      req['only_if_pending'] = false;
+      this.client.send(req).catch((): void => { /* 取消失败无副作用 */ });
+      this.patchVideoEntries(fileId, (c: MessageEntry): void => {
+        c.mediaDownloadActive = false;
+        c.videoProgress = 0;
+      });
+    }
+  }
+
   private requestPhotos(): void {
     this.resolveCustomEmojis();
     this.resolveContactAvatars();
@@ -2495,12 +2622,17 @@ export class MessageStore {
         }
       }
       // Voice notes are small — download eagerly so tapping plays instantly.
-      if (e.contentType === 'voice' && e.videoFileId !== 0 && e.videoPath === '') {
+      // 以下都是"整段媒体"，一律受可见窗口约束：进频道时整页一起下载正是
+      // 列表卡死的来源。缩略图不在此列（小、且是列表要画的东西）。
+      // 语音也要过策略：用户在移动网络关掉了「文件与音乐」就不该下。
+      if (e.contentType === 'voice' && e.videoFileId !== 0 && e.videoPath === '' &&
+        this.inMediaWindow(e.id) && shouldAutoDownload('audio', e.videoFileSize)) {
         this.requestVideoDownload(e.id); // deduped via videoFileToMsg
       }
       // Telegram GIFs are compact muted MP4 loops. Download them eagerly only
       // while inline autoplay is enabled; normal videos remain tap-to-play.
       if (e.isAnimation && e.videoFileId !== 0 && e.videoPath === '' &&
+        this.inMediaWindow(e.id) &&
         powerFeatureEnabled(KEY_POWER_AUTOPLAY_GIF) && !reduceAnimations() &&
         shouldAutoDownload('animation', e.videoFileSize)) {
         this.requestVideoDownload(e.id);
@@ -2716,6 +2848,52 @@ export class MessageStore {
   // download manager (addFileToDownloads) so the search page's 下载 tab can
   // list it with live progress; auto-downloads (voice prefetch) stay silent.
   requestVideoDownload(messageId: number, register: boolean = false, forceRetry: boolean = false): void {
+    this.startVideoDownload(messageId, register, register, forceRetry);
+  }
+
+  // 为"现在看"而下载。豁免可见窗口的自动取消（用户正盯着它），但**不**进
+  // TDLib 的下载管理器：addFileToDownloads 是持久注册，按设计跨页面、跨应用
+  // 重启继续跑，进去了就只能靠 removeFileFromDownloads 摘出来。用它来支撑
+  // 播放，等于用户关掉播放器回到列表后视频还在偷偷下 —— 正是实测到的现象。
+  requestVideoForPlayback(messageId: number, forceRetry: boolean = false): void {
+    this.startVideoDownload(messageId, false, true, forceRetry);
+  }
+
+  // 播放结束（关播放器 / 划走）：解除豁免，没下完的就地取消。
+  // 已经下完的不动（本地文件留着有用），进过下载管理器的也不动 —— 那是用户
+  // 明确要留的东西，不该被"看完了"顺手取消掉。
+  releaseVideoPlayback(messageId: number): void {
+    const idx = this.indexOf(messageId);
+    if (idx < 0) {
+      return;
+    }
+    const e = this.messages[idx];
+    const fileId = e.videoFileId;
+    if (fileId === 0 || !this.userRequestedFiles.has(fileId)) {
+      return;
+    }
+    this.userRequestedFiles.delete(fileId);
+    if (e.videoPath !== '' || this.managedFiles.has(fileId)) {
+      return;
+    }
+    this.videoFileToMsg.delete(fileId);
+    const req: TdRequest = { '@type': 'cancelDownloadFile' };
+    req['file_id'] = fileId;
+    req['only_if_pending'] = false;
+    this.client.send(req).catch((): void => { /* 取消失败无副作用 */ });
+    this.patchVideoEntries(fileId, (c: MessageEntry): void => {
+      c.mediaDownloadActive = false;
+      c.videoProgress = 0;
+    });
+  }
+
+  // manage：进 TDLib 的下载管理器（用户要"留下"这个文件）。
+  // exempt：豁免可见窗口的自动取消（用户此刻正在用这个文件）。
+  // 两者过去被同一个 register 布尔绑在一起，于是"点开看一眼"也拿到了永久的
+  // 下载注册 + 永久的取消豁免。
+  private startVideoDownload(
+    messageId: number, manage: boolean, exempt: boolean, forceRetry: boolean
+  ): void {
     const idx = this.indexOf(messageId);
     if (idx < 0) {
       return;
@@ -2734,10 +2912,25 @@ export class MessageStore {
     if (forceRetry && e.videoFileId !== 0) {
       this.videoFileToMsg.delete(e.videoFileId);
     }
-    if (e.videoFileId === 0 || e.videoPath !== '' || this.videoFileToMsg.has(e.videoFileId)) {
+    if (e.videoFileId === 0 || e.videoPath !== '') {
+      return;
+    }
+    // 已经在下了（自动预取，或另一处先触发了）。意图仍然要记下来：不记的话
+    // 关播放器时 releaseVideoPlayback 找不到该取消谁，视频就一直下下去。
+    // manage 是例外 —— 光记标记不等于真进了下载管理器，得把请求发出去。
+    if (this.videoFileToMsg.has(e.videoFileId) && !manage) {
+      if (exempt) {
+        this.userRequestedFiles.add(e.videoFileId);
+      }
       return;
     }
     this.videoFileToMsg.set(e.videoFileId, messageId);
+    if (exempt) {
+      this.userRequestedFiles.add(e.videoFileId);
+    }
+    if (manage) {
+      this.managedFiles.add(e.videoFileId);
+    }
     this.patchVideoEntries(e.videoFileId, (c: MessageEntry): void => {
       c.videoFailed = false;
       c.mediaDownloadActive = true;
@@ -2745,10 +2938,10 @@ export class MessageStore {
         c.videoProgress = 0;
       }
     });
-    const req: TdRequest = { '@type': register ? 'addFileToDownloads' : 'downloadFile' };
+    const req: TdRequest = { '@type': manage ? 'addFileToDownloads' : 'downloadFile' };
     req['file_id'] = e.videoFileId;
-    req['priority'] = register ? MEDIA_USER_PRIORITY : MEDIA_PREFETCH_PRIORITY;
-    if (register) {
+    req['priority'] = manage ? MEDIA_USER_PRIORITY : MEDIA_PREFETCH_PRIORITY;
+    if (manage) {
       req['chat_id'] = this.chatId;
       req['message_id'] = messageId;
     }

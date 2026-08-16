@@ -705,6 +705,77 @@ export default function messageStoreTest() {
       expect(registeredAfterTap).assertTrue();
       expect(store.getMessages()[1].mediaDownloadActive).assertTrue();
     });
+    // 播放用的下载必须能停。曾经点开看一眼就等于永久注册进 TDLib 的下载管理
+    // 器 + 永久豁免可见窗口取消，回到列表页视频还在后台跑。
+    it('playback_download_is_cancelled_when_playback_is_released', 0, () => {
+      const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
+      store.open();
+      pushNewMessage(b, videoMessage(200, 5, 960, 961));
+      store.requestVideoForPlayback(200);
+
+      // 为播放而下 => downloadFile，不进下载管理器
+      const managed: boolean = b.sent.some((json: string): boolean => {
+        const request = JSON.parse(json) as TdObject;
+        return request['@type'] === 'addFileToDownloads' && request['file_id'] === 960;
+      });
+      expect(managed).assertFalse();
+      const started: boolean = b.sent.some((json: string): boolean => {
+        const request = JSON.parse(json) as TdObject;
+        return request['@type'] === 'downloadFile' && request['file_id'] === 960;
+      });
+      expect(started).assertTrue();
+      expect(store.getMessages()[0].mediaDownloadActive).assertTrue();
+
+      store.releaseVideoPlayback(200);
+      const cancelled: boolean = b.sent.some((json: string): boolean => {
+        const request = JSON.parse(json) as TdObject;
+        return request['@type'] === 'cancelDownloadFile' && request['file_id'] === 960;
+      });
+      expect(cancelled).assertTrue();
+      expect(store.getMessages()[0].mediaDownloadActive).assertFalse();
+      expect(store.getMessages()[0].videoProgress).assertEqual(0);
+    });
+    // 反过来：用户明确"保存/下载"的文件进了下载管理器，看完了不该顺手取消。
+    it('managed_download_survives_playback_release', 0, () => {
+      const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
+      store.open();
+      pushNewMessage(b, videoMessage(201, 5, 970, 971));
+      store.requestVideoDownload(201, true);
+      store.releaseVideoPlayback(201);
+      const cancelled: boolean = b.sent.some((json: string): boolean => {
+        const request = JSON.parse(json) as TdObject;
+        return request['@type'] === 'cancelDownloadFile' && request['file_id'] === 970;
+      });
+      expect(cancelled).assertFalse();
+      expect(store.getMessages()[0].mediaDownloadActive).assertTrue();
+    });
+    // 已经下完的不该被"看完了"清掉本地路径。
+    it('completed_download_is_untouched_by_playback_release', 0, () => {
+      const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
+      store.open();
+      pushNewMessage(b, videoMessage(202, 5, 980, 981));
+      store.requestVideoForPlayback(202);
+      const local: TdObject = { '@type': 'localFile' };
+      local['is_downloading_completed'] = true;
+      local['path'] = '/data/done.mp4';
+      local['downloaded_size'] = 1000;
+      const file: TdObject = { '@type': 'file' };
+      file['id'] = 980;
+      file['size'] = 1000;
+      file['local'] = local;
+      const update: TdObject = { '@type': 'updateFile' };
+      update['file'] = file;
+      b.onReceive(JSON.stringify(update));
+      expect(store.getMessages()[0].videoPath).assertEqual('/data/done.mp4');
+
+      store.releaseVideoPlayback(202);
+      const cancelled: boolean = b.sent.some((json: string): boolean => {
+        const request = JSON.parse(json) as TdObject;
+        return request['@type'] === 'cancelDownloadFile' && request['file_id'] === 980;
+      });
+      expect(cancelled).assertFalse();
+      expect(store.getMessages()[0].videoPath).assertEqual('/data/done.mp4');
+    });
     it('poll_vote_is_deduplicated_and_update_poll_refreshes_results', 0, async () => {
       const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
       store.open();

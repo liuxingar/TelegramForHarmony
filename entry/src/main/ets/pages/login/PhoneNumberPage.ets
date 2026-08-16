@@ -1,5 +1,5 @@
 import {
-  canReturnToPreviousTdAccount, getAuthService, returnToPreviousTdAccount
+  canReturnToPreviousTdAccount, getAuthService, returnToPreviousTdAccount, waitForConnection
 } from '../../tdkit/Globals';
 import { TdError } from '../../tdkit/TdTypes';
 import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY } from '../../util/theme';
@@ -13,10 +13,13 @@ import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 @Preview
 @Component
 export struct PhoneNumberPage {
-  @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
+  @StorageProp(LANGUAGE_EPOCH) @Watch('onLanguageChanged') langEpoch: number = 0;
   @State phoneDigits: string = '';
   @State errorText: string = '';
   @State busy: boolean = false;
+  // 请求已排队、正在等 TDLib 把连接建起来。按钮上要有反馈，否则这几秒看起来
+  // 像点了没反应。
+  @State connecting: boolean = false;
   @State pickerOpen: boolean = false;
   @State pickerReady: boolean = false;
   @State countrySearch: string = '';
@@ -30,15 +33,36 @@ export struct PhoneNumberPage {
   };
 
   aboutToAppear(): void {
+    this.reloadCountries();
+  }
+
+  // 国家名两条来源都跟当前语言走：str() 的兜底表和 TDLib 的 getCountries。
+  // 语言一变整张表都得重取 —— countries/selectedCountry 是构造时求值的
+  // @State，不重取就会停在旧语言上。
+  private onLanguageChanged(): void {
+    this.countries = fallbackCountries();
+    this.adoptSelection();
+    this.reloadCountries();
+  }
+
+  private reloadCountries(): void {
     loadCountries().then((countries: CountryOption[]): void => {
       this.countries = countries;
-      const china = countries.find(
-        (item: CountryOption): boolean => item.iso2 === 'CN' && item.callingCode === '86'
-      );
-      if (china !== undefined && this.phoneDigits === '') {
-        this.selectedCountry = china;
-      }
+      this.adoptSelection();
     });
+  }
+
+  // 选中项按 iso2+区号 认，在新列表里换成同一条的新语言版本。用户手选过的
+  // 国家因此不会被重取悄悄改掉。
+  private adoptSelection(): void {
+    const iso2: string = this.selectedCountry.iso2;
+    const callingCode: string = this.selectedCountry.callingCode;
+    const match = this.countries.find(
+      (item: CountryOption): boolean => item.iso2 === iso2 && item.callingCode === callingCode
+    );
+    if (match !== undefined) {
+      this.selectedCountry = match;
+    }
   }
 
   private onPhoneChange(value: string): void {
@@ -53,26 +77,41 @@ export struct PhoneNumberPage {
       this.errorText = str('lg_invalid_phone');
       return;
     }
-    this.busy = true;
-    this.errorText = '';
     const fullPhone = `+${this.selectedCountry.callingCode}${this.phoneDigits}`;
-    getAuthService().submitPhone(fullPhone).catch((caught: TdError): void => {
-      this.errorText = caught.message;
-    }).finally((): void => {
-      this.busy = false;
-    });
+    this.runWhenConnected((): Promise<void> => getAuthService().submitPhone(fullPhone));
   }
 
   // 状态流转到 WaitQrCode 后 Index 会切到扫码页，这里只需负责发起请求。
   private startQrLogin(): void {
+    this.runWhenConnected((): Promise<void> => getAuthService().requestQrLogin());
+  }
+
+  // 两个登录入口共用：先等连接建起来再发请求。冷启动时 TDLib 的 DC 握手还没
+  // 完成，这时候发出去的请求只会挂到 15 秒超时然后报错；用户摸索出的"先选一
+  // 下区域再点就好"，其实就是选区域那几秒把握手等过去了。
+  private runWhenConnected(action: () => Promise<void>): void {
     if (this.busy) { return; }
     this.busy = true;
+    this.connecting = true;
     this.errorText = '';
-    getAuthService().requestQrLogin().catch((caught: TdError): void => {
+    waitForConnection().then((connected: boolean): Promise<void> => {
+      this.connecting = false;
+      if (!connected) {
+        // 等不到就照发：让 TDLib 给出真实原因，而不是我们编一个。
+        console.warn('PhoneNumberPage: sending login request without a ready connection');
+      }
+      return action();
+    }).catch((caught: TdError): void => {
       this.errorText = caught.message;
     }).finally((): void => {
       this.busy = false;
+      this.connecting = false;
     });
+  }
+
+  private continueLabel(): ResourceStr {
+    if (this.connecting) { return $r('app.string.proxy_state_connecting'); }
+    return this.busy ? $r('app.string.lg_sending_code') : $r('app.string.lg_continue');
   }
 
   private selectCountry(country: CountryOption): void {
@@ -151,7 +190,10 @@ export struct PhoneNumberPage {
               .onClick((): void => this.selectCountry(country));
             }
           },
-          (country: CountryOption): string => `${country.iso2}_${country.callingCode}`
+          // 键里带上国名：ForEach 对键没变的项直接复用旧节点，切了语言
+          // 名字不会更新。
+          (country: CountryOption): string =>
+            `${country.iso2}_${country.callingCode}_${country.name}`
         );
       }
       .layoutWeight(1)
@@ -227,7 +269,7 @@ export struct PhoneNumberPage {
             .padding({ left: 4, right: 4 });
         }
 
-        Button(this.busy ? $r('app.string.lg_sending_code') : $r('app.string.lg_continue'))
+        Button(this.continueLabel())
           .width('100%').height(50)
           .fontSize(16).fontWeight(FontWeight.Medium)
           .backgroundColor(COLOR_PRIMARY)

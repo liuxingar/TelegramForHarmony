@@ -175,22 +175,8 @@ export class AlbumGroupDataSource implements IDataSourcePrefetching {
   }
 
   update(next: AlbumGroup[]): DataSourceUpdateKind {
-    const kind = this.updateInner(next);
-    // Diagnostic. The message list scrambles after a background/foreground
-    // round trip and the notifications this emits are the prime suspect, but
-    // nothing so far has shown WHICH one is wrong. Temporary.
-    console.info(`[DS] kind=${kind} prevLen=${this.lastPrevLen} nextLen=${next.length}` +
-      ` p=${this.lastP} s=${this.lastS} oldMid=${this.lastOldMid} newMid=${this.lastNewMid}` +
-      ` ops=${this.lastOps}`);
-    return kind;
+    return this.updateInner(next);
   }
-
-  private lastPrevLen: number = 0;
-  private lastP: number = 0;
-  private lastS: number = 0;
-  private lastOldMid: number = 0;
-  private lastNewMid: number = 0;
-  private lastOps: string = '';
 
   private updateInner(next: AlbumGroup[]): DataSourceUpdateKind {
     // Authoritative on its own: this looks at ONE snapshot, so a hit here means
@@ -211,8 +197,6 @@ export class AlbumGroupDataSource implements IDataSourcePrefetching {
       }
     }
     const prev = this.groups;
-    this.lastPrevLen = prev.length;
-    this.lastOps = '';
     this.groups = next;
     const minLen = Math.min(prev.length, next.length);
     let p = 0;
@@ -225,10 +209,6 @@ export class AlbumGroupDataSource implements IDataSourcePrefetching {
     }
     const oldMid = prev.length - p - s;
     const newMid = next.length - p - s;
-    this.lastP = p;
-    this.lastS = s;
-    this.lastOldMid = oldMid;
-    this.lastNewMid = newMid;
     if (oldMid === 0 && newMid === 0) {
       return 'none'; // keys identical — nothing to tell the list
     }
@@ -370,10 +350,6 @@ export class AlbumGroupDataSource implements IDataSourcePrefetching {
   }
 
   private notify(ops: DataOperation[]): void {
-    // Append, not replace: one update() can now emit two notifications (ADD then
-    // CHANGE) and recording only the last one hid the ADD from the log.
-    const batch = ops.map((o: DataOperation): string => `${o.type}`).join(',');
-    this.lastOps = this.lastOps === '' ? batch : `${this.lastOps} | ${batch}`;
     // Keep the diagnostic key table in step with what the framework is being
     // told, so its duplicate reports mean what they say.
     for (const op of ops) {

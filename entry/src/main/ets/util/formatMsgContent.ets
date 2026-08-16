@@ -350,6 +350,8 @@ function largestPhotoSize(photo: TdObject | undefined): PhotoSize {
 // Physical pixels the in-bubble photo has to cover. Set once from the real
 // window width; the default is a sane phone value for tests and early calls.
 let inlineTargetPx: number = 800;
+// 与 mediaBox.MEDIA_MAX_HEIGHT_RATIO 对应：气泡里的媒体框最高是最宽的 1.2 倍。
+const MEDIA_HEIGHT_RATIO: number = 1.2;
 
 export function setInlinePhotoTargetPx(px: number): void {
   if (px > 0) {
@@ -373,9 +375,19 @@ function inlinePhotoSize(photo: TdObject | undefined): PhotoSize {
   if (sizes === undefined || sizes.length === 0) {
     return { fileId: 0, width: 0, height: 0 };
   }
+  // 比的是"这一档能不能盖住气泡里的框"，而框的宽度是固定的（MEDIA_MAX_WIDTH），
+  // 所以只看宽度看似合理 —— 但竖图的宽度天生就小：720×1280 的最大档宽度才
+  // 720，够不到目标，于是每次都回落到 sizes 的最后一档。实测就是拿 720×1280
+  // 解到 319×566，单张 30–100ms，滑动时全砸在解码线程上。
+  //
+  // 竖图真正决定解码量的是高度：按长边比，竖图会正确选中中间那档。
   let idx = sizes.length - 1;
   for (let i = 0; i < sizes.length; i++) {
-    if (((sizes[i]['width'] as number | undefined) ?? 0) >= inlineTargetPx) {
+    const w = (sizes[i]['width'] as number | undefined) ?? 0;
+    const h = (sizes[i]['height'] as number | undefined) ?? 0;
+    // 竖图用高度衡量（框高约为宽的 1.2 倍，见 mediaBox 的 MEDIA_MAX_HEIGHT_RATIO）。
+    const reach = h > w ? h / MEDIA_HEIGHT_RATIO : w;
+    if (reach >= inlineTargetPx) {
       idx = i;
       break;
     }

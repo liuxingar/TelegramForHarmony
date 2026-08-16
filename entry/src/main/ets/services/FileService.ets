@@ -13,6 +13,9 @@ export class FileService {
   private fileToChats: Map<number, Set<number>> = new Map();
   private requested: Set<number> = new Set();
   private completedPaths: Map<number, string> = new Map();
+  // updateFile 是全局的（视频、图片、文档都会来），只有这里认领过的 file id
+  // 才记路径 —— 否则 completedPaths 会把整个会话的媒体全存进来。
+  private avatarFiles: Set<number> = new Set();
 
   constructor(client: TdClient, store: ChatStore) {
     this.client = client;
@@ -20,10 +23,27 @@ export class FileService {
     client.onUpdate('updateFile', (u: TdObject) => this.onFile(u));
   }
 
+  // 头像文件的本地路径（''=还没下完）。按 file id 直接取，不经会话条目 ——
+  // 群消息通知要的是发信人头像，而发信人未必有对应的私聊会话。
+  avatarPathOf(fileId: number): string {
+    return this.completedPaths.get(fileId) ?? '';
+  }
+
+  // 只下载、不绑定任何会话条目。下完后 avatarPathOf 就能取到。
+  prefetchAvatar(fileId: number): void {
+    if (fileId === 0 || this.completedPaths.has(fileId) || this.requested.has(fileId)) {
+      return;
+    }
+    this.avatarFiles.add(fileId);
+    this.requested.add(fileId);
+    this.download(fileId);
+  }
+
   requestAvatar(chatId: number, fileId: number): void {
     if (fileId === 0) {
       return;
     }
+    this.avatarFiles.add(fileId);
     let chatIds = this.fileToChats.get(fileId);
     if (chatIds === undefined) {
       chatIds = new Set<number>();
@@ -41,6 +61,10 @@ export class FileService {
       return;
     }
     this.requested.add(fileId);
+    this.download(fileId);
+  }
+
+  private download(fileId: number): void {
     const req: TdRequest = { '@type': 'downloadFile' };
     req['file_id'] = fileId;
     req['priority'] = AVATAR_PRIORITY;
@@ -69,9 +93,8 @@ export class FileService {
     if (id === undefined) {
       return;
     }
-    const chatIds = this.fileToChats.get(id);
-    if (chatIds === undefined) {
-      return;
+    if (!this.avatarFiles.has(id)) {
+      return; // 不是我们认领的头像文件（updateFile 是全局的）
     }
     const local = file['local'] as TdObject | undefined;
     if (local === undefined) {
@@ -79,14 +102,21 @@ export class FileService {
     }
     const done = (local['is_downloading_completed'] as boolean | undefined) ?? false;
     const path = (local['path'] as string | undefined) ?? '';
-    if (done && path !== '') {
-      this.completedPaths.set(id, path);
-      this.requested.delete(id);
-      for (const chatId of chatIds) {
-        // Ignore a late completion from the chat's previous photo.
-        if (this.store.photoFileIdOf(chatId) === id) {
-          this.store.setAvatarPath(chatId, path);
-        }
+    if (!done || path === '') {
+      return;
+    }
+    // 路径先记下来：prefetchAvatar 拉的头像没有绑定会话，下面的循环走不到，
+    // 但 avatarPathOf 得能取到它。
+    this.completedPaths.set(id, path);
+    this.requested.delete(id);
+    const chatIds = this.fileToChats.get(id);
+    if (chatIds === undefined) {
+      return;
+    }
+    for (const chatId of chatIds) {
+      // Ignore a late completion from the chat's previous photo.
+      if (this.store.photoFileIdOf(chatId) === id) {
+        this.store.setAvatarPath(chatId, path);
       }
     }
   }

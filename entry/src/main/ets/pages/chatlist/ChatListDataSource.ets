@@ -93,7 +93,6 @@ export class ChatListDataSource implements IDataSource {
   }
 
   private notify(ops: DataOperation[]): void {
-    console.info(`[CL] ops=${ops.map((o: DataOperation): string => `${o.type}`).join(',')}`);
     // This list only ever emits RELOAD or CHANGE; CHANGE keeps the row's
     // identity, so only RELOAD invalidates the diagnostic key table.
     for (const op of ops) {

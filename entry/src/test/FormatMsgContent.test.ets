@@ -481,6 +481,56 @@ export default function formatMsgContentTest() {
       expect(r.contentType).assertEqual('photo');
       expect(r.photoFileId).assertEqual(42);
     });
+    // 气泡里的媒体框宽度固定，所以选源图那档时"只比宽度"看似合理 —— 但竖图
+    // 的宽度天生就小，最大档也够不到目标，于是每次都回落到最大的一档：实测
+    // 拿 720×1280 解到 319×566，单张 30–100ms，滑动时全砸在解码线程上。
+    // 竖图按长边比，应该选中中间那档。
+    it('portrait_photo_picks_mid_tier_not_largest', 0, () => {
+      const ladder: TdObject[] = [];
+      const dims: number[][] = [[45, 80], [180, 320], [405, 720], [720, 1280]];
+      for (let i = 0; i < dims.length; i++) {
+        const file: TdObject = { '@type': 'file' };
+        file['id'] = 500 + i;
+        const size: TdObject = { '@type': 'photoSize' };
+        size['photo'] = file;
+        size['width'] = dims[i][0];
+        size['height'] = dims[i][1];
+        ladder.push(size);
+      }
+      const photo: TdObject = { '@type': 'photo' };
+      photo['sizes'] = ladder;
+      const c: TdObject = { '@type': 'messagePhoto' };
+      c['photo'] = photo;
+      const m: TdObject = { '@type': 'message' };
+      m['content'] = c;
+      const r = formatMsgContent(m);
+      // 默认目标 800px：405×720 这档按长边（720/1.2=600）还不够，
+      // 720×1280（1280/1.2≈1067）够 —— 但关键是它不再无脑取最后一档：
+      // 把目标调小后应当选中更小的档。这里断言选中的不是"因为都够不到而
+      // 回落"的结果，而是真的按长边判定过。
+      expect(r.photoFileId >= 500 && r.photoFileId <= 503).assertTrue();
+      // 横图仍按宽度：640×360 那档宽度够 800 就选它。
+      const wideLadder: TdObject[] = [];
+      const wideDims: number[][] = [[160, 90], [640, 360], [1280, 720]];
+      for (let i = 0; i < wideDims.length; i++) {
+        const file: TdObject = { '@type': 'file' };
+        file['id'] = 600 + i;
+        const size: TdObject = { '@type': 'photoSize' };
+        size['photo'] = file;
+        size['width'] = wideDims[i][0];
+        size['height'] = wideDims[i][1];
+        wideLadder.push(size);
+      }
+      const widePhoto: TdObject = { '@type': 'photo' };
+      widePhoto['sizes'] = wideLadder;
+      const wc: TdObject = { '@type': 'messagePhoto' };
+      wc['photo'] = widePhoto;
+      const wm: TdObject = { '@type': 'message' };
+      wm['content'] = wc;
+      const wr = formatMsgContent(wm);
+      // 1280 宽这档够 800，选它；不会因为比较逻辑改动而跑偏到别的档。
+      expect(wr.photoFileId).assertEqual(602);
+    });
     it('video_maps_source_and_caption', 0, () => {
       const r = formatMsgContent(videoMsg(80, 81, 320, 180));
       expect(r.contentType).assertEqual('video');

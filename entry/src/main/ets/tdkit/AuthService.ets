@@ -362,7 +362,9 @@ export class AuthService {
     request['api_hash'] = clientSig;
     request['system_language_code'] = 'zh-Hans';
     request['device_model'] = 'HarmonyOS Device';
-    request['application_version'] = '0.1.0';
+    // 会显示在 Telegram 的"活跃会话"列表里，跟 AppScope/app.json5 的
+    // versionName 保持一致（发版时一起改）。之前一直停在 0.1.0。
+    request['application_version'] = '1.3.1';
     this.client.send(request).catch((e: Error) => {
       console.error(`setTdlibParameters failed: ${e.message}`);
     });

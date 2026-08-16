@@ -12,7 +12,12 @@ import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 interface TabSpec {
   key: string;
-  title: string;
+  // 文件夹名来自服务器（不翻译），只有「全部」是本地文案。它用 ResourceStr：
+  // $r() 由框架在渲染时解析，切语言立刻生效；原来存 str() 出来的普通字符串，
+  // 要重启才更新。
+  title: ResourceStr;
+  // 无障碍文本要的是普通字符串，单独留一份。
+  plainTitle: string;
 }
 
 const TOP_BAR_HEIGHT: number = 56;
@@ -257,15 +262,15 @@ export struct ChatListPage {
   }
 
   private tabs(): TabSpec[] {
-    // 读一次 langEpoch 建立依赖：否则「全部」这个 str() 文本要重启才换语言
-    // （文件夹名来自服务器，本就不翻译）。
-    void this.langEpoch;
     const specs: TabSpec[] = [];
     for (const f of this.folders) {
-      specs.push({ key: `folder:${f.id}`, title: f.title });
+      // 服务器给的文件夹名本就不翻译，两个字段同值。
+      specs.push({ key: `folder:${f.id}`, title: f.title, plainTitle: f.title });
     }
     const position = Math.max(0, Math.min(specs.length, this.mainListPosition));
-    specs.splice(position, 0, { key: 'main', title: str('cl_all') });
+    specs.splice(position, 0, {
+      key: 'main', title: $r('app.string.cl_all'), plainTitle: str('cl_all')
+    });
     return specs;
   }
 
@@ -516,8 +521,8 @@ export struct ChatListPage {
     })
     .accessibilityText(
       (this.unreadMap.get(spec.key) ?? 0) > 0
-        ? str('cl_tab_unread_a11y', spec.title, this.tabBadgeText(spec))
-        : spec.title
+        ? str('cl_tab_unread_a11y', spec.plainTitle, this.tabBadgeText(spec))
+        : spec.plainTitle
     )
     .onClick(() => { this.controller.changeIndex(index); });
   }

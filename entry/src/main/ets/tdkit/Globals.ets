@@ -82,6 +82,7 @@ function createRuntime(slotId: string): void {
   activeTdFilesDirectory = directories.filesDirectory;
   repairTdTempDirectory(directories.filesDirectory);
   client = new TdClient({ init: testNapi.tdInit, send: testNapi.tdSend });
+  trackConnectionState(client);
   auth = new AuthService(client, directories.databaseDirectory, directories.filesDirectory);
   users = new UserStore(client);
   chats = new ChatStore(client, users);
@@ -112,6 +113,7 @@ function createRuntime(slotId: string): void {
   notifications = new NotificationService(
     client, chats, new SystemNotificationPublisher(appBundleName, 'EntryAbility'),
     (): boolean => AppStorage.get<boolean>('appIsForeground') ?? true);
+  notifications.attachSenderSources(users, files);
   notifications.attachCallSession(callSession);
   const fileService = files;
   const chatStore = chats;
@@ -140,6 +142,54 @@ function createRuntime(slotId: string): void {
     }
   });
   client.start();
+}
+
+// --- 连接状态 --------------------------------------------------------------
+//
+// updateConnectionState 是一次性推送，订阅晚了就再也收不到当前值。登录页
+// 挂载的时机恰好在这些更新之间，所以这里在建 client 时就订阅并缓存，页面按
+// 需读取即可（AuthService.onStageChange 的回放思路）。
+
+let connectionState: string = '';
+
+function trackConnectionState(target: TdClient): void {
+  connectionState = '';
+  target.onUpdate('updateConnectionState', (u: TdObject): void => {
+    const state = u['state'] as TdObject | undefined;
+    connectionState = (state?.['@type'] as string | undefined) ?? '';
+  });
+}
+
+export function getConnectionState(): string {
+  return connectionState;
+}
+
+// 连上了才发得出请求。冷启动时 DC 握手要几百毫秒到几秒（走代理更久），这段
+// 时间里发出去的 setAuthenticationPhoneNumber / requestQrCodeAuthentication
+// 只会挂到 TdClient 的 15 秒超时然后报错 —— 用户实测"先去选个区域再点就好"，
+// 选区域真正做的事就是把这段时间等过去。
+//
+// connectionStateUpdating 也算连上了：那是在拉更新，请求照发不误。
+export function waitForConnection(timeoutMs: number = 20000): Promise<boolean> {
+  if (connectionState === 'connectionStateReady' || connectionState === 'connectionStateUpdating') {
+    return Promise.resolve(true);
+  }
+  return new Promise<boolean>((resolve: (ok: boolean) => void): void => {
+    const startedAt: number = Date.now();
+    const tick = (): void => {
+      if (connectionState === 'connectionStateReady' ||
+        connectionState === 'connectionStateUpdating') {
+        resolve(true);
+        return;
+      }
+      if (Date.now() - startedAt >= timeoutMs) {
+        resolve(false); // 等不到也放行：宁可让 TDLib 自己报错，也别把用户卡死
+        return;
+      }
+      setTimeout(tick, 200);
+    };
+    setTimeout(tick, 200);
+  });
 }
 
 // device token 是按账号注册的：切账号或重启后都要对当前账号重新注册一次，

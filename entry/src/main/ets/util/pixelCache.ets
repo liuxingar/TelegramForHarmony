@@ -1,20 +1,23 @@
 import { image } from '@kit.ImageKit';
+import { sendableImage } from '@kit.ImageKit';
+import { taskpool } from '@kit.ArkTS';
+import { decodeSendable } from './pixelDecodeTask';
 
 // Decode local images ourselves instead of handing a file path to Image.
 //
-// Why: a PixelMap allocated from shared memory has to be uploaded to a GPU
-// texture on the RS main thread every time it is first drawn, and that upload
-// is what showed up as stutter while a chat was still loading images. DMA
-// memory is zero-copy — the decoder writes into a buffer the GPU reads
-// directly — so the upload disappears. The system only picks DMA on its own for
-// JPEGs whose source is between 1024 and 8192 px on both axes; chat thumbnails
-// sit just under that, so they always landed on the slow path.
+// Two reasons, both measured on device:
 //
-// Decoding here also lets desiredSize downsample DURING the decode rather than
-// scaling a full-size bitmap afterwards, so an album cell no longer decodes a
-// whole conversation-sized photo to draw it 90vp wide.
+// 1. desiredSize downsamples DURING the decode rather than scaling a full-size
+//    bitmap afterwards, so an album cell no longer decodes a whole
+//    conversation-sized photo to draw it 90vp wide.
+// 2. The decode runs on a TaskPool worker (pixelDecodeTask). This module used
+//    to decode inline, and a device capture showed every CreatePixelMap on the
+//    process's main tid — `await` yields the stack but stays on the thread — so
+//    two or three photos entering the viewport in one frame burned ~40ms of it.
+//    That was the residual jank while scrolling a media-heavy chat.
 //
-// Both wins come from the same call; there is no trade-off to tune.
+// The LRU below also caps how much decoded memory is held at once, which a bare
+// Image(src) cannot do.
 
 export interface PixelRequest {
   path: string;      // local file path, no file:// prefix
@@ -192,6 +195,9 @@ function settle(task: PendingDecode, handle: PixelHandle | undefined): void {
   }
 }
 
+// 这里曾经有一个"滑动中暂停解码"的闸门，实测是反效果：滑快了图片整段不显示，
+// 而同一次抓取里 ProcessJank 一条都没有 —— 掉帧的前提本来就不成立。真正的开销
+// 是解码跑在主线程上，已经由 pixelDecodeTask 挪进 TaskPool 解决。
 function pump(): void {
   while (activeDecodes < MAX_ACTIVE_DECODES && queue.length > 0) {
     // First in, first out. Newest-first looked better during a fling — the
@@ -218,38 +224,19 @@ function pump(): void {
 }
 
 async function decode(req: PixelRequest, key: string): Promise<PixelHandle | undefined> {
-  let source: image.ImageSource | undefined = undefined;
   try {
-    source = image.createImageSource(req.path);
-    const opts: image.DecodingOptions = {};
-    // desiredSize is an exact output size, NOT a bounding box: handing it the
-    // display box squeezes the photo into that shape, because the PixelMap
-    // itself comes out distorted and ImageFit.Cover has nothing left to crop.
-    // Scale the SOURCE dimensions so the result still covers the box at the
-    // original aspect ratio, and let Cover do the cropping as before.
-    const info = await source.getImageInfo();
-    const srcW = info.size.width;
-    const srcH = info.size.height;
-    if (srcW > 0 && srcH > 0) {
-      const scale = Math.min(1, Math.max(req.width / srcW, req.height / srcH));
-      opts.desiredSize = {
-        width: Math.max(1, Math.round(srcW * scale)),
-        height: Math.max(1, Math.round(srcH * scale))
-      };
-    }
-    // AllocatorType.DMA is the point of this whole module. It can legitimately
-    // fail — SVG only supports shared memory, and the allocator throws rather
-    // than falling back — so a second attempt without the hint keeps those
-    // working instead of leaving a blank bubble.
-    let pixelMap: image.PixelMap | undefined = undefined;
-    try {
-      pixelMap = await source.createPixelMapUsingAllocator(opts, image.AllocatorType.DMA);
-    } catch (dmaError) {
-      pixelMap = await source.createPixelMap(opts);
-    }
-    if (pixelMap === undefined) {
+    // Decoding runs on a TaskPool worker (see pixelDecodeTask): a device capture
+    // showed every CreatePixelMap landing on the main tid, so two or three
+    // photos entering the viewport in one frame spent ~40ms of that frame
+    // decoding — the dropped frames seen while scrolling a media-heavy chat.
+    // `await` alone does not move work off the thread; TaskPool does.
+    const sendablePixelMap = await taskpool.execute(
+      decodeSendable, req.path, req.width, req.height
+    ) as sendableImage.PixelMap | undefined;
+    if (sendablePixelMap === undefined) {
       return undefined;
     }
+    const pixelMap: image.PixelMap = sendableImage.convertToPixelMap(sendablePixelMap);
     const decoded = await pixelMap.getImageInfo();
     // stride, not width: DMA rows are padded to a hardware alignment, and the
     // padding is real memory this budget has to account for.
@@ -267,16 +254,9 @@ async function decode(req: PixelRequest, key: string): Promise<PixelHandle | und
   } catch (e) {
     console.error(`pixelCache decode(${req.path}) failed: ${e}`);
     return undefined;
-  } finally {
-    if (source !== undefined) {
-      try {
-        source.release();
-      } catch (e) {
-        // The PixelMap owns its pixels by now; a failure here is not fatal.
-        console.error(`pixelCache source release failed: ${e}`);
-      }
-    }
   }
+  // No ImageSource to release here any more — it is created and released inside
+  // the TaskPool worker, on the thread that actually used it.
 }
 
 // A component that has put a PixelMap on screen retains it, and releases when

@@ -64,7 +64,8 @@ import {
   KEY_POWER_EFFECT_REACTION, KEY_POWER_EFFECT_REPLY, KEY_POWER_PARTICLES,
   KEY_POWER_SMOOTH_TRANSITIONS, KEY_REDUCE_ANIM, KEY_SEND_BY_ENTER, KEY_TRANSLATE_CHATS,
   powerAnimationDuration,
-  powerFeatureEnabled, powerGroupAnimationDuration, powerGroupFeatureEnabled, autosaveEnabled
+  powerFeatureEnabled, powerGroupAnimationDuration, powerGroupFeatureEnabled, autosaveEnabled,
+  translateOptedOut, setTranslateOptedOut
 } from '../../store/AppSettings';
 import {
   getTranslationService, languageDisplayName, looksLikeTargetLanguage, resolveTranslateTarget,
@@ -304,6 +305,8 @@ struct ChatPage {
   @State chromeVisible: boolean = true;
   @State viewerVideoLandscape: boolean = false;
   @State viewerClosing: boolean = false;
+  // 播放器为播放拉起的下载（见 notePlaybackRequest）。不参与渲染，普通字段。
+  private playbackRequestedIds: number[] = [];
   // GIF playback is page-owned rather than row-owned: LazyForEach replaces a
   // row key as download progress/reactions change, but a user's pause/play
   // choice must survive that replacement.
@@ -377,11 +380,16 @@ struct ChatPage {
   private lastMaxId: number = 0;
   @State atBottom: boolean = true;
   @State isMuted: boolean = false;
-  // 会话级整聊天翻译。chat.is_translatable 是服务端同步的按会话开关（官方
-  // 客户端同款语义），本地的 KEY_TRANSLATE_CHATS 是设置里的总开关——两者都
-  // 开时，可见范围内的消息由 TranslationService 逐条翻译并写回气泡。
+  // 整聊天翻译有两层，菜单里的那一项在两层之间切换含义：
+  //   总开关开着 —— 默认所有会话都翻，菜单是"关掉这个会话"（本地排除名单）。
+  //   总开关关着 —— 默认都不翻，菜单是"只翻这个会话"（服务端 is_translatable，
+  //                 跟官方客户端同一个字段，多端同步）。
+  // 早先只认服务端那个字段，它对没碰过的会话默认 false，结果开了总开关每个群
+  // 还得手动点一次才翻，实际不可用。
   @State isTranslatable: boolean = false;
-  @StorageProp(KEY_TRANSLATE_CHATS) translateChatsEnabled: boolean = false;
+  @State translateChatOptOut: boolean = false;
+  @StorageProp(KEY_TRANSLATE_CHATS) @Watch('onTranslateSettingChanged')
+  translateChatsEnabled: boolean = false;
   // 是否正在共享实时位置（全局单例状态，不限于当前会话）。
   @State liveLocationActive: boolean = false;
   @State liveLocationMessageId: number = 0;
@@ -759,11 +767,6 @@ struct ChatPage {
   }
 
   aboutToAppear(): void {
-    // 首进卡顿打点：tap → aboutToAppear 的间隔是模块加载+路由成本。临时。
-    const tapAt: number = AppStorage.get<number>('chatOpenTapAt') ?? 0;
-    if (tapAt > 0) {
-      console.info(`[Perf] tap->aboutToAppear ${Date.now() - tapAt}ms`);
-    }
     // Before anything can publish a dataset: the data source names the keys of
     // the rows its operations touch, and it has to name them the same way the
     // LazyForEach key generator does.
@@ -776,6 +779,8 @@ struct ChatPage {
     this.topicName = params !== undefined ? ((params['topicName'] as string | undefined) ?? '') : '';
     this.forumTopicId = params !== undefined
       ? ((params['forumTopicId'] as number | undefined) ?? 0) : 0;
+    // 排除名单是本地的，chatId 一确定就能读，不用等 getChat 回来。
+    this.translateChatOptOut = translateOptedOut(this.chatId);
     const incomingJoinNotice: boolean = params !== undefined
       ? ((params['showJoinedNotice'] as boolean | undefined) ?? false) : false;
     if (incomingJoinNotice && this.clientJoinNoticeRouteChatId !== this.chatId) {
@@ -1000,6 +1005,11 @@ struct ChatPage {
         this.closeViewer();
       }
       const updateKind: string = this.publishGroups(groups);
+      // 翻译和媒体窗口原来只挂在 onScrollIndex 上 —— 进页面不滑动就永远不
+      // 触发（用户报的"这个页面不会自动翻译"），新消息到达也一样。数据一变
+      // 就按当前视口驱动一次；curStartIdx/curEndIdx 在首帧前是 -1，此时用
+      // 首屏兜底，滑动事件来了会立刻纠正。
+      this.driveVisibleWork();
       this.musicQueue.settlePending(list);
       // Incremental ops (the normal prepend) keep the viewport anchored via
       // maintainVisibleContentPosition; forcing scrollToIndex on top of that
@@ -1349,12 +1359,6 @@ struct ChatPage {
   }
 
   onPageShow(): void {
-    console.info(`[ChatDiag] show msgs=${this.messages.length} groups=${this.groups.length} ds=${this.groupsData.totalCount()}`);
-    const tapAt: number = AppStorage.get<number>('chatOpenTapAt') ?? 0;
-    if (tapAt > 0) {
-      console.info(`[Perf] tap->show ${Date.now() - tapAt}ms`);
-      AppStorage.setOrCreate('chatOpenTapAt', 0);
-    }
     this.pageVisible = true;
     // The list changed while this page was hidden. See hiddenListDirty: the
     // framework applies hidden-period notifications incompletely, so rebuild
@@ -1377,6 +1381,9 @@ struct ChatPage {
   }
 
   aboutToDisappear(): void {
+    // 退出会话时播放器可能还开着（返回手势不走 closeViewer），为播放拉起的
+    // 下载得在这里也停掉，否则回到列表页它还在后台跑。
+    this.releasePlaybackRequests();
     if (this.cachedCountTimer !== -1) {
       clearTimeout(this.cachedCountTimer);
       this.cachedCountTimer = -1;
@@ -1893,6 +1900,8 @@ struct ChatPage {
       this.forcedAnimationIds = [...this.forcedAnimationIds, messageId];
     }
     if (entry.videoPath === '') {
+      // 内联播放的 GIF 按定义就在可见窗口里，划走了本来就该停 —— 不需要豁免，
+      // 更不该进下载管理器（那是"保存"才有的待遇）。
       this.store?.requestVideoDownload(messageId, false, entry.videoFailed);
     }
   }
@@ -1961,7 +1970,10 @@ struct ChatPage {
       // one yet, finish a normal download first instead of opening a viewer
       // that can only report "无法获取视频大小".
       if (entry.videoPath === '' && entry.videoFileSize <= 0) {
-        this.store?.requestVideoDownload(messageId, true, entry.videoFailed);
+        // 为看而下，不是为留而下：走 requestVideoForPlayback，关掉播放器时
+        // releaseVideoPlayback 才能真的把它停下来。
+        this.store?.requestVideoForPlayback(messageId, entry.videoFailed);
+        this.notePlaybackRequest(messageId);
         promptAction.showToast({ message: $r('app.string.cp_fetching_video'), duration: 1800 });
         return;
       }
@@ -1979,10 +1991,31 @@ struct ChatPage {
   // Zoom/pan state no longer needs resetting here: MediaViewerOverlay owns it
   // and is destroyed with the `viewerMsgId !== 0` branch, so the next open
   // starts from a fresh instance at 1x.
+  // 播放器为了播放而拉起的下载。看完就该停，所以要记住是哪些 —— 浏览器可以
+  // 左右滑动换条目，关闭时不止一条可能还在下。
+  private notePlaybackRequest(messageId: number): void {
+    if (this.playbackRequestedIds.indexOf(messageId) < 0) {
+      this.playbackRequestedIds = [...this.playbackRequestedIds, messageId];
+    }
+  }
+
+  private releasePlaybackRequests(): void {
+    const store = this.store;
+    const ids = this.playbackRequestedIds;
+    this.playbackRequestedIds = [];
+    if (store === null) {
+      return;
+    }
+    for (const id of ids) {
+      store.releaseVideoPlayback(id);
+    }
+  }
+
   private closeViewer(): void {
     if (this.viewerMsgId === 0 || this.viewerClosing) {
       return;
     }
+    this.releasePlaybackRequests();
     this.exitViewerLandscape();
     const duration: number = this.chatEffectDuration(KEY_POWER_EFFECT_BLUR, 260);
     this.viewerClosing = true;
@@ -4057,12 +4090,11 @@ struct ChatPage {
           () => { this.confirmStopLiveLocation(); });
       }
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
-      // 只有设置里的整聊天翻译总开关打开时才露出入口；单条翻译不受影响。
-      if (this.translateChatsEnabled) {
-        this.headerMenuRow('sys.symbol.translate',
-          this.isTranslatable ? str('cp_translate_chat_off') : str('cp_translate_chat_on'), false,
-          () => { this.toggleTranslatable(); });
-      }
+      // 总开关开着时这个会话默认就在翻，所以这一项显示「关闭翻译」；总开关
+      // 关着时它就是"只翻这个会话"的入口。单条消息的翻译不受这里影响。
+      this.headerMenuRow('sys.symbol.translate',
+        this.translationActive() ? str('cp_translate_chat_off') : str('cp_translate_chat_on'),
+        false, () => { this.toggleTranslatable(); });
       this.headerMenuRow('sys.symbol.xmark_circle', str('cp_clear_history'), false, () => { this.confirmClearHistory(); });
       if (this.isGroup && this.membershipState === 'writable') {
         Divider().color($r('app.color.divider')).strokeWidth(0.7);
@@ -5095,10 +5127,25 @@ struct ChatPage {
   // 可见范围（外扩几行缓冲）内还没有当前目标语言译文的消息，交给
   // TranslationService 排队。结果回来经 store.applyTranslation 写入条目，
   // 内容签名变化触发 CHANGE，气泡里长出译文块。
+  // 这个会话此刻到底翻不翻。总开关是"默认值"，会话级那一项是对默认值的反转：
+  // 开着就是排除名单，关着就是白名单。
+  private translationActive(): boolean {
+    return this.translateChatsEnabled ? !this.translateChatOptOut : this.isTranslatable;
+  }
+
+  // 总开关在设置页被改动后，当前页要立刻跟上：开了就把可见范围补翻，
+  // 关了就把已经渲染出来的译文收走（服务的缓存留着，再开秒回）。
+  private onTranslateSettingChanged(): void {
+    if (this.translationActive()) {
+      this.driveVisibleWork();
+    } else {
+      this.store?.clearTranslations();
+    }
+  }
+
   private driveTranslations(startIdx: number, endIdx: number): void {
     const store = this.store;
-    if (!this.translateChatsEnabled || !this.isTranslatable || store === null ||
-      this.groups.length === 0) {
+    if (!this.translationActive() || store === null || this.groups.length === 0) {
       return;
     }
     const lang: string = resolveTranslateTarget();
@@ -5139,27 +5186,76 @@ struct ChatPage {
     this.store?.setTranslationHidden(messageId, hidden);
   }
 
-  private toggleTranslatable(): void {
-    const previous: boolean = this.isTranslatable;
-    const next: boolean = !previous;
-    this.isTranslatable = next;
-    if (!next) {
-      // 关掉时立刻把已渲染的译文收走；服务的缓存保留，再开秒回。
-      this.store?.clearTranslations();
-    } else {
-      this.driveTranslations(Math.max(0, this.curStartIdx), Math.max(0, this.curEndIdx));
+  // 翻译 + 媒体窗口的统一驱动。滑动时由 onScrollIndex 带着真实区间调用，
+  // 数据变化时由这里按"当前视口"调用一次 —— 否则进页面不滑动就什么都不发生。
+  private driveVisibleWork(): void {
+    if (this.groups.length === 0) {
+      return;
     }
+    // 首帧之前还没有滚动事件，curStartIdx/curEndIdx 是 -1：用首屏兜底
+    // （聊天默认停在底部，所以取末尾一屏），滑动事件到了会立刻纠正。
+    const hasViewport: boolean = this.curStartIdx >= 0 && this.curEndIdx >= this.curStartIdx;
+    const start: number = hasViewport ? this.curStartIdx
+      : Math.max(0, this.groups.length - LIST_CACHED_COUNT - 1);
+    const end: number = hasViewport ? this.curEndIdx : this.groups.length - 1;
+    this.driveTranslations(start, end);
+    this.syncMediaWindow(start, end);
+  }
+
+  // 把可见行区间换算成消息 id 区间交给 store。外扩几行做缓冲，滑动时不会
+  // 因为一行之差反复取消又重下。
+  private syncMediaWindow(startIdx: number, endIdx: number): void {
+    const store = this.store;
+    if (store === null || this.groups.length === 0) {
+      return;
+    }
+    const from: number = Math.max(0, startIdx - 3);
+    const to: number = Math.min(this.groups.length - 1, endIdx + 3);
+    if (from > to) {
+      return;
+    }
+    const toGroup: AlbumGroup = this.groups[to];
+    store.setMediaWindow(
+      this.groups[from].head.id,
+      toGroup.memberIds[toGroup.memberIds.length - 1]
+    );
+  }
+
+  // 菜单里那一项永远是"把当前状态反过来"，但落到哪个开关上取决于总开关：
+  // 总开关开着时写本地排除名单（纯本地，不会失败）；总开关关着时才走
+  // 服务端的 toggleChatIsTranslatable，跟官方客户端保持同一份状态。
+  private toggleTranslatable(): void {
+    const next: boolean = !this.translationActive();
+    if (this.translateChatsEnabled) {
+      this.translateChatOptOut = !next;
+      setTranslateOptedOut(this.chatId, !next);
+      this.afterTranslationToggled(next);
+      return;
+    }
+    const previous: boolean = this.isTranslatable;
+    this.isTranslatable = next;
+    this.afterTranslationToggled(next);
     const req: TdRequest = { '@type': 'toggleChatIsTranslatable' };
     req['chat_id'] = this.chatId;
     req['is_translatable'] = next;
-    getTdClient().send(req).then((): void => {
-      promptAction.showToast({
-        message: next ? $r('app.string.cp_auto_translate_enabled') : $r('app.string.cp_auto_translate_disabled'), duration: 1500
-      });
-    }).catch((e: TdError): void => {
+    getTdClient().send(req).catch((e: TdError): void => {
       this.isTranslatable = previous;
       console.error(`ChatPage.toggleTranslatable failed: ${e.message}`);
       promptAction.showToast({ message: str('cp_setting_failed_msg', e.message), duration: 1800 });
+    });
+  }
+
+  private afterTranslationToggled(active: boolean): void {
+    if (active) {
+      this.driveVisibleWork();
+    } else {
+      // 关掉时立刻把已渲染的译文收走；服务的缓存保留，再开秒回。
+      this.store?.clearTranslations();
+    }
+    promptAction.showToast({
+      message: active
+        ? $r('app.string.cp_auto_translate_enabled') : $r('app.string.cp_auto_translate_disabled'),
+      duration: 1500
     });
   }
 
@@ -7713,6 +7809,9 @@ struct ChatPage {
           this.imagePrefetcher.visibleAreaChanged(start, end);
           // 整聊天翻译与图片预取同源驱动：翻到哪儿译到哪儿。
           this.driveTranslations(start, end);
+          // 媒体自动下载的可见窗口：只有窗口内的动图/语音才自动下载，划出去
+          // 的自动取消（见 MessageStore.setMediaWindow）。
+          this.syncMediaWindow(start, end);
           // Prefetch: kick off the previous/next page a few rows before the edge,
           // so scrolling never actually hits an empty top/bottom. loadOlder is
           // one-shot per arm (see maybeLoadOlder) so a fling that stays pinned

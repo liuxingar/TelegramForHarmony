@@ -1,6 +1,8 @@
 import { TdClient } from '../tdkit/TdClient';
 import { TdObject, TdRequest, TdError } from '../tdkit/TdTypes';
 import { ChatStore } from '../store/ChatStore';
+import { UserStore } from '../store/UserStore';
+import { FileService } from './FileService';
 import { CallSession, CallSnapshot } from './CallSession';
 import { formatPreview } from '../util/formatPreview';
 import { systemCallUi } from './SystemCallUi';
@@ -35,6 +37,10 @@ export class NotificationService {
   private chats: ChatStore;
   private publisher: NotificationPublisher;
   private isForeground: () => boolean;
+  // 群/频道消息的发信人头像要经这两个：UserStore 给 file id，FileService 给
+  // 本地路径。可选 —— 测试里不传，退回会话头像。
+  private users: UserStore | null = null;
+  private files: FileService | null = null;
   private unsubs: Array<() => void> = [];
   private unsubCall: (() => void) | null = null;
   private callNoticeShown: boolean = false;
@@ -118,6 +124,13 @@ export class NotificationService {
     this.refreshScopeMute();
   }
 
+  // 群消息通知要显示发信人头像/名字，需要这两个来源。构造函数不带它们是为了
+  // 不动既有测试装配 —— 不挂就是原来的行为（会话头像、无前缀）。
+  attachSenderSources(users: UserStore, files: FileService): void {
+    this.users = users;
+    this.files = files;
+  }
+
   attachCallSession(session: CallSession): void {
     this.unsubCall = session.subscribe((s: CallSnapshot): void => this.onCallSnapshot(s));
   }
@@ -172,11 +185,15 @@ export class NotificationService {
     const title: string = entry !== undefined && entry.title !== '' ? entry.title : str('ns_new_message');
     if (typeName === 'notificationTypeNewMessage') {
       const message = type!['message'] as TdObject | undefined;
-      const text: string = formatPreview(message ?? null);
+      const preview: string = formatPreview(message ?? null);
+      const text: string = preview !== '' ? preview : str('ns_new_message_body');
+      const who: string = message !== undefined ? this.senderPrefix(message, chatId) : '';
       return {
         id: id, groupId: groupId, chatId: chatId,
-        title: title, text: text !== '' ? text : str('ns_new_message_body'), isCall: false,
-        avatarPath: entry !== undefined ? entry.avatarPath : ''
+        title: title, text: who !== '' ? `${who}: ${text}` : text, isCall: false,
+        avatarPath: message !== undefined
+          ? this.senderAvatarPath(message, chatId)
+          : (entry !== undefined ? entry.avatarPath : '')
       };
     }
     if (typeName === 'notificationTypeNewCall') {
@@ -292,15 +309,99 @@ export class NotificationService {
     if (shown.indexOf(noticeId) < 0) {
       this.noticeIdsByChat.set(chatId, [...shown, noticeId]);
     }
+    const preview: string = formatPreview(message);
+    const who: string = this.senderPrefix(message, chatId);
     this.publisher.publish({
       id: noticeId,
       groupId: 0,
       chatId: chatId,
       title: entry !== undefined && entry.title !== '' ? entry.title : str('ns_new_message'),
-      text: formatPreview(message),
+      text: who !== '' ? `${who}: ${preview}` : preview,
       isCall: false,
-      avatarPath: entry !== undefined ? entry.avatarPath : ''
+      avatarPath: this.senderAvatarPath(message, chatId)
     });
+  }
+
+  // 群/频道消息的头像应该是发信人的，不是会话的 —— 官方客户端就是这样，
+  // 一屏全是同一个群头像根本认不出谁在说话。私聊里 chatId 就是对方，两者
+  // 本来就同一张图，不必绕。
+  //
+  // 取不到发信人头像时回退会话头像，并顺手把它拉下来，下一条通知就有了。
+  // 不为它推迟发布：通知的时效性比头像重要。
+  private senderAvatarPath(message: TdObject, chatId: number): string {
+    const entry = this.chats.entryOf(chatId);
+    const chatPath: string = entry !== undefined ? entry.avatarPath : '';
+    const kind: string = entry !== undefined ? entry.kind : 'private';
+    if (kind === 'private' || kind === 'secret') {
+      return chatPath;
+    }
+    const files = this.files;
+    if (files === null) {
+      return chatPath;
+    }
+    const fileId: number = this.senderPhotoFileId(message);
+    if (fileId === 0) {
+      return chatPath;
+    }
+    const path: string = files.avatarPathOf(fileId);
+    if (path !== '') {
+      return path;
+    }
+    files.prefetchAvatar(fileId);
+    return chatPath;
+  }
+
+  private senderPhotoFileId(message: TdObject): number {
+    const sender = message['sender_id'] as TdObject | undefined;
+    if (sender === undefined) {
+      return 0;
+    }
+    const senderType: string = (sender['@type'] as string | undefined) ?? '';
+    if (senderType === 'messageSenderUser') {
+      const userId: number = (sender['user_id'] as number | undefined) ?? 0;
+      const users = this.users;
+      if (userId === 0 || users === null) {
+        return 0;
+      }
+      // TDLib 没推过这个用户时 photoFileId 是 0；ensure 拉一次，下条通知能用。
+      users.ensure(userId);
+      return users.photoFileId(userId);
+    }
+    if (senderType === 'messageSenderChat') {
+      const senderChatId: number = (sender['chat_id'] as number | undefined) ?? 0;
+      return senderChatId !== 0 ? this.chats.photoFileIdOf(senderChatId) : 0;
+    }
+    return 0;
+  }
+
+  // 群里换成发信人头像后，正文得点出是谁 —— 否则只剩一张陌生的脸。
+  // 频道以自己身份发帖（messageSenderChat 且就是本会话）时不加前缀。
+  private senderPrefix(message: TdObject, chatId: number): string {
+    const entry = this.chats.entryOf(chatId);
+    const kind: string = entry !== undefined ? entry.kind : 'private';
+    if (kind === 'private' || kind === 'secret') {
+      return '';
+    }
+    const sender = message['sender_id'] as TdObject | undefined;
+    if (sender === undefined) {
+      return '';
+    }
+    const senderType: string = (sender['@type'] as string | undefined) ?? '';
+    if (senderType === 'messageSenderUser') {
+      const userId: number = (sender['user_id'] as number | undefined) ?? 0;
+      const users = this.users;
+      const name: string = userId !== 0 && users !== null ? users.displayName(userId) : '';
+      return name;
+    }
+    if (senderType === 'messageSenderChat') {
+      const senderChatId: number = (sender['chat_id'] as number | undefined) ?? 0;
+      if (senderChatId === chatId || senderChatId === 0) {
+        return ''; // 频道以自己的身份发帖
+      }
+      const senderEntry = this.chats.entryOf(senderChatId);
+      return senderEntry !== undefined ? senderEntry.title : '';
+    }
+    return '';
   }
 
   private onCallSnapshot(s: CallSnapshot): void {

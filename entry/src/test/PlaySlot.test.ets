@@ -1,6 +1,6 @@
 import { describe, it, expect } from '@ohos/hypium';
 import {
-  pickPlaySlot, slotKey, PlaySlotCandidate,
+  pickPlaySlot, slotKey, slotKeyMessageId, shouldCompete, PlaySlotCandidate,
   PLAY_SLOT_ENTER_RATIO, PLAY_SLOT_KEEP_RATIO
 } from '../main/ets/pages/chat/playSlot';
 
@@ -88,6 +88,50 @@ export default function playSlotTest() {
     it('比例与离视口中心距离都相同时保留先出现者', 0, () => {
       const list: PlaySlotCandidate[] = [cand(1, 0.8, 400), cand(2, 0.8, 600)];
       expect(pickPlaySlot(list, 500, '', '')).assertEqual(slotKey(1, -1));
+    });
+
+    it('slotKeyMessageId 取回消息 id', 0, () => {
+      expect(slotKeyMessageId(slotKey(42, -1))).assertEqual(42);
+      expect(slotKeyMessageId(slotKey(42, 3))).assertEqual(42);
+      expect(slotKeyMessageId('')).assertEqual(0);
+      expect(slotKeyMessageId('nope')).assertEqual(0);
+    });
+
+    // shouldCompete 全矩阵：三个开关 × 是否动图。只有「自动播放开 + 非省电 +
+    // 非减少动效 + 不是动图」这一种组合才允许竞选，其余全部为 false。
+    it('三个开关全部允许且不是动图时才参加竞选', 0, () => {
+      expect(shouldCompete(true, false, false, false)).assertTrue();
+    });
+
+    it('关掉自动播放视频就不竞选', 0, () => {
+      expect(shouldCompete(false, false, false, false)).assertFalse();
+    });
+
+    it('省电模式下不竞选', 0, () => {
+      expect(shouldCompete(true, true, false, false)).assertFalse();
+    });
+
+    it('减少动效下不竞选', 0, () => {
+      expect(shouldCompete(true, false, true, false)).assertFalse();
+    });
+
+    it('动图恒不参加竞选（开关全开也一样）', 0, () => {
+      expect(shouldCompete(true, false, false, true)).assertFalse();
+    });
+
+    it('shouldCompete 全 16 种组合逐一核对', 0, () => {
+      const flags: boolean[] = [false, true];
+      for (const autoplay of flags) {
+        for (const saving of flags) {
+          for (const reduce of flags) {
+            for (const animation of flags) {
+              const want: boolean = autoplay && !saving && !reduce && !animation;
+              const got: boolean = shouldCompete(autoplay, saving, reduce, animation);
+              expect(got).assertEqual(want);
+            }
+          }
+        }
+      }
     });
   });
 }

@@ -25,6 +25,34 @@ export function slotKey(messageId: number, albumIndex: number): string {
   return `${messageId}:${albumIndex}`;
 }
 
+// slotKey 的逆运算：只取消息 id 那一段（相册下标对进度交接没有意义，气泡
+// 进度表 bubblePositionMs 是按 messageId 记的）。解析失败返回 0。
+export function slotKeyMessageId(key: string): number {
+  const at = key.indexOf(':');
+  if (at <= 0) {
+    return 0;
+  }
+  const id = Number.parseInt(key.substring(0, at), 10);
+  return Number.isNaN(id) ? 0 : id;
+}
+
+// 一条媒体是否有资格参加播放位竞选。纯函数，方便把「自动播放视频 / 省电模式 /
+// 减少动效」这三个开关的组合完整单测。
+//
+// 语义等价于 powerFeatureEnabled(KEY_POWER_AUTOPLAY_VIDEO) && !reduceAnimations()
+// （powerFeatureEnabled 内部已经与上 !powerSavingActive()，这里把省电模式显式
+// 拆成一个入参，让判定本身不依赖 AppStorage）。
+//
+// 动图（GIF/动画）永远不参加竞选：它们走整文件下载 + SmartLoopVideo 循环播放，
+// 与流式播放位是两条互斥的链路（见 spec §3.3）。
+export function shouldCompete(autoplayVideoEnabled: boolean, powerSaving: boolean,
+  reduceAnimations: boolean, isAnimation: boolean): boolean {
+  if (isAnimation) {
+    return false;
+  }
+  return autoplayVideoEnabled && !powerSaving && !reduceAnimations;
+}
+
 function find(candidates: PlaySlotCandidate[], key: string): PlaySlotCandidate | null {
   if (key === '') {
     return null;

@@ -1,6 +1,7 @@
 import { preferences } from '@kit.ArkData';
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { batteryInfo, commonEventManager } from '@kit.BasicServicesKit';
+import { CACHE_LIMIT_DEFAULT } from './CacheLimit';
 
 // User settings that outlive the process. Each one is mirrored into AppStorage
 // so any component can bind it with @StorageProp and re-render on change, while
@@ -80,6 +81,10 @@ export const KEY_AUTO_LESS_DATA_CALLS: string = 'autoLessDataCalls';
 export const KEY_AUTOSAVE_PRIVATE: string = 'autosavePrivate';
 export const KEY_AUTOSAVE_GROUP: string = 'autosaveGroup';
 export const KEY_AUTOSAVE_CHANNEL: string = 'autosaveChannel';
+// 缓存上限（字节）。0 = 不限，见 CacheLimit.ets。
+export const KEY_CACHE_LIMIT: string = 'cacheLimit';
+// 自动播放时静音。默认开启 —— 聊天列表里突然出声是最招人烦的行为。
+export const KEY_AUTOPLAY_MUTED: string = 'autoplayMuted';
 export const POWER_THRESHOLD_DEFAULT: number = 10;
 
 export const AUTO_WIFI_VIDEO_LIMIT_DEFAULT: number = 64 * 1024 * 1024;
@@ -327,6 +332,8 @@ export async function initSettings(context: common.Context): Promise<void> {
     for (const item of DATA_NUMBER_DEFAULTS) {
       AppStorage.setOrCreate(item.key, await s.get(item.key, item.value) as number);
     }
+    AppStorage.setOrCreate(KEY_CACHE_LIMIT, await s.get(KEY_CACHE_LIMIT, CACHE_LIMIT_DEFAULT) as number);
+    AppStorage.setOrCreate(KEY_AUTOPLAY_MUTED, await s.get(KEY_AUTOPLAY_MUTED, true) as boolean);
     for (const key of DATA_STRING_KEYS) {
       AppStorage.setOrCreate(key, await s.get(key, '') as string);
     }

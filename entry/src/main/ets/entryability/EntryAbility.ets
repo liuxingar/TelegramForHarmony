@@ -7,7 +7,9 @@ import { installStringsFromContext } from '../util/strings';
 import { refreshLocale } from '../util/intlFormat';
 import { bumpLanguageEpoch } from '../util/appLanguage';
 import { backgroundGraceTask } from '../services/BackgroundGraceTask';
-import { initSettings, refreshPowerSavingState } from '../store/AppSettings';
+import { initSettings, refreshPowerSavingState, KEY_CACHE_LIMIT } from '../store/AppSettings';
+import { CACHE_LIMIT_DEFAULT } from '../store/CacheLimit';
+import { applyCacheLimit } from '../store/StorageApi';
 import { beginNetworkMonitoring, refreshNetworkState } from '../services/NetworkStateService';
 import { updateChecker } from '../services/UpdateChecker';
 import { liveLocation } from '../services/LiveLocationService';
@@ -192,6 +194,10 @@ export default class EntryAbility extends UIAbility {
     backgroundGraceTask.end();
     AppStorage.setOrCreate('appForegroundEpoch', Date.now());
     setTdOnlineState(true);
+    const limit: number = AppStorage.get<number>(KEY_CACHE_LIMIT) ?? CACHE_LIMIT_DEFAULT;
+    applyCacheLimit(limit).catch((e: Error): void => {
+      console.error(`EntryAbility cache trim failed: ${e.message}`);
+    });
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
   }
 

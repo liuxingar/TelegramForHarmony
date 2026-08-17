@@ -262,10 +262,12 @@ export struct MessageBubble {
       this.msg.videoPath !== '' || this.msg.videoFailed || !this.mediaVisible) {
       return;
     }
-    const allowed = this.msg.isAnimation
-      ? (this.autoplayGif && !this.powerSaving && !this.reduceAnim)
-      : (this.autoplayVideo && !this.powerSaving && !this.reduceAnim);
-    if (allowed || (this.msg.isAnimation && this.animationForcePlay)) {
+    // 普通视频：可见不等于要看。整文件下载改由「点开」或二期的播放位触发，
+    // 这里只放行 GIF/动图 —— 它们体积小且要无限循环，仍走整文件路径。
+    if (!this.msg.isAnimation) {
+      return;
+    }
+    if ((this.autoplayGif && !this.powerSaving && !this.reduceAnim) || this.animationForcePlay) {
       this.onAutoplayVideoNeedDownload(this.msg.id);
     }
   }

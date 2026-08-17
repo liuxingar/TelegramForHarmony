@@ -35,6 +35,7 @@ import { formatClockTime } from '../../util/formatTime';
 import { formatFileSize } from '../../util/formatFileSize';
 import { parseFormattedText, RichSegment, RichRun } from '../../util/richText';
 import { packAlbumRows, AlbumCell } from '../../util/packAlbumRows';
+import { probeHit } from '../../util/perfProbe';
 import { linkPreviewPresentation, LinkPreviewPresentation } from '../../util/linkPreview';
 import { reactionKeyFrom } from '../../util/reactions';
 import { COLOR_PRIMARY, COLOR_TEXT_SECONDARY, COLOR_BUBBLE_OUT, COLOR_BUBBLE_IN, COLOR_BUBBLE_TEXT, AVATAR_PALETTE, botButtonBg } from '../../util/theme';
@@ -56,6 +57,11 @@ const LINK_PREVIEW_HEIGHT_RATIO: number = 0.62;
 const QUICK_REACTIONS: string[] = ['❤️', '👍', '👎', '🔥', '🥰', '👏'];
 // Media whose caption can be replaced via editMessageCaption.
 const EDITABLE_CAPTION_TYPES: string[] = ['photo', 'video', 'file', 'audio', 'voice'];
+// Swipe-to-reply: how far (vp) the bubble can be dragged left, and how far it
+// must travel before release commits to a reply (both negative — drag is
+// leftward-only).
+const SWIPE_REPLY_MAX: number = -56;
+const SWIPE_REPLY_TRIGGER: number = -40;
 
 // NOT @Reusable, deliberately.
 //
@@ -201,7 +207,8 @@ export struct MessageBubble {
   onMediaGone: (messageId: number, albumIndex: number) => void =
     (_messageId: number, _albumIndex: number): void => {};
   // 当前播放位的 key（playSlot.slotKey 的输出），'' 表示没有播放位。
-  @Prop playSlotKey: string = '';
+  @Prop @Watch('onPlaySlotKeyProbe') playSlotKey: string = '';
+  private onPlaySlotKeyProbe(): void { probeHit('slotKeyProp', 0); }
   // 自动播放静音开关（KEY_AUTOPLAY_MUTED，由 ChatPage 用 @StorageProp 下发）。
   @Prop autoplayMuted: boolean = true;
   // 播放位视频的播放进度：每 350ms 一次的高频回调，故意不接到 @State——接上去
@@ -226,6 +233,9 @@ export struct MessageBubble {
   // emoji 参数其实是 reaction key：标准 emoji 原样，自定义 emoji 为 'ce:<id>'。
   onSetReaction: (messageId: number, emoji: string, isChosen: boolean) => void = (): void => {};
   onReplyTo: (messageId: number) => void = (): void => {};
+  // Blocks swipe-to-reply while the composer is in edit mode (avoids the two
+  // states fighting over the reply/edit strip). Long-press → 回复 is unaffected.
+  @Prop editingActive: boolean = false;
   onEditMsg: (messageId: number) => void = (): void => {};
   onShowReactors: (messageId: number, emoji: string) => void = (): void => {};
   onTranslateMsg: (messageId: number) => void = (): void => {};
@@ -284,6 +294,11 @@ export struct MessageBubble {
   // (see ChatRow.ets bindContextMenu) so long-pressing a message bubble gets the
   // same lift/scale animation as long-pressing a chat-list row.
   @State private msgContextMenuShown: boolean = false;
+  // Swipe-to-reply: live horizontal offset (vp, always <= 0 — the bubble only
+  // drags leftward) applied as a translate on the bubble container while
+  // dragging, then sprung back to 0 on release. onReplyTo fires once the drag
+  // clears SWIPE_REPLY_TRIGGER; it never fires mid-drag.
+  @State private swipeReplyX: number = 0;
   // 播放位竞选用的中心 y（vp）。只在 onAreaChange 回调里写、onVisibleAreaApproximateChange
   // 回调里读，不参与 build() —— 用普通字段而非 @State，避免每帧 onAreaChange 触发重建。
   private mediaCenterY: number = 0;
@@ -329,6 +344,7 @@ export struct MessageBubble {
   // 状态变化、替换媒体等，不是每帧）比较一次「参与竞选」状态，只在从 true 翻到
   // false 的那一次补发 onMediaGone，翻转之外什么也不做。
   private onMsgPropChanged(): void {
+    probeHit('msgProp', 0);
     const competing = this.isCompetingVideo();
     if (this.wasCompetingVideo && !competing) {
       this.onMediaGone(this.msg.id, -1);
@@ -434,6 +450,36 @@ export struct MessageBubble {
   private reactionDuration(duration: number): number {
     return this.chatEffectsEnabled && this.reactionEffectsEnabled &&
       this.emojiEnabled && this.emojiReactionsEnabled && !this.powerSaving ? duration : 0;
+  }
+
+  // Swipe-to-reply's snap-back/settle animation — degrades to an instant jump
+  // under 省电模式/减少动效, matching the rest of the bubble's motion gating.
+  private swipeReplyDuration(duration: number): number {
+    return this.powerSaving || this.reduceAnim ? 0 : duration;
+  }
+
+  private swipeReplyEligible(): boolean {
+    // System/hidden rows carry no replyable message; editing owns the
+    // reply/edit strip below and must not fight a concurrent swipe.
+    return !this.editingActive && this.msg.contentType !== 'system' && this.msg.contentType !== 'hidden';
+  }
+
+  private onSwipeReplyUpdate(offsetX: number): void {
+    if (!this.swipeReplyEligible()) {
+      return;
+    }
+    // Leftward-only, clamped to SWIPE_REPLY_MAX (both negative).
+    this.swipeReplyX = Math.max(SWIPE_REPLY_MAX, Math.min(0, offsetX));
+  }
+
+  private onSwipeReplyEnd(): void {
+    const triggered: boolean = this.swipeReplyEligible() && this.swipeReplyX <= SWIPE_REPLY_TRIGGER;
+    animateTo({ duration: this.swipeReplyDuration(180), curve: Curve.EaseOut }, (): void => {
+      this.swipeReplyX = 0;
+    });
+    if (triggered) {
+      this.onReplyTo(this.msg.id);
+    }
   }
 
   // Keep the bubble's own colors intact and dim the whole surface while held.
@@ -1398,6 +1444,7 @@ export struct MessageBubble {
               { ratios: [0.0, PLAY_SLOT_KEEP_RATIO, PLAY_SLOT_ENTER_RATIO, 0.9],
                 expectedUpdateInterval: 200 },
               (_visible: boolean, ratio: number): void => {
+                probeHit('cellVis', 0);
                 if (!this.albumIsVideoAt(cell.idx)) {
                   return; // 相册竞选只看这一格是不是视频，图片格不上报
                 }
@@ -1409,8 +1456,10 @@ export struct MessageBubble {
                 }
               })
             .onAreaChange((_old: Area, area: Area): void => {
+              const t0: number = Date.now();
               this.albumCellCenterY.set(cell.idx,
                 (area.globalPosition.y as number) + (area.height as number) / 2);
+              probeHit('cellArea', Date.now() - t0);
             })
             .onClick((e: ClickEvent) => {
               // Same as the single-media case: a failed cell offers retry.
@@ -1834,6 +1883,7 @@ export struct MessageBubble {
         { ratios: [0.0, 0.08, PLAY_SLOT_KEEP_RATIO, PLAY_SLOT_ENTER_RATIO, 0.9],
           expectedUpdateInterval: 200 },
         (visible: boolean, ratio: number): void => {
+          probeHit('mediaVis', 0);
           const nextVisible = visible && ratio > 0.02;
           if (this.mediaVisible !== nextVisible) {
             this.mediaVisible = nextVisible;
@@ -1851,7 +1901,9 @@ export struct MessageBubble {
           }
         })
       .onAreaChange((_old: Area, area: Area): void => {
+        const t0: number = Date.now();
         this.mediaCenterY = (area.globalPosition.y as number) + (area.height as number) / 2;
+        probeHit('mediaArea', Date.now() - t0);
       })
       .onClick((e: ClickEvent) => {
         // When the media shows a retry control, the tap has to retry. It used
@@ -2603,15 +2655,28 @@ export struct MessageBubble {
         pressed: this.bubblePressedStyle
       })
       .animation({ duration: this.effectDuration(110), curve: Curve.EaseOut })
-      .onAreaChange((_old: Area, area: Area) => { this.bubbleW = area.width as number; })
+      .onAreaChange((_old: Area, area: Area) => { const t0: number = Date.now(); this.bubbleW = area.width as number; probeHit('bubbleArea', Date.now() - t0); })
+      // Swipe-to-reply follows the finger while dragging; onSwipeReplyEnd
+      // snaps it back (and fires onReplyTo past the trigger threshold).
+      .translate({ x: this.swipeReplyX })
       // Controlled mode (mirrors ChatRow.ets bindContextMenu): a manual
       // LongPressGesture in parallelGesture keeps the chat List's pan
       // recognizer alive while held (movement still cancels the long press),
       // and drives the same "lift the bubble" preview animation as a
-      // chat-list row long-press.
+      // chat-list row long-press. The swipe-to-reply PanGesture joins the same
+      // group in Exclusive mode (only one of long-press/swipe wins per
+      // gesture), still parallel to the ancestor List so vertical scrolling
+      // is untouched — PanDirection.Horizontal means a vertical drag simply
+      // never satisfies this recognizer and falls through to the List.
       .parallelGesture(
-        LongPressGesture({ fingers: 1, repeat: false, duration: 500 })
-          .onAction((): void => { this.msgContextMenuShown = true; })
+        GestureGroup(GestureMode.Exclusive,
+          LongPressGesture({ fingers: 1, repeat: false, duration: 500 })
+            .onAction((): void => { this.msgContextMenuShown = true; }),
+          PanGesture({ fingers: 1, direction: PanDirection.Horizontal, distance: 8 })
+            .onActionUpdate((event: GestureEvent): void => { this.onSwipeReplyUpdate(event.offsetX); })
+            .onActionEnd((): void => { this.onSwipeReplyEnd(); })
+            .onActionCancel((): void => { this.onSwipeReplyEnd(); })
+        )
       )
       .bindContextMenu(this.msgContextMenuShown, this.msgContextMenu(), {
         // A play-slot bubble hosts a XComponentType.SURFACE video surface that

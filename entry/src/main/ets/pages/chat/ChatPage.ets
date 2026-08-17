@@ -7947,6 +7947,7 @@ struct ChatPage {
                 },
                 onSetReaction: (id: number, emoji: string, chosen: boolean): void => { this.toggleReaction(id, emoji, chosen); },
                 onReplyTo: (id: number): void => { this.startReply(id); },
+                editingActive: this.editingId !== 0,
                 onCopyText: (id: number): void => { this.copyMessageText(id); },
                 onCopyCode: (text: string): void => { this.copyPlainText(text, str('cp_code_copied')); },
                 onCopyLink: (id: number): void => { this.copyMessageLink(id); },

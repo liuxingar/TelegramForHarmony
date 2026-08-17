@@ -35,6 +35,7 @@ import { ReplyKeyboard, KeyboardBtn, KB_TEXT } from '../../store/ReplyKeyboard';
 import { ChatEntry, computeInitials, isMutedFrom } from '../../store/ChatEntry';
 import { MessageBubble } from './MessageBubble';
 import { PlaySlotRegistry } from './PlaySlotRegistry';
+import { shouldCompete, slotKeyMessageId } from './playSlot';
 import { MediaViewerOverlay } from './MediaViewerOverlay';
 import { ForwardSheet } from './ForwardSheet';
 import { ScheduledSheet } from './ScheduledSheet';
@@ -63,7 +64,8 @@ import {
   KEY_POWER_ACTIVE, KEY_POWER_CHAT_EFFECTS, KEY_POWER_EMOJI, KEY_POWER_EMOJI_REACTIONS,
   KEY_POWER_EFFECT_BACKGROUND, KEY_POWER_EFFECT_BLUR, KEY_POWER_EFFECT_MENU,
   KEY_POWER_EFFECT_REACTION, KEY_POWER_EFFECT_REPLY, KEY_POWER_PARTICLES,
-  KEY_POWER_SMOOTH_TRANSITIONS, KEY_REDUCE_ANIM, KEY_SEND_BY_ENTER, KEY_TRANSLATE_CHATS,
+  KEY_POWER_SMOOTH_TRANSITIONS, KEY_POWER_AUTOPLAY_VIDEO,
+  KEY_REDUCE_ANIM, KEY_SEND_BY_ENTER, KEY_TRANSLATE_CHATS,
   KEY_AUTOPLAY_MUTED,
   powerAnimationDuration,
   powerFeatureEnabled, powerGroupAnimationDuration, powerGroupFeatureEnabled, autosaveEnabled,
@@ -260,13 +262,16 @@ struct ChatPage {
   @StorageProp(KEY_SEND_BY_ENTER) sendByEnter: boolean = false;
   @StorageProp('screenWidthVp') screenW: number = 360;
   @StorageProp('screenHeightVp') screenH: number = 780;
-  @StorageProp(KEY_POWER_ACTIVE) powerSaving: boolean = false;
+  @StorageProp(KEY_POWER_ACTIVE) @Watch('onAutoplayPolicyChanged') powerSaving: boolean = false;
   @StorageProp(KEY_POWER_CHAT_EFFECTS) powerChatEffects: boolean = true;
   @StorageProp(KEY_POWER_EFFECT_BACKGROUND) powerBackgroundEffect: boolean = false;
   @StorageProp(KEY_POWER_PARTICLES) powerParticles: boolean = true;
   @StorageProp(KEY_POWER_EMOJI) powerEmoji: boolean = true;
   @StorageProp(KEY_POWER_EMOJI_REACTIONS) powerEmojiReactions: boolean = true;
-  @StorageProp(KEY_REDUCE_ANIM) reduceAnimations: boolean = false;
+  @StorageProp(KEY_REDUCE_ANIM) @Watch('onAutoplayPolicyChanged') reduceAnimations: boolean = false;
+  // 「自动播放视频」开关。播放位竞选的总闸门之一，见 playSlotsEnabled()。
+  @StorageProp(KEY_POWER_AUTOPLAY_VIDEO) @Watch('onAutoplayPolicyChanged')
+  autoplayVideo: boolean = true;
   @State powerBackgroundPhase: boolean = false;
   // TDLib per-chat wallpaper. Solid/gradient fills render immediately;
   // wallpaper and pattern documents appear as soon as downloadFile completes.
@@ -306,7 +311,7 @@ struct ChatPage {
   private forwardMessageIds: number[] = [];
   @State nowSec: number = 0;
   private nowSecTimer: number = -1;
-  @State viewerMsgId: number = 0;
+  @State @Watch('onViewerTargetChanged') viewerMsgId: number = 0;
   @State chromeVisible: boolean = true;
   @State viewerVideoLandscape: boolean = false;
   @State viewerClosing: boolean = false;
@@ -386,6 +391,10 @@ struct ChatPage {
   private playSlots: PlaySlotRegistry = new PlaySlotRegistry();
   private unsubPlaySlot: (() => void) | null = null;
   @State playSlotKey: string = '';
+  // 新上位的播放位从哪一毫秒起播。换届时从 bubblePositionMs 查一次（见
+  // subscribe 回调），随 playSlotKey 一起下发给气泡——查看器交还的进度就是
+  // 靠这条路真正接到 VideoBubbleSurface.startPositionMs 上的。
+  @State playSlotStartMs: number = 0;
   // 缓存设置 → 自动播放静音开关，唯一消费点：下发给气泡播放器的 muted。
   @StorageProp(KEY_AUTOPLAY_MUTED) autoplayMuted: boolean = true;
   // 气泡播放位的播放进度，按 messageId 记录。onPlaySlotPositionChanged 是
@@ -796,6 +805,9 @@ struct ChatPage {
     // LazyForEach key generator does.
     this.groupsData.setKeyBuilder(this.rowKeyOf);
     this.unsubPlaySlot = this.playSlots.subscribe((key: string): void => {
+      // 起播位置必须在 playSlotKey 之前落下：气泡是靠 playSlotKey 的变化才
+      // 挂载 VideoBubbleSurface 的，晚一步这条播放器就已经从 0 开始了。
+      this.playSlotStartMs = key === '' ? 0 : (this.bubblePositionMs.get(slotKeyMessageId(key)) ?? 0);
       this.playSlotKey = key;
     });
     this.nowSec = Math.floor(Date.now() / 1000);
@@ -1423,12 +1435,39 @@ struct ChatPage {
   // closeViewer()/onPageShow() 这两条恢复路径都是先把状态改回"已关闭/
   // 可见"再调这个方法，守卫在它们那次调用里天然放行。
   private armPlaySlotSettle(): void {
-    if (this.viewerMsgId !== 0 || !this.pageVisible) {
+    if (this.viewerMsgId !== 0 || !this.pageVisible || !this.playSlotsEnabled()) {
       return;
     }
     const now = Date.now();
+    // 恢复路径（closeViewer / onPageShow）走到这里时候选表还在（suspend()
+    // 保留了它），只是驻留计时被清了；resume() 按此刻重新起算，之后正常
+    // 攒满 PLAY_SLOT_DWELL_MS 就能自然选出播放位，不需要用户手动滑一下。
+    // 非恢复路径上 resume() 是空操作（见 PlaySlotRegistry.resume）。
+    this.playSlots.resume(now);
     this.playSlots.tick(now);
     this.maybeScheduleNextSlotCheck(now);
+  }
+
+  // 播放位竞选的总闸门：「自动播放视频」关掉、省电模式开启、减少动效开启，
+  // 三者任一成立就完全不竞选 —— 不挂播放器，更不发起任何分片下载。
+  // 判定本身是纯函数 shouldCompete()（见 playSlot.ets），这里只是把三个
+  // @StorageProp 喂给它。isAnimation 传 false：这是页面级闸门，动图本来就
+  // 不参加竞选，由 MessageBubble.isPlaySlot()/isAlbumCellPlaySlot() 兜底。
+  private playSlotsEnabled(): boolean {
+    return shouldCompete(this.autoplayVideo, this.powerSaving, this.reduceAnimations, false);
+  }
+
+  // 三个开关任一变化：关掉就立刻把正在播的那条停掉（reset() 会把播放位置空，
+  // 订阅者把 playSlotKey 清成 ''，气泡的 VideoBubbleSurface 随之卸载 →
+  // StreamingVideoPlayer.aboutToDisappear → release() → session.close()，
+  // 播放和下载一起停）；重新打开则补一次判定让它自然重新选出来。
+  private onAutoplayPolicyChanged(): void {
+    if (!this.playSlotsEnabled()) {
+      this.clearSlotTick();
+      this.playSlots.reset();
+      return;
+    }
+    this.armPlaySlotSettle();
   }
 
   onPageHide(): void {
@@ -1439,15 +1478,16 @@ struct ChatPage {
     // 切走（含被查看器等页面盖住）立刻停播放位——不能等 aboutToDisappear，
     // 那要等到组件真被销毁才会跑，用户已经在别的页面上等了半天下载还在跑。
     this.clearSlotTick();
-    this.playSlots.reset();
+    this.playSlots.suspend();
   }
 
   onPageShow(): void {
     this.pageVisible = true;
-    // onPageHide 已经把播放位 reset() 清空了候选表和 stableSince；回到这个
-    // 页面时未必有新的可见区回调（几何没变，onVisibleAreaApproximateChange
-    // 不会再触发），跟首屏一样主动补一次。即便候选表这一刻还是空的，后续
-    // 任何一次滚动/新消息到达都会用同一个幂等方法再补一次，不会永久卡住。
+    // onPageHide 只 suspend() 了播放位：候选表还在，被清掉的是当前播放位和
+    // 驻留计时。回到这个页面时几何没变、onVisibleAreaApproximateChange 不会
+    // 再触发，候选表也就不会被重新灌满——保留候选正是为了这一刻还能选得出
+    // 来。armPlaySlotSettle() 里的 resume() 按此刻重新起算驻留，稳住 400ms
+    // 后自然选出播放位。
     this.armPlaySlotSettle();
     // The list changed while this page was hidden. See hiddenListDirty: the
     // framework applies hidden-period notifications incompletely, so rebuild
@@ -2109,6 +2149,16 @@ struct ChatPage {
     }
   }
 
+  // 查看目标变了（打开、Swiper 左右滑到相册的另一条、胶片条跳转、关闭）：
+  // 进度必须从 0 重记。否则用户滑到下一条后 350ms 内（onPositionChanged 的
+  // 上报周期）就关掉查看器，closeViewer 会把上一条的进度写进新消息的
+  // bubblePositionMs，回到气泡就从一个莫名其妙的位置起播。
+  // closeViewer 在 animateTo 把 viewerMsgId 清零之前已经读走了进度，所以
+  // 关闭那一次的清零不会吃掉正确的值。
+  private onViewerTargetChanged(): void {
+    this.viewerPositionMs = 0;
+  }
+
   private closeViewer(): void {
     if (this.viewerMsgId === 0 || this.viewerClosing) {
       return;
@@ -2120,7 +2170,9 @@ struct ChatPage {
     // animateTo 里的回调清零之前完成。
     const viewerMessageId = this.viewerMsgId;
     this.bubblePositionMs.set(viewerMessageId, this.viewerPositionMs);
-    this.playSlots.pin(viewerMessageId, this.albumIndexForViewer(viewerMessageId));
+    // pin 是有时效的（PLAY_SLOT_PIN_TTL_MS）：只为「刚看完的这条回到列表后
+    // 接着播」服务，过期后它跟别的候选一样要重新攒够驻留才能当选。
+    this.playSlots.pin(viewerMessageId, this.albumIndexForViewer(viewerMessageId), Date.now());
     const duration: number = this.chatEffectDuration(KEY_POWER_EFFECT_BLUR, 260);
     this.viewerClosing = true;
     animateTo({ duration, curve: Curve.Friction }, () => {
@@ -3212,17 +3264,19 @@ struct ChatPage {
     if (this.mediaEntryIsPhoto(m)) {
       this.store.requestFullPhoto(messageId);
     }
-    // 交接:取气泡播放位记录的进度，必须在 playSlots.reset() 让气泡播放器
-    // 卸载之前完成——bubblePositionMs 本身不受 reset() 影响，但卸载之后
+    // 交接:取气泡播放位记录的进度，必须在 playSlots.suspend() 让气泡播放器
+    // 卸载之前完成——bubblePositionMs 本身不受 suspend() 影响，但卸载之后
     // 气泡播放器不会再有新的 onPositionChanged，读早读晚不影响这一次的值；
     // 保险起见仍然按“先取、后卸载”的顺序写。
     this.viewerStartPositionMs = this.bubblePositionMs.get(messageId) ?? 0;
     // 全屏查看器是页内叠层，不是新页面，不会触发 onPageHide——List 和气泡
     // 照样挂着，onVisibleAreaApproximateChange 只算几何不算遮挡，ratio 不
-    // 变就不会自己释放播放位。不在这里主动 reset()，播放位气泡的播放器会
-    // 和查看器自己的播放器同时跑、同一个文件还可能互抢下载分片。
+    // 变就不会自己释放播放位。不在这里主动停掉，播放位气泡的播放器会和
+    // 查看器自己的播放器同时跑、同一个文件还可能互抢下载分片。
+    // 用 suspend() 而不是 reset()：候选表要留着，否则关闭查看器后几何没变、
+    // 没有任何新的 ratio 上报，列表就再也选不出播放位（“哑掉”）。
     this.clearSlotTick();
-    this.playSlots.reset();
+    this.playSlots.suspend();
     // Position the viewer Swiper on the tapped album member.
     const sib = this.siblingIdsFor(messageId);
     this.viewerInitIdx = Math.max(0, sib.indexOf(messageId));
@@ -7885,6 +7939,12 @@ struct ChatPage {
                   if (this.viewerMsgId !== 0 || !this.pageVisible) {
                     return;
                   }
+                  // 「自动播放视频」关掉 / 省电模式 / 减少动效：闸门加在这里
+                  // 而不是挂载点上——连候选表都不灌，就连分片下载都不会发起
+                  // （spec §1：powerSaving 只影响 stream，退回封面 + 播放按钮）。
+                  if (!this.playSlotsEnabled()) {
+                    return;
+                  }
                   const now = Date.now();
                   // report() 内部已经跑过一次 elect：ratio 已经攒够驻留（或
                   // 本来就是现任/被 pin）的候选会立即当选。这里只需要为还
@@ -7896,6 +7956,14 @@ struct ChatPage {
                   // 移除永远安全，不加守卫——挡住反而会在候选表里留幽灵条目。
                   this.playSlots.drop(msgId, albumIndex);
                 },
+                // 播完 / 内嵌播放失败：立刻让出播放位，由其它候选重新竞选。
+                // 不会自我循环，理由见 PlaySlotRegistry.retire()。
+                onPlaySlotEnded: (msgId: number, albumIndex: number): void => {
+                  const now = Date.now();
+                  this.playSlots.retire(msgId, albumIndex, now);
+                  this.maybeScheduleNextSlotCheck(now);
+                },
+                playSlotStartMs: this.playSlotStartMs,
                 animateIn: this.freshSinceId !== 0 && g.head.id > this.freshSinceId });
               }
               .layoutWeight(1);

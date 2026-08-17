@@ -89,6 +89,9 @@ export struct StreamingVideoPlayer {
   onPositionChanged: (positionMs: number) => void =
     (_positionMs: number): void => {};
   onEnded: () => void = (): void => {};
+  // 内嵌模式专用：播放失败。内嵌模式没有重试按钮（见 build()），失败的那一条
+  // 必须把播放位让出去，否则它会一直占着位子谁也播不了。
+  onFailed: () => void = (): void => {};
   private player: IjkMediaPlayer | null = null;
   private session: VideoStreamSession | null = null;
   private rangeServer: VideoRangeServer | null = null;
@@ -426,6 +429,11 @@ export struct StreamingVideoPlayer {
     this.isPrepared = false;
     this.videoVisible = false;
     this.isPlaying = false;
+    if (this.embedded) {
+      // 内嵌模式（气泡播放位）：不展示重试 UI，直接把播放位让出去，回落到
+      // 封面 + 播放按钮。点开全屏才是这里的重试入口。
+      this.onFailed();
+    }
   }
 
   private retry(): void {
@@ -897,7 +905,9 @@ export struct StreamingVideoPlayer {
             .animation({ duration: 180, curve: Curve.EaseOut }));
         }
       }
-      if (this.hasError) {
+      // 内嵌模式不画错误 UI：那颗"重试"按钮会吃掉气泡"点开全屏"的点击，而
+      // 失败的这一条本来就已经通过 onFailed() 让出播放位、即将卸载回封面。
+      if (this.hasError && !this.embedded) {
         Column({ space: 8 }) {
           SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
             .fontSize(30)

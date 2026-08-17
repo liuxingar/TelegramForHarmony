@@ -207,6 +207,13 @@ export struct MessageBubble {
   // messageId 记录），供全屏查看器交接时读取。
   onPlaySlotPositionChanged: (messageId: number, albumIndex: number, positionMs: number) => void =
     (_messageId: number, _albumIndex: number, _positionMs: number): void => {};
+  // 播放位视频播完或内嵌播放失败：这一条主动退位，让同屏其它候选重新竞选。
+  // 不接的话播完的那条会永久霸占播放位，同屏另一条永远起不来。
+  onPlaySlotEnded: (messageId: number, albumIndex: number) => void =
+    (_messageId: number, _albumIndex: number): void => {};
+  // 播放位起播位置（毫秒）。由 ChatPage 在换届时从气泡进度表查出并随
+  // playSlotKey 一起下发——全屏查看器交还的进度就是靠这条路接上的。
+  @Prop playSlotStartMs: number = 0;
   onAnimationTap: (messageId: number, isPlaying: boolean) => void =
     (_messageId: number, _isPlaying: boolean): void => {};
   onAnimationPlaybackFailed: (messageId: number) => void = (): void => {};
@@ -1260,8 +1267,10 @@ export struct MessageBubble {
     return this.albumVideoMimeTypes[index] ?? '';
   }
 
+  // 与 isPlaySlot() 同一道 !isAnimation 兜底：动图不参加竞选（spec §3.3），
+  // 相册格子也不例外，否则相册里的动图会错挂流式播放器。
   private isAlbumCellPlaySlot(index: number): boolean {
-    return this.playSlotKey !== '' &&
+    return this.playSlotKey !== '' && !this.msg.isAnimation &&
       this.playSlotKey === slotKey(this.albumMemberIdAt(index), index);
   }
 
@@ -1280,8 +1289,12 @@ export struct MessageBubble {
                   mimeType: this.albumVideoMimeTypeAt(cell.idx),
                   posterPath: this.albumPathAt(cell.idx),
                   muted: this.autoplayMuted,
+                  startPositionMs: this.playSlotStartMs,
                   onPositionChanged: (positionMs: number): void => {
                     this.onPlaySlotPositionChanged(this.albumMemberIdAt(cell.idx), cell.idx, positionMs);
+                  },
+                  onEnded: (): void => {
+                    this.onPlaySlotEnded(this.albumMemberIdAt(cell.idx), cell.idx);
                   }
                 })
                   .width(cell.width).height(cell.height).clip(true)
@@ -1698,8 +1711,12 @@ export struct MessageBubble {
             sourceHeight: this.msg.photoHeight,
             posterPath: this.msg.photoPath,
             muted: this.autoplayMuted,
+            startPositionMs: this.playSlotStartMs,
             onPositionChanged: (positionMs: number): void => {
               this.onPlaySlotPositionChanged(this.msg.id, -1, positionMs);
+            },
+            onEnded: (): void => {
+              this.onPlaySlotEnded(this.msg.id, -1);
             }
           })
             .width(this.mediaBox().width).height(this.mediaBox().height)

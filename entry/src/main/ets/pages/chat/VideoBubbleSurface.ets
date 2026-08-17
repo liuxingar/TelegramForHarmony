@@ -32,7 +32,9 @@ export struct VideoBubbleSurface {
       muted: this.muted,
       startPositionMs: this.startPositionMs,
       onPositionChanged: (positionMs: number): void => { this.onPositionChanged(positionMs); },
-      onEnded: (): void => { this.onEnded(); }
+      onEnded: (): void => { this.onEnded(); },
+      // 失败与播完对挂载点是同一件事：把播放位让出去，回落到封面。
+      onFailed: (): void => { this.onEnded(); }
     });
   }
 }

@@ -35,7 +35,6 @@ import { formatClockTime } from '../../util/formatTime';
 import { formatFileSize } from '../../util/formatFileSize';
 import { parseFormattedText, RichSegment, RichRun } from '../../util/richText';
 import { packAlbumRows, AlbumCell } from '../../util/packAlbumRows';
-import { probeHit } from '../../util/perfProbe';
 import { linkPreviewPresentation, LinkPreviewPresentation } from '../../util/linkPreview';
 import { reactionKeyFrom } from '../../util/reactions';
 import { COLOR_PRIMARY, COLOR_TEXT_SECONDARY, COLOR_BUBBLE_OUT, COLOR_BUBBLE_IN, COLOR_BUBBLE_TEXT, AVATAR_PALETTE, botButtonBg } from '../../util/theme';
@@ -207,8 +206,7 @@ export struct MessageBubble {
   onMediaGone: (messageId: number, albumIndex: number) => void =
     (_messageId: number, _albumIndex: number): void => {};
   // 当前播放位的 key（playSlot.slotKey 的输出），'' 表示没有播放位。
-  @Prop @Watch('onPlaySlotKeyProbe') playSlotKey: string = '';
-  private onPlaySlotKeyProbe(): void { probeHit('slotKeyProp', 0); }
+  @Prop playSlotKey: string = '';
   // 自动播放静音开关（KEY_AUTOPLAY_MUTED，由 ChatPage 用 @StorageProp 下发）。
   @Prop autoplayMuted: boolean = true;
   // 播放位视频的播放进度：每 350ms 一次的高频回调，故意不接到 @State——接上去
@@ -344,7 +342,6 @@ export struct MessageBubble {
   // 状态变化、替换媒体等，不是每帧）比较一次「参与竞选」状态，只在从 true 翻到
   // false 的那一次补发 onMediaGone，翻转之外什么也不做。
   private onMsgPropChanged(): void {
-    probeHit('msgProp', 0);
     const competing = this.isCompetingVideo();
     if (this.wasCompetingVideo && !competing) {
       this.onMediaGone(this.msg.id, -1);
@@ -1444,7 +1441,6 @@ export struct MessageBubble {
               { ratios: [0.0, PLAY_SLOT_KEEP_RATIO, PLAY_SLOT_ENTER_RATIO, 0.9],
                 expectedUpdateInterval: 200 },
               (_visible: boolean, ratio: number): void => {
-                probeHit('cellVis', 0);
                 if (!this.albumIsVideoAt(cell.idx)) {
                   return; // 相册竞选只看这一格是不是视频，图片格不上报
                 }
@@ -1456,10 +1452,8 @@ export struct MessageBubble {
                 }
               })
             .onAreaChange((_old: Area, area: Area): void => {
-              const t0: number = Date.now();
               this.albumCellCenterY.set(cell.idx,
                 (area.globalPosition.y as number) + (area.height as number) / 2);
-              probeHit('cellArea', Date.now() - t0);
             })
             .onClick((e: ClickEvent) => {
               // Same as the single-media case: a failed cell offers retry.
@@ -1883,7 +1877,6 @@ export struct MessageBubble {
         { ratios: [0.0, 0.08, PLAY_SLOT_KEEP_RATIO, PLAY_SLOT_ENTER_RATIO, 0.9],
           expectedUpdateInterval: 200 },
         (visible: boolean, ratio: number): void => {
-          probeHit('mediaVis', 0);
           const nextVisible = visible && ratio > 0.02;
           if (this.mediaVisible !== nextVisible) {
             this.mediaVisible = nextVisible;
@@ -1901,9 +1894,7 @@ export struct MessageBubble {
           }
         })
       .onAreaChange((_old: Area, area: Area): void => {
-        const t0: number = Date.now();
         this.mediaCenterY = (area.globalPosition.y as number) + (area.height as number) / 2;
-        probeHit('mediaArea', Date.now() - t0);
       })
       .onClick((e: ClickEvent) => {
         // When the media shows a retry control, the tap has to retry. It used
@@ -2655,7 +2646,7 @@ export struct MessageBubble {
         pressed: this.bubblePressedStyle
       })
       .animation({ duration: this.effectDuration(110), curve: Curve.EaseOut })
-      .onAreaChange((_old: Area, area: Area) => { const t0: number = Date.now(); this.bubbleW = area.width as number; probeHit('bubbleArea', Date.now() - t0); })
+      .onAreaChange((_old: Area, area: Area) => { this.bubbleW = area.width as number; })
       // Swipe-to-reply follows the finger while dragging; onSwipeReplyEnd
       // snaps it back (and fires onReplyTo past the trigger threshold).
       .translate({ x: this.swipeReplyX })

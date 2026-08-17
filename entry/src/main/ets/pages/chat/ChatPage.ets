@@ -46,8 +46,8 @@ import {
 } from '../../store/ChatBackgroundStore';
 import { gradientStops } from '../../util/backgroundPresentation';
 import {
-  BackgroundRasterParams, cachedRaster, patternTileGrid, patternTileGridLayer,
-  rasterSignature, rasterizeBackground
+  BackgroundRasterParams, backgroundBlurRadius, cachedRaster, patternTileGrid,
+  patternTileGridLayer, rasterSignature, rasterizeBackground
 } from '../../util/chatBackgroundRaster';
 import {
   chatHeaderPresentation, chatHeaderTitle, ChatHeaderPresentation
@@ -7707,7 +7707,8 @@ struct ChatPage {
       if (this.chatBg.path !== '' && this.chatBg.isPattern) {
         patternTileGridLayer(
           this.chatBg.path, this.chatBg.imageOpacity,
-          patternTileGrid(this.screenW, this.screenH));
+          patternTileGrid(this.screenW, this.screenH),
+          backgroundBlurRadius(this.chatBg.path, this.chatBg.isPattern, this.chatBg.blurred));
       } else if (this.chatBg.path !== '') {
         Image(this.chatBg.path.startsWith('/')
           ? `file://${this.chatBg.path}` : this.chatBg.path).draggable(false)

@@ -29,27 +29,35 @@ export interface BackgroundRasterParams {
   height: number;        // vp
 }
 
-// Blur radii. Only a real photo wallpaper (path set, not a pattern) gets
-// softened — patterns are line art meant to stay crisp, and a pure gradient
-// has no texture to blur. A wallpaper the user (or the sync'd account) marked
-// blurred in the official client gets an extra push on top of the baseline.
+// Blur radii. A tiled pattern always gets a fixed soften — the user's actual
+// complaint ("太清晰了") was about the pattern background specifically, and a
+// pure gradient has no texture to blur so there's nothing to do there. A real
+// photo wallpaper keeps the pre-existing behaviour: sharp unless the account
+// (or the user, synced from the official client) marked it `is_blurred`.
 const NO_BLUR_RADIUS: number = 0;
-const WALLPAPER_BLUR_RADIUS: number = 8;
-const WALLPAPER_BLURRED_RADIUS: number = 16;
+const PATTERN_BLUR_RADIUS: number = 8;
+const WALLPAPER_BLURRED_RADIUS: number = 12;
+// Both the single-image wallpaper and the composited pattern grid need the
+// same overscan when blurred, so the edges softened by the blur don't expose
+// a rim of the layer underneath.
+const BLUR_OVERSCAN_SCALE: number = 1.08;
 
 // Pure function: given the shape of the background, decide how much blur (if
 // any) the composited image should get. Returns a new value only — no
 // mutation of the caller's params.
 export function backgroundBlurRadius(path: string, isPattern: boolean, blurred: boolean): number {
-  if (path === '' || isPattern) {
+  if (path === '') {
     return NO_BLUR_RADIUS;
   }
-  return blurred ? WALLPAPER_BLURRED_RADIUS : WALLPAPER_BLUR_RADIUS;
+  if (isPattern) {
+    return PATTERN_BLUR_RADIUS;
+  }
+  return blurred ? WALLPAPER_BLURRED_RADIUS : NO_BLUR_RADIUS;
 }
 
 // Whether the image needs the overscan that hides the soft edge a blur
-// leaves behind. Tied to the same rule as the radius, not to `blurred` alone
-// — any nonzero radius (the baseline 8 included) needs it.
+// leaves behind. Tied to the same rule as the radius — any nonzero radius
+// needs it.
 function backgroundOverscan(p: BackgroundRasterParams): boolean {
   return backgroundBlurRadius(p.path, p.isPattern, p.blurred) > NO_BLUR_RADIUS;
 }
@@ -58,22 +66,24 @@ function backgroundOverscan(p: BackgroundRasterParams): boolean {
 //
 // A pattern document is a small repeatable motif sheet, not a standalone
 // photo. The official client tiles it edge-to-edge at a fixed density
-// instead of fitting one instance to the screen. Fitting one instance with
-// ImageFit.Contain (the old approach) left the screen's off-axis edges bare
-// whenever the device was wider (relative to its height) than the pattern's
-// own ratio — a tablet, mainly — because Contain picks whichever axis is the
-// tighter constraint and leaves the other one short. The gradient's palest
-// stop showed through that gap and read as grey padding.
+// instead of fitting one instance to the screen.
 //
 // The pattern SVG's native viewBox is 1440x2960 (confirmed by pulling the
-// inflated .tgv off a device, see background-diagnosis-report.md) — width:height
-// ratio ~0.4865. Every tile keeps that ratio so the motif itself never
-// stretches; only the tile COUNT changes with screen size.
-const PATTERN_ASPECT: number = 1440 / 2960;
-// One tile's height in vp. Chosen to read at roughly the same motif density
-// as the official client on a typical phone; screens of any other size just
-// get more or fewer tiles, never a stretched or squashed one.
-const PATTERN_TILE_HEIGHT_VP: number = 340;
+// inflated .tgv off a device, see background-diagnosis-report.md — width:height
+// ratio ~0.4865). ImageFit.Contain (the pre-tiling approach) is constrained by
+// whichever axis is tighter; since the SVG is much taller than it is wide,
+// that axis is always the canvas height, so a single Contain instance already
+// matched the vertical motif density exactly — the only thing wrong with it
+// was the bare strip left on the sides on any screen wider (relative to its
+// height) than the pattern's own ratio.
+//
+// So the tile keeps that same vertical density instead of introducing a new
+// one: tile height = canvas height (one row, never repeated vertically), and
+// tile width follows from the SVG's own aspect ratio. Only the column COUNT
+// changes with screen width, repeating sideways until the canvas is covered.
+const PATTERN_SVG_WIDTH: number = 1440;
+const PATTERN_SVG_HEIGHT: number = 2960;
+const PATTERN_ASPECT: number = PATTERN_SVG_WIDTH / PATTERN_SVG_HEIGHT;
 
 export interface PatternTileGrid {
   cols: number;
@@ -82,22 +92,20 @@ export interface PatternTileGrid {
   tileHeight: number;
 }
 
-// Pure function: given a canvas size and a desired tile height, work out how
-// many columns/rows of the pattern's own-aspect-ratio tile are needed to
-// cover the canvas completely, rounding up so there is never a bare sliver
-// on any edge (the grid is then centered and clipped to the canvas, so the
-// overrun from rounding is trimmed symmetrically instead of showing as a
-// gap on one side).
-export function patternTileGrid(
-  width: number, height: number, tileHeightVp: number = PATTERN_TILE_HEIGHT_VP
-): PatternTileGrid {
+// Pure function: given a canvas size, work out how many columns of a
+// full-canvas-height, native-aspect-ratio tile are needed to cover the
+// canvas width, rounding up so there is never a bare sliver on the sides
+// (the grid is then centered and clipped to the canvas, so the overrun from
+// rounding is trimmed symmetrically instead of showing as a gap on one
+// side). Always exactly one row — the tile height already equals the canvas
+// height, so vertical repetition would just waste draw calls.
+export function patternTileGrid(width: number, height: number): PatternTileGrid {
   const safeWidth: number = Math.max(width, 1);
   const safeHeight: number = Math.max(height, 1);
-  const tileHeight: number = Math.max(tileHeightVp, 1);
+  const tileHeight: number = safeHeight;
   const tileWidth: number = tileHeight * PATTERN_ASPECT;
   const cols: number = Math.max(1, Math.ceil(safeWidth / tileWidth));
-  const rows: number = Math.max(1, Math.ceil(safeHeight / tileHeight));
-  return { cols, rows, tileWidth, tileHeight };
+  return { cols, rows: 1, tileWidth, tileHeight };
 }
 
 // [0, count) as a fresh array — ForEach needs a concrete array, not a range.
@@ -109,8 +117,20 @@ function tileIndices(count: number): number[] {
   return result;
 }
 
+// Blur is applied once, to the whole composited grid below — never to the
+// individual tile Images. Blurring each tile on its own would soften every
+// tile's own edges independently, and adjacent tiles' independently-blurred
+// edges don't line back up into a continuous motif: the seam between tiles
+// would show as a faint blurred line. Blurring the assembled grid as a
+// single layer instead treats the seams as interior pixels of one continuous
+// image, so neighbouring tiles blur into each other exactly like the source
+// artwork does — only the outer boundary of the whole grid (already handled
+// by the existing overrun + Stack.clip(true) in backgroundLayer) needs the
+// overscan.
 @Builder
-export function patternTileGridLayer(path: string, opacity: number, grid: PatternTileGrid) {
+export function patternTileGridLayer(
+  path: string, opacity: number, grid: PatternTileGrid, blurRadius: number
+) {
   Column() {
     ForEach(tileIndices(grid.rows), (r: number) => {
       Row() {
@@ -128,7 +148,10 @@ export function patternTileGridLayer(path: string, opacity: number, grid: Patter
   }
   .width(grid.cols * grid.tileWidth)
   .height(grid.rows * grid.tileHeight)
-  .opacity(opacity);
+  .opacity(opacity)
+  .scale(blurRadius > NO_BLUR_RADIUS
+    ? { x: BLUR_OVERSCAN_SCALE, y: BLUR_OVERSCAN_SCALE } : { x: 1, y: 1 })
+  .blur(blurRadius);
 }
 
 // sig -> file path. The file also survives on disk, but the map is what keeps
@@ -142,16 +165,20 @@ const inFlight: Set<string> = new Set();
 const SNAPSHOT_DELAY_MS: number = 320;
 
 export function rasterSignature(p: BackgroundRasterParams): string {
-  // v4: patterns are now tiled instead of a single ImageFit.Contain
-  // instance (see patternTileGrid()'s comment). The version token retires
-  // every raster cached by the v3 pipeline, which baked the Contain
-  // letterboxing into the JPEG — without bumping it, the map/disk hit would
-  // keep serving those letterboxed files forever.
+  // v5: pattern tiles are now full-canvas-height (one row, columns only)
+  // instead of a fixed 340vp tile height, and patterns now carry a fixed
+  // blur of their own (8) instead of always being sharp; photo wallpapers
+  // are back to their original blurred-flag-only rule (0 or 12) instead of
+  // the v3 always-8/16 baseline. All three changes shift composited pixels,
+  // so the version token retires every raster cached by the v4 pipeline —
+  // without bumping it, the map/disk hit would keep serving stale JPEGs
+  // forever.
   //
-  // v3: photo wallpapers now always carry some blur (8, or 16 when the
-  // account's own is_blurred flag is set) instead of only the blurred ones.
+  // v4: patterns are tiled instead of a single ImageFit.Contain instance.
+  // v3: photo wallpapers always carried some blur instead of only the
+  // blurred ones (superseded by v5 above).
   const radius: number = backgroundBlurRadius(p.path, p.isPattern, p.blurred);
-  return `v4_${p.colors.join('-')}_${p.angle}_${p.path}_${p.isPattern ? 'p' : 'w'}` +
+  return `v5_${p.colors.join('-')}_${p.angle}_${p.path}_${p.isPattern ? 'p' : 'w'}` +
     `_${Math.round(p.imageOpacity * 100)}_${Math.round(p.dimming * 100)}` +
     `_blur${radius}_${Math.round(p.width)}x${Math.round(p.height)}`;
 }
@@ -172,10 +199,12 @@ function backgroundLayer(p: BackgroundRasterParams) {
     }
     if (p.path !== '' && p.isPattern) {
       // Tiled, not a single Contain instance — see the comment above
-      // patternTileGrid(). Patterns never carry blur (backgroundBlurRadius
-      // is 0 whenever isPattern is true), so there is no overscan/scale to
-      // apply here, unlike the wallpaper-photo branch below.
-      patternTileGridLayer(p.path, p.imageOpacity, patternTileGrid(p.width, p.height));
+      // patternTileGrid(). Blur (and its overscan) is applied inside
+      // patternTileGridLayer to the whole assembled grid, not per tile —
+      // see the comment on that function for why.
+      patternTileGridLayer(
+        p.path, p.imageOpacity, patternTileGrid(p.width, p.height),
+        backgroundBlurRadius(p.path, p.isPattern, p.blurred));
     } else if (p.path !== '') {
       // Blur softens the edges into the layer underneath, so anything blurred
       // needs the overscan or a faint rim of the gradient/dimming shows through.
@@ -183,7 +212,8 @@ function backgroundLayer(p: BackgroundRasterParams) {
         .width(p.width).height(p.height)
         .objectFit(ImageFit.Cover)
         .opacity(p.imageOpacity)
-        .scale(backgroundOverscan(p) ? { x: 1.08, y: 1.08 } : { x: 1, y: 1 })
+        .scale(backgroundOverscan(p)
+          ? { x: BLUR_OVERSCAN_SCALE, y: BLUR_OVERSCAN_SCALE } : { x: 1, y: 1 })
         .blur(backgroundBlurRadius(p.path, p.isPattern, p.blurred))
         // 关闭降采样解码：offline 树里 autoResize 会按布局估算把 1157×2560 的
         // 源图解到约一半（实测 652×1443），快照再放大回全屏——用户看到的

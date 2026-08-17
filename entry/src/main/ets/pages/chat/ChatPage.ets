@@ -4298,10 +4298,7 @@ struct ChatPage {
       }
     }
     .width(262)
-    .backgroundColor($r('app.color.surface'))
-    .borderRadius(14)
-    .shadow({ radius: 10, color: '#26000000', offsetX: 0, offsetY: 4 })
-    .clip(true);
+    .padding({ top: 6, bottom: 6 });
   }
 
   // Horizontal center (vp, window coords) of the smiley button — the anchor

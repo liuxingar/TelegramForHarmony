@@ -85,7 +85,10 @@ import {
 } from '../../util/reactions';
 import { openWebUrl } from '../../util/webBrowserNav';
 import { TdObject, TdRequest, TdError } from '../../tdkit/TdTypes';
-import { searchMentions, loadBotCommands, MentionItem, CommandItem } from '../../store/InputSuggestions';
+import {
+  searchMentions, mentionOfUser, loadBotCommands, MentionItem, CommandItem
+} from '../../store/InputSuggestions';
+import { appendMention, mentionToken } from '../../util/mentionDraft';
 import { floatingLiveWindow } from './LiveFloatingWindow';
 import { MUTE_LONG, setMute } from '../../store/ChatActions';
 import { liveLocation, LiveLocationState } from '../../services/LiveLocationService';
@@ -3709,10 +3712,25 @@ struct ChatPage {
   private pickMention(item: MentionItem): void {
     const idx = this.draft.lastIndexOf('@');
     const head = idx >= 0 ? this.draft.substring(0, idx) : this.draft;
-    const token = item.username !== '' ? `@${item.username}` : item.name;
-    this.draft = `${head}${token} `;
+    this.draft = `${head}${mentionToken(item.name, item.username)} `;
     this.mentionItems = [];
     setTimeout((): void => { focusControl.requestFocus('chat_composer'); }, 0);
+  }
+
+  // Long press on a group message avatar → append that sender's mention to the
+  // draft. The message entry has the sender's name but not their username, so
+  // the username is fetched here; the name is the fallback if it has none.
+  private mentionSender(userId: number, fallbackName: string): void {
+    mentionOfUser(getTdClient(), userId).then((item: MentionItem): void => {
+      const name = item.name !== '' ? item.name : fallbackName;
+      const token = mentionToken(name, item.username);
+      if (token === '') {
+        return;
+      }
+      this.draft = appendMention(this.draft, token);
+      this.mentionItems = [];
+      setTimeout((): void => { focusControl.requestFocus('chat_composer'); }, 0);
+    });
   }
 
   private pickCommand(item: CommandItem): void {
@@ -7620,6 +7638,9 @@ struct ChatPage {
                 onAvatarTap: (uid: number): void => {
                   const params: Record<string, Object> = { 'userId': uid };
                   router.pushUrl({ url: 'pages/profile/ProfilePage', params: params });
+                },
+                onAvatarLongPress: (uid: number, name: string): void => {
+                  this.mentionSender(uid, name);
                 },
                 onReplyTap: (id: number): void => { this.onReplyTap(id); },
                 onEditMsg: (id: number): void => { this.startEdit(id); },

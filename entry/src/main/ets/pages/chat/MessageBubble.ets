@@ -140,6 +140,9 @@ export struct MessageBubble {
   onCommentTap: (messageId: number) => void = (): void => {};
   onBotCallback: (messageId: number, data: string) => void = (): void => {};
   onAvatarTap: (userId: number) => void = (): void => {};
+  // Long press on a group message avatar → mention that sender in the composer.
+  onAvatarLongPress: (userId: number, name: string) => void =
+    (_userId: number, _name: string): void => {};
   onReplyTap: (messageId: number) => void = (): void => {};
   onFileTap: (messageId: number) => void = (): void => {};
   onFileSave: (messageId: number) => void = (): void => {};
@@ -2289,7 +2292,12 @@ export struct MessageBubble {
               if (this.msg.senderIsUser && this.msg.senderId > 0) {
                 this.onAvatarTap(this.msg.senderId);
               }
-            });
+            })
+            .gesture(LongPressGesture().onAction(() => {
+              if (this.msg.senderIsUser && this.msg.senderId > 0) {
+                this.onAvatarLongPress(this.msg.senderId, this.msg.senderName);
+              }
+            }));
         } else {
           // Mid-run row: keep the avatar column's width so bubbles stay aligned.
           Column().width(38);

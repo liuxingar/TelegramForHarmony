@@ -93,6 +93,17 @@ export function searchMentions(client: TdClient, chatId: number, query: string):
   });
 }
 
+// One member by id, for mentioning straight from a message avatar (the
+// message entry carries the sender's name but not their username).
+export function mentionOfUser(client: TdClient, userId: number): Promise<MentionItem> {
+  return getUser(client, userId).then((user: TdObject): MentionItem => {
+    return { userId, name: displayNameOf(user), username: usernameOf(user) };
+  }).catch((e: TdError): MentionItem => {
+    console.error(`mentionOfUser failed: ${e.message}`);
+    return { userId, name: '', username: '' };
+  });
+}
+
 function commandsOfFullInfo(full: TdObject, botUserId: number, botUsername: string): CommandItem[] {
   const items: CommandItem[] = [];
   const botInfo = full['bot_info'] as TdObject | undefined;

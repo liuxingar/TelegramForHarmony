@@ -6,7 +6,8 @@ import {
   ChatThemePreview, chatThemePreviewOf
 } from '../../util/chatThemePresentation';
 import {
-  COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
+  COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY,
+  darkResourceMode
 } from '../../util/theme';
 
 const CARD_RADIUS: number = 14;
@@ -31,7 +32,7 @@ struct ChatThemePage {
     this.active = true;
     const params = router.getParams() as ThemePageParams | undefined;
     this.chatId = params?.chatId ?? 0;
-    const dark = this.darkMode();
+    const dark = darkResourceMode(getContext(this) as common.UIAbilityContext);
     getChatThemeStore().ensureLoaded();
     this.off = getChatThemeStore().subscribe((themes: TdObject[]): void => {
       const rows: ChatThemePreview[] = [];
@@ -48,19 +49,6 @@ struct ChatThemePage {
     if (this.off !== null) {
       this.off();
       this.off = null;
-    }
-  }
-
-  private darkMode(): boolean {
-    try {
-      const color = (getContext(this) as common.UIAbilityContext)
-        .resourceManager.getColorSync($r('app.color.chat_bg'));
-      const red = (color >>> 16) & 0xFF;
-      const green = (color >>> 8) & 0xFF;
-      const blue = color & 0xFF;
-      return red * 0.299 + green * 0.587 + blue * 0.114 < 128;
-    } catch (_error) {
-      return false;
     }
   }
 

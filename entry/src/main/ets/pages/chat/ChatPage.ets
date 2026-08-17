@@ -76,7 +76,9 @@ import {
   getTranslationService, languageDisplayName, looksLikeTargetLanguage, resolveTranslateTarget,
   TRANSLATE_LANG_CODES
 } from '../../services/TranslationService';
-import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY, botButtonBg } from '../../util/theme';
+import {
+  COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY, botButtonBg, darkResourceMode
+} from '../../util/theme';
 import {
   normalizeTelegramLink, bareUsernameOf, inviteLinkOf, chatLinkActionOf,
   chatFolderInviteLinkOf, stickerSetLinkOf
@@ -912,7 +914,7 @@ struct ChatPage {
     // store; the page only mirrors its snapshot into state.
     this.bgStore = new ChatBackgroundStore(
       getTdClient(), getChatStore(), getChatThemeStore(),
-      (): boolean => this.darkResourceMode()
+      (): boolean => darkResourceMode(getContext(this) as common.UIAbilityContext)
     );
     this.unsubBg = this.bgStore.subscribe((state: ChatBackgroundState): void => {
       this.chatBg = state;
@@ -2685,19 +2687,6 @@ struct ChatPage {
     this.liveCallIsRtmp = entry.isRtmpLive;
     this.liveLoadState = 'ready';
     this.settleTopCardLoading();
-  }
-
-  private darkResourceMode(): boolean {
-    try {
-      const color = (getContext(this) as common.UIAbilityContext)
-        .resourceManager.getColorSync($r('app.color.chat_bg'));
-      const red = (color >>> 16) & 0xFF;
-      const green = (color >>> 8) & 0xFF;
-      const blue = color & 0xFF;
-      return red * 0.299 + green * 0.587 + blue * 0.114 < 128;
-    } catch (_error) {
-      return false;
-    }
   }
 
   private refreshMembership(): void {

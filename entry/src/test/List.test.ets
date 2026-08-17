@@ -63,6 +63,7 @@ import cacheLimitTest from './CacheLimit.test';
 import playSlotTest from './PlaySlot.test';
 import playSlotRegistryTest from './PlaySlotRegistry.test';
 import backgroundBlurTest from './BackgroundBlur.test';
+import themeTest from './Theme.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -130,4 +131,5 @@ export default function testsuite() {
   customEmojiReactionsTest();
   markdownBlocksTest();
   backgroundBlurTest();
+  themeTest();
 }

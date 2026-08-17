@@ -60,6 +60,7 @@ import translationServiceTest from './TranslationService.test';
 import mediaPolicyTest from './MediaPolicy.test';
 import mentionDraftTest from './MentionDraft.test';
 import cacheLimitTest from './CacheLimit.test';
+import playSlotTest from './PlaySlot.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -122,6 +123,7 @@ export default function testsuite() {
   mentionDraftTest();
   mediaPolicyTest();
   cacheLimitTest();
+  playSlotTest();
   customEmojiReactionsTest();
   markdownBlocksTest();
 }

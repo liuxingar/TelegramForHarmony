@@ -10879,6 +10879,18 @@
     {
       "name": "ms_autoplay_muted",
       "value": "Putar tanpa suara"
+    },
+    {
+      "name": "settings_media",
+      "value": "Media"
+    },
+    {
+      "name": "settings_media_sub",
+      "value": "Putar otomatis dan pemutaran latar belakang"
+    },
+    {
+      "name": "ms_autoplay_group",
+      "value": "Putar otomatis"
     }
   ]
 }

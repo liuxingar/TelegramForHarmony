@@ -10879,6 +10879,18 @@
     {
       "name": "ms_autoplay_muted",
       "value": "म्यूट प्ले"
+    },
+    {
+      "name": "settings_media",
+      "value": "मीडिया"
+    },
+    {
+      "name": "settings_media_sub",
+      "value": "ऑटोप्ले और बैकग्राउंड प्लेबैक"
+    },
+    {
+      "name": "ms_autoplay_group",
+      "value": "ऑटोप्ले"
     }
   ]
 }

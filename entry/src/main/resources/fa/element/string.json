@@ -10879,6 +10879,18 @@
     {
       "name": "ms_autoplay_muted",
       "value": "پخش بی‌صدا"
+    },
+    {
+      "name": "settings_media",
+      "value": "رسانه"
+    },
+    {
+      "name": "settings_media_sub",
+      "value": "پخش خودکار و پخش در پس‌زمینه"
+    },
+    {
+      "name": "ms_autoplay_group",
+      "value": "پخش خودکار"
     }
   ]
 }

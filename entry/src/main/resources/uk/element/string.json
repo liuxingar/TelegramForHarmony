@@ -10879,6 +10879,18 @@
     {
       "name": "ms_autoplay_muted",
       "value": "Відтворення без звуку"
+    },
+    {
+      "name": "settings_media",
+      "value": "Медіа"
+    },
+    {
+      "name": "settings_media_sub",
+      "value": "Автовідтворення та фонове відтворення"
+    },
+    {
+      "name": "ms_autoplay_group",
+      "value": "Автовідтворення"
     }
   ]
 }

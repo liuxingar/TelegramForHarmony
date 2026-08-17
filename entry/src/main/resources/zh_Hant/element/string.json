@@ -10879,6 +10879,18 @@
     {
       "name": "ms_autoplay_muted",
       "value": "靜音播放"
+    },
+    {
+      "name": "settings_media",
+      "value": "媒體"
+    },
+    {
+      "name": "settings_media_sub",
+      "value": "自動播放與背景播放"
+    },
+    {
+      "name": "ms_autoplay_group",
+      "value": "自動播放"
     }
   ]
 }

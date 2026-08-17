@@ -10879,6 +10879,18 @@
     {
       "name": "ms_autoplay_muted",
       "value": "Reproduzir sem som"
+    },
+    {
+      "name": "settings_media",
+      "value": "Mídia"
+    },
+    {
+      "name": "settings_media_sub",
+      "value": "Reprodução automática e em segundo plano"
+    },
+    {
+      "name": "ms_autoplay_group",
+      "value": "Reprodução automática"
     }
   ]
 }

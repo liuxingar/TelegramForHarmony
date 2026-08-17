@@ -10879,6 +10879,18 @@
     {
       "name": "ms_autoplay_muted",
       "value": "Lecture sans son"
+    },
+    {
+      "name": "settings_media",
+      "value": "Médias"
+    },
+    {
+      "name": "settings_media_sub",
+      "value": "Lecture automatique et lecture en arrière-plan"
+    },
+    {
+      "name": "ms_autoplay_group",
+      "value": "Lecture automatique"
     }
   ]
 }

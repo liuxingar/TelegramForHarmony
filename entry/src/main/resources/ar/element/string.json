@@ -10879,6 +10879,18 @@
     {
       "name": "ms_autoplay_muted",
       "value": "تشغيل صامت"
+    },
+    {
+      "name": "settings_media",
+      "value": "الوسائط"
+    },
+    {
+      "name": "settings_media_sub",
+      "value": "التشغيل التلقائي والتشغيل في الخلفية"
+    },
+    {
+      "name": "ms_autoplay_group",
+      "value": "التشغيل التلقائي"
     }
   ]
 }

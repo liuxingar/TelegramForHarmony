@@ -10879,6 +10879,18 @@
     {
       "name": "ms_autoplay_muted",
       "value": "Phát không có âm thanh"
+    },
+    {
+      "name": "settings_media",
+      "value": "Media"
+    },
+    {
+      "name": "settings_media_sub",
+      "value": "Tự động phát và phát nền"
+    },
+    {
+      "name": "ms_autoplay_group",
+      "value": "Tự động phát"
     }
   ]
 }

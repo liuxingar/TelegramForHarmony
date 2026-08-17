@@ -10879,6 +10879,18 @@
     {
       "name": "ms_autoplay_muted",
       "value": "Riproduci senza audio"
+    },
+    {
+      "name": "settings_media",
+      "value": "Media"
+    },
+    {
+      "name": "settings_media_sub",
+      "value": "Riproduzione automatica e in background"
+    },
+    {
+      "name": "ms_autoplay_group",
+      "value": "Riproduzione automatica"
     }
   ]
 }

@@ -77,7 +77,7 @@ export struct StreamingVideoPlayer {
   // viewer. No control bar / gestures / speed / rotate — just poster +
   // surface + buffering hint. See build() and onPlayingChanged() below.
   @Prop embedded: boolean = false;
-  @Prop muted: boolean = false;
+  @Watch('onMutedChanged') @Prop muted: boolean = false;
   @Prop startPositionMs: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
@@ -243,6 +243,26 @@ export struct StreamingVideoPlayer {
     this.isPlaying = false;
   }
 
+  // 应用当前 muted 状态到原生播放器音量。onPrepared（起播）和 onMutedChanged
+  // （@Watch，静音开关中途拨动）两处共用，避免两份重复的音量字符串字面量。
+  private applyMutedVolume(): void {
+    if (this.player === null || !this.isPrepared) {
+      return;
+    }
+    const volume: string = this.muted ? '0.0' : '1.0';
+    this.player.setVolume(volume, volume);
+  }
+
+  // muted 中途变化（缓存设置里的「静音播放」开关）时对已挂载的播放器实例
+  // 重设音量，不等下一次换届/重新 prepare。播放器可能还没建好（isPrepared
+  // 为 false）或者已经 release（this.player 为 null）——两种情况都在
+  // applyMutedVolume() 里判空短路，不会在原生层触碰一个未就绪/已释放的实例。
+  // 全屏查看器路径 muted 恒为字面量 false，构造后不会再变，这里不会为它
+  // 产生任何额外的 setVolume 调用；@Watch 本身也不在初始赋值时触发。
+  private onMutedChanged(): void {
+    this.applyMutedVolume();
+  }
+
   private async initPlayer(context: object): Promise<void> {
     if (!this.active || this.player !== null || this.session !== null) {
       return;
@@ -316,8 +336,7 @@ export struct StreamingVideoPlayer {
           this.isPrepared = true;
           this.durationMs = Math.max(0, player.getDuration());
           player.setSpeed(SPEEDS[this.speedIdx]);
-          const volume: string = this.muted ? '0.0' : '1.0';
-          player.setVolume(volume, volume);
+          this.applyMutedVolume();
           if (this.startPositionMs > 0) {
             player.seekTo(`${Math.floor(this.startPositionMs)}`);
             this.currentTimeMs = this.startPositionMs;

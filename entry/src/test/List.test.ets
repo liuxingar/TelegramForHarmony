@@ -61,6 +61,7 @@ import mediaPolicyTest from './MediaPolicy.test';
 import mentionDraftTest from './MentionDraft.test';
 import cacheLimitTest from './CacheLimit.test';
 import playSlotTest from './PlaySlot.test';
+import playSlotRegistryTest from './PlaySlotRegistry.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -124,6 +125,7 @@ export default function testsuite() {
   mediaPolicyTest();
   cacheLimitTest();
   playSlotTest();
+  playSlotRegistryTest();
   customEmojiReactionsTest();
   markdownBlocksTest();
 }

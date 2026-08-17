@@ -10891,6 +10891,10 @@
     {
       "name": "ms_autoplay_group",
       "value": "ऑटोप्ले"
+    },
+    {
+      "name": "cb_blur_amount",
+      "value": "धुंधलापन की मात्रा"
     }
   ]
 }

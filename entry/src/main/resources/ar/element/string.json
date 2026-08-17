@@ -10891,6 +10891,10 @@
     {
       "name": "ms_autoplay_group",
       "value": "التشغيل التلقائي"
+    },
+    {
+      "name": "cb_blur_amount",
+      "value": "درجة الضبابية"
     }
   ]
 }

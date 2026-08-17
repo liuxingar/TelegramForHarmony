@@ -10891,6 +10891,10 @@
     {
       "name": "ms_autoplay_group",
       "value": "Reprodução automática"
+    },
+    {
+      "name": "cb_blur_amount",
+      "value": "Quantidade de desfoque"
     }
   ]
 }

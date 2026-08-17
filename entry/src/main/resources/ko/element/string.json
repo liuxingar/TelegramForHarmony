@@ -10891,6 +10891,10 @@
     {
       "name": "ms_autoplay_group",
       "value": "자동 재생"
+    },
+    {
+      "name": "cb_blur_amount",
+      "value": "블러 정도"
     }
   ]
 }

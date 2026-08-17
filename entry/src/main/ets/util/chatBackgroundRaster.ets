@@ -25,41 +25,44 @@ export interface BackgroundRasterParams {
   imageOpacity: number;
   dimming: number;
   blurred: boolean;
+  userBlur: number;      // vp, user's blur-amount setting (KEY_BG_BLUR)
   width: number;         // vp
   height: number;        // vp
 }
 
-// Blur radii. A tiled pattern always gets a fixed soften — the user's actual
-// complaint ("太清晰了") was about the pattern background specifically, and a
-// pure gradient has no texture to blur so there's nothing to do there. A real
-// photo wallpaper keeps the pre-existing behaviour: sharp unless the account
-// (or the user, synced from the official client) marked it `is_blurred`.
+// Blur radii. A tiled pattern always gets softened; a real photo wallpaper
+// keeps the pre-existing behaviour: sharp unless the account (or the user,
+// synced from the official client) marked it `is_blurred`. A pure gradient
+// has no texture to blur so there's nothing to do there. How much softening
+// "should blur" actually applies is now the user's own call — the Chat
+// Background page's slider (KEY_BG_BLUR in AppSettings.ets, default 8) — so
+// the radius itself is a caller-supplied parameter, not a fixed constant.
 const NO_BLUR_RADIUS: number = 0;
-const PATTERN_BLUR_RADIUS: number = 8;
-const WALLPAPER_BLURRED_RADIUS: number = 12;
 // Both the single-image wallpaper and the composited pattern grid need the
 // same overscan when blurred, so the edges softened by the blur don't expose
 // a rim of the layer underneath.
 const BLUR_OVERSCAN_SCALE: number = 1.08;
 
-// Pure function: given the shape of the background, decide how much blur (if
-// any) the composited image should get. Returns a new value only — no
-// mutation of the caller's params.
-export function backgroundBlurRadius(path: string, isPattern: boolean, blurred: boolean): number {
+// Pure function: given the shape of the background and the user's blur
+// setting, decide how much blur (if any) the composited image should get.
+// Returns a new value only — no mutation of the caller's params.
+export function backgroundBlurRadius(
+  path: string, isPattern: boolean, blurred: boolean, userBlur: number
+): number {
   if (path === '') {
     return NO_BLUR_RADIUS;
   }
   if (isPattern) {
-    return PATTERN_BLUR_RADIUS;
+    return userBlur;
   }
-  return blurred ? WALLPAPER_BLURRED_RADIUS : NO_BLUR_RADIUS;
+  return blurred ? userBlur : NO_BLUR_RADIUS;
 }
 
 // Whether the image needs the overscan that hides the soft edge a blur
 // leaves behind. Tied to the same rule as the radius — any nonzero radius
 // needs it.
 function backgroundOverscan(p: BackgroundRasterParams): boolean {
-  return backgroundBlurRadius(p.path, p.isPattern, p.blurred) > NO_BLUR_RADIUS;
+  return backgroundBlurRadius(p.path, p.isPattern, p.blurred, p.userBlur) > NO_BLUR_RADIUS;
 }
 
 // Pattern tile geometry --------------------------------------------------
@@ -165,20 +168,24 @@ const inFlight: Set<string> = new Set();
 const SNAPSHOT_DELAY_MS: number = 320;
 
 export function rasterSignature(p: BackgroundRasterParams): string {
+  // v6: the blur radius that PATTERN_BLUR_RADIUS/WALLPAPER_BLURRED_RADIUS used
+  // to hardcode is now the user's own KEY_BG_BLUR setting (ChatBackgroundPage's
+  // slider) — the same colors/path/etc. can now composite to a different bitmap
+  // purely because the user dragged the slider, so the version token has to
+  // retire every raster the v5 pipeline ever cached, or dragging the slider
+  // would keep serving the old blur from the map/disk cache.
+  //
   // v5: pattern tiles are now full-canvas-height (one row, columns only)
   // instead of a fixed 340vp tile height, and patterns now carry a fixed
   // blur of their own (8) instead of always being sharp; photo wallpapers
   // are back to their original blurred-flag-only rule (0 or 12) instead of
-  // the v3 always-8/16 baseline. All three changes shift composited pixels,
-  // so the version token retires every raster cached by the v4 pipeline —
-  // without bumping it, the map/disk hit would keep serving stale JPEGs
-  // forever.
+  // the v3 always-8/16 baseline.
   //
   // v4: patterns are tiled instead of a single ImageFit.Contain instance.
   // v3: photo wallpapers always carried some blur instead of only the
   // blurred ones (superseded by v5 above).
-  const radius: number = backgroundBlurRadius(p.path, p.isPattern, p.blurred);
-  return `v5_${p.colors.join('-')}_${p.angle}_${p.path}_${p.isPattern ? 'p' : 'w'}` +
+  const radius: number = backgroundBlurRadius(p.path, p.isPattern, p.blurred, p.userBlur);
+  return `v6_${p.colors.join('-')}_${p.angle}_${p.path}_${p.isPattern ? 'p' : 'w'}` +
     `_${Math.round(p.imageOpacity * 100)}_${Math.round(p.dimming * 100)}` +
     `_blur${radius}_${Math.round(p.width)}x${Math.round(p.height)}`;
 }
@@ -204,7 +211,7 @@ function backgroundLayer(p: BackgroundRasterParams) {
       // see the comment on that function for why.
       patternTileGridLayer(
         p.path, p.imageOpacity, patternTileGrid(p.width, p.height),
-        backgroundBlurRadius(p.path, p.isPattern, p.blurred));
+        backgroundBlurRadius(p.path, p.isPattern, p.blurred, p.userBlur));
     } else if (p.path !== '') {
       // Blur softens the edges into the layer underneath, so anything blurred
       // needs the overscan or a faint rim of the gradient/dimming shows through.
@@ -214,7 +221,7 @@ function backgroundLayer(p: BackgroundRasterParams) {
         .opacity(p.imageOpacity)
         .scale(backgroundOverscan(p)
           ? { x: BLUR_OVERSCAN_SCALE, y: BLUR_OVERSCAN_SCALE } : { x: 1, y: 1 })
-        .blur(backgroundBlurRadius(p.path, p.isPattern, p.blurred))
+        .blur(backgroundBlurRadius(p.path, p.isPattern, p.blurred, p.userBlur))
         // 关闭降采样解码：offline 树里 autoResize 会按布局估算把 1157×2560 的
         // 源图解到约一半（实测 652×1443），快照再放大回全屏——用户看到的
         // "背景比实时版糊"就是这个。全分辨率解码 + 高质量插值。

@@ -10891,6 +10891,10 @@
     {
       "name": "ms_autoplay_group",
       "value": "自動再生"
+    },
+    {
+      "name": "cb_blur_amount",
+      "value": "ぼかしの強さ"
     }
   ]
 }

@@ -10,6 +10,9 @@ import {
 import {
   COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
+import {
+  BG_BLUR_DEFAULT, BG_BLUR_MAX, BG_BLUR_MIN, KEY_BG_BLUR, setNumber
+} from '../../store/AppSettings';
 
 const CARD_RADIUS: number = 14;
 const TILE_HEIGHT: number = 118;
@@ -28,6 +31,7 @@ interface BackgroundPageParams {
 struct ChatBackgroundPage {
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
+  @StorageProp(KEY_BG_BLUR) bgBlur: number = BG_BLUR_DEFAULT;
   @State loadState: string = 'loading';
   @State rows: GalleryRow[] = [];
   @State forDark: boolean = false;
@@ -127,6 +131,13 @@ struct ChatBackgroundPage {
     });
   }
 
+  private setBlur(value: number, mode: SliderChangeMode): void {
+    if (mode !== SliderChangeMode.End) {
+      return;
+    }
+    setNumber(KEY_BG_BLUR, Math.round(value));
+  }
+
   private reset(): void {
     if (this.applyingId !== '') { return; }
     this.applyingId = 'reset';
@@ -176,6 +187,32 @@ struct ChatBackgroundPage {
         .onClick((): void => this.setForDark(true));
     }
     .padding(3).borderRadius(20).backgroundColor(COLOR_SURFACE);
+  }
+
+  @Builder
+  blurCard() {
+    Column({ space: 8 }) {
+      Row() {
+        Text($r('app.string.cb_blur_amount')).fontSize(15).fontColor(COLOR_TEXT_PRIMARY)
+          .layoutWeight(1);
+        Text(`${this.bgBlur}`).fontSize(14).fontColor(COLOR_TEXT_SECONDARY);
+      }.width('100%');
+      Slider({
+        value: this.bgBlur,
+        min: BG_BLUR_MIN,
+        max: BG_BLUR_MAX,
+        step: 1,
+        style: SliderStyle.OutSet
+      })
+        .width('100%')
+        .trackColor($r('app.color.divider'))
+        .selectedColor(COLOR_PRIMARY)
+        .blockColor(COLOR_PRIMARY)
+        .onChange((value: number, mode: SliderChangeMode): void => { this.setBlur(value, mode); });
+    }
+    .width('100%')
+    .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+    .backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
   }
 
   @Builder
@@ -245,6 +282,7 @@ struct ChatBackgroundPage {
             .width('100%').height(48).padding({ left: 14, right: 14 })
             .backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS)
             .onClick((): void => this.reset());
+            this.blurCard();
             GridRow({ columns: 3, gutter: 10 }) {
               ForEach(this.rows, (row: GalleryRow) => {
                 GridCol({ span: 1 }) { this.tile(row); }

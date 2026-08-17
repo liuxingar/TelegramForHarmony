@@ -68,7 +68,7 @@ import {
   KEY_POWER_EFFECT_REACTION, KEY_POWER_EFFECT_REPLY, KEY_POWER_PARTICLES,
   KEY_POWER_SMOOTH_TRANSITIONS, KEY_POWER_AUTOPLAY_VIDEO,
   KEY_REDUCE_ANIM, KEY_SEND_BY_ENTER, KEY_TRANSLATE_CHATS,
-  KEY_AUTOPLAY_MUTED,
+  KEY_AUTOPLAY_MUTED, KEY_BG_BLUR, BG_BLUR_DEFAULT,
   powerAnimationDuration,
   powerFeatureEnabled, powerGroupAnimationDuration, powerGroupFeatureEnabled, autosaveEnabled,
   translateOptedOut, setTranslateOptedOut
@@ -276,6 +276,9 @@ struct ChatPage {
   // 「自动播放视频」开关。播放位竞选的总闸门之一，见 playSlotsEnabled()。
   @StorageProp(KEY_POWER_AUTOPLAY_VIDEO) @Watch('onAutoplayPolicyChanged')
   autoplayVideo: boolean = true;
+  // 聊天背景设置页的「模糊度」滑块（KEY_BG_BLUR）。拖动时要立即重算离屏合成图，
+  // 否则拖完滑块背景看起来没反应（命中旧签名的缓存图）。
+  @StorageProp(KEY_BG_BLUR) @Watch('onBgBlurChanged') bgBlur: number = BG_BLUR_DEFAULT;
   @State powerBackgroundPhase: boolean = false;
   // TDLib per-chat wallpaper. Solid/gradient fills render immediately;
   // wallpaper and pattern documents appear as soon as downloadFile completes.
@@ -7622,9 +7625,16 @@ struct ChatPage {
     return {
       colors: this.chatBg.colors, angle: this.chatBg.angle, path: this.chatBg.path,
       isPattern: this.chatBg.isPattern, imageOpacity: this.chatBg.imageOpacity,
-      dimming: this.chatBg.dimming, blurred: this.chatBg.blurred,
+      dimming: this.chatBg.dimming, blurred: this.chatBg.blurred, userBlur: this.bgBlur,
       width: this.screenW, height: this.screenH
     };
+  }
+
+  // The blur-amount slider (ChatBackgroundPage) changes KEY_BG_BLUR in
+  // AppStorage; @Watch fires this so the chat's background re-composites at
+  // the new radius instead of keeping whatever was last rasterised.
+  private onBgBlurChanged(): void {
+    this.syncBackgroundRaster();
   }
 
   private bgRasterTimer: number = -1;
@@ -7708,7 +7718,7 @@ struct ChatPage {
         patternTileGridLayer(
           this.chatBg.path, this.chatBg.imageOpacity,
           patternTileGrid(this.screenW, this.screenH),
-          backgroundBlurRadius(this.chatBg.path, this.chatBg.isPattern, this.chatBg.blurred));
+          backgroundBlurRadius(this.chatBg.path, this.chatBg.isPattern, this.chatBg.blurred, this.bgBlur));
       } else if (this.chatBg.path !== '') {
         Image(this.chatBg.path.startsWith('/')
           ? `file://${this.chatBg.path}` : this.chatBg.path).draggable(false)
@@ -7716,12 +7726,15 @@ struct ChatPage {
           .objectFit(ImageFit.Cover)
           .opacity(this.chatBg.imageOpacity)
           // Blurring needs a little overscan or transparent edge pixels become
-          // visible around the viewport.
+          // visible around the viewport. Gated on the actual radius (not just
+          // the `blurred` flag) so a user-set blur of 0 doesn't overscan either.
           .scale({
-            x: this.chatBg.blurred ? 1.08 : 1,
-            y: this.chatBg.blurred ? 1.08 : 1
+            x: backgroundBlurRadius(this.chatBg.path, this.chatBg.isPattern, this.chatBg.blurred, this.bgBlur) > 0
+              ? 1.08 : 1,
+            y: backgroundBlurRadius(this.chatBg.path, this.chatBg.isPattern, this.chatBg.blurred, this.bgBlur) > 0
+              ? 1.08 : 1
           })
-          .blur(this.chatBg.blurred ? 12 : 0);
+          .blur(backgroundBlurRadius(this.chatBg.path, this.chatBg.isPattern, this.chatBg.blurred, this.bgBlur));
       }
       if (this.chatBg.dimming > 0) {
         Column().width('100%').height('100%')

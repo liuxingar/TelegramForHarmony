@@ -10891,6 +10891,10 @@
     {
       "name": "ms_autoplay_group",
       "value": "เล่นอัตโนมัติ"
+    },
+    {
+      "name": "cb_blur_amount",
+      "value": "ระดับความเบลอ"
     }
   ]
 }

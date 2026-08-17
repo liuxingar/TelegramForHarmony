@@ -10891,6 +10891,10 @@
     {
       "name": "ms_autoplay_group",
       "value": "Autoplay"
+    },
+    {
+      "name": "cb_blur_amount",
+      "value": "Blur amount"
     }
   ]
 }

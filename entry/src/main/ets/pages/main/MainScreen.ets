@@ -20,6 +20,7 @@ import { str } from '../../util/strings';
 import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 import { ChatBackgroundState, preloadDefaultChatBackground } from '../../store/ChatBackgroundStore';
 import { rasterizeBackground } from '../../util/chatBackgroundRaster';
+import { KEY_BG_BLUR, BG_BLUR_DEFAULT } from '../../store/AppSettings';
 
 // Translucent tint over a backdrop blur — the frosted-glass dock material.
 const DOCK_BG: ResourceColor = $r('app.color.dock_glass');
@@ -40,6 +41,7 @@ export struct MainScreen {
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @StorageProp('screenWidthVp') screenW: number = 360;
   @StorageProp('screenHeightVp') screenH: number = 780;
+  @StorageProp(KEY_BG_BLUR) bgBlur: number = BG_BLUR_DEFAULT;
   @StorageProp(STORAGE_UPDATE_AVAILABLE) updateAvailable: boolean = false;
   // 回前台补偿：后台期间的来电 push 可能被系统拒绝，前台一刻重查一次。
   @StorageProp('appIsForeground') @Watch('onAppForegroundChanged') appIsForeground: boolean = true;
@@ -72,7 +74,7 @@ export struct MainScreen {
         rasterizeBackground(this.getUIContext(), {
           colors: state.colors, angle: state.angle, path: state.path,
           isPattern: state.isPattern, imageOpacity: state.imageOpacity,
-          dimming: state.dimming, blurred: state.blurred,
+          dimming: state.dimming, blurred: state.blurred, userBlur: this.bgBlur,
           width: this.screenW, height: this.screenH
         }, (getContext(this) as common.UIAbilityContext).cacheDir);
       });

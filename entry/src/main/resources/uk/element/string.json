@@ -10891,6 +10891,10 @@
     {
       "name": "ms_autoplay_group",
       "value": "Автовідтворення"
+    },
+    {
+      "name": "cb_blur_amount",
+      "value": "Ступінь розмиття"
     }
   ]
 }

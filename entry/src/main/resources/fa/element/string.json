@@ -10891,6 +10891,10 @@
     {
       "name": "ms_autoplay_group",
       "value": "پخش خودکار"
+    },
+    {
+      "name": "cb_blur_amount",
+      "value": "میزان تاری"
     }
   ]
 }

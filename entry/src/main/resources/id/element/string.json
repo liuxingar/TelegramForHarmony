@@ -10891,6 +10891,10 @@
     {
       "name": "ms_autoplay_group",
       "value": "Putar otomatis"
+    },
+    {
+      "name": "cb_blur_amount",
+      "value": "Tingkat blur"
     }
   ]
 }

@@ -10891,6 +10891,10 @@
     {
       "name": "ms_autoplay_group",
       "value": "Riproduzione automatica"
+    },
+    {
+      "name": "cb_blur_amount",
+      "value": "Intensità sfocatura"
     }
   ]
 }

@@ -10891,6 +10891,10 @@
     {
       "name": "ms_autoplay_group",
       "value": "Tự động phát"
+    },
+    {
+      "name": "cb_blur_amount",
+      "value": "Mức độ làm mờ"
     }
   ]
 }

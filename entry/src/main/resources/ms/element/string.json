@@ -10891,6 +10891,10 @@
     {
       "name": "ms_autoplay_group",
       "value": "Main automatik"
+    },
+    {
+      "name": "cb_blur_amount",
+      "value": "Tahap kabur"
     }
   ]
 }

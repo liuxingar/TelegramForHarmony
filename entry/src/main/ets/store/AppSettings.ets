@@ -58,6 +58,12 @@ export const KEY_AUTOSAVE_GROUP: string = 'autosaveGroup';
 export const KEY_AUTOSAVE_CHANNEL: string = 'autosaveChannel';
 // 缓存上限（字节）。0 = 不限，见 CacheLimit.ets。
 export const KEY_CACHE_LIMIT: string = 'cacheLimit';
+// 聊天背景模糊半径（vp）。用户可调，见 chatBackgroundRaster.ets 的
+// backgroundBlurRadius —— pattern 与"需要模糊"的照片壁纸都用这一个值。
+export const KEY_BG_BLUR: string = 'bgBlur';
+export const BG_BLUR_DEFAULT: number = 8;
+export const BG_BLUR_MIN: number = 0;
+export const BG_BLUR_MAX: number = 20;
 // 自动播放时静音。默认开启 —— 聊天列表里突然出声是最招人烦的行为。
 export const KEY_AUTOPLAY_MUTED: string = 'autoplayMuted';
 export const POWER_THRESHOLD_DEFAULT: number = 10;
@@ -265,6 +271,7 @@ export async function initSettings(context: common.Context): Promise<void> {
       AppStorage.setOrCreate(key, await s.get(key, false) as boolean);
     }
     AppStorage.setOrCreate(KEY_CACHE_LIMIT, await s.get(KEY_CACHE_LIMIT, CACHE_LIMIT_DEFAULT) as number);
+    AppStorage.setOrCreate(KEY_BG_BLUR, await s.get(KEY_BG_BLUR, BG_BLUR_DEFAULT) as number);
     AppStorage.setOrCreate(KEY_AUTOPLAY_MUTED, await s.get(KEY_AUTOPLAY_MUTED, true) as boolean);
     for (const key of DATA_STRING_KEYS) {
       AppStorage.setOrCreate(key, await s.get(key, '') as string);

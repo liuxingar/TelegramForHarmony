@@ -6608,7 +6608,9 @@ struct ChatPage {
     });
   }
 
-  // Edit strip above the input bar: pencil accent + original excerpt + ✕.
+  // Edit strip: pencil accent + original excerpt + ✕. Sits inside the same
+  // rounded card as the input row (no own background/border/divider) so the
+  // composer reads as one continuous surface.
   @Builder
   editPreview() {
     Row({ space: 10 }) {
@@ -6627,18 +6629,19 @@ struct ChatPage {
       .justifyContent(FlexAlign.Center)
       .onClick(() => { this.cancelEdit(); });
     }
-    .width('100%').height(44).padding({ left: 12, right: 8 })
-    .backgroundColor($r('app.color.surface'));
+    .width('100%').height(44).padding({ left: 12, right: 8 });
   }
 
-  // Reply preview strip above the input bar (Telegram style): accent bar, sender
-  // name, message excerpt, and an ✕ to cancel.
+  // Reply preview strip (Telegram style): accent bar, "回复 <name>", quoted
+  // excerpt, and an ✕ to cancel. Sits inside the same rounded card as the
+  // input row (no own background/border/divider) so the composer reads as
+  // one continuous surface, with the accent bar spanning both text lines.
   @Builder
   replyPreview() {
     Row({ space: 10 }) {
       Row().width(3).height(34).borderRadius(2).backgroundColor(COLOR_PRIMARY);
       Column({ space: 1 }) {
-        Text(this.replyToName).fontSize(13).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
+        Text(`${str('mb_reply')} ${this.replyToName}`).fontSize(13).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
         Text(this.replyToText).fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
@@ -6658,8 +6661,6 @@ struct ChatPage {
         .onClick(() => { this.clearReply(); });
     }
     .width('100%').padding({ left: 16, right: 16, top: 7, bottom: 7 })
-    .backgroundColor($r('app.color.surface'))
-    .border({ width: { top: 0.7 }, color: $r('app.color.divider') })
     .alignItems(VerticalAlign.Center)
     .transition(
       TransitionEffect.translate({ y: 12 })
@@ -6810,7 +6811,13 @@ struct ChatPage {
   @Builder
   inputBar() {
     Row() {
-      Row({ space: 6 }) {
+      Column() {
+        if (this.editingId !== 0) {
+          this.editPreview();
+        } else if (this.replyToId !== 0) {
+          this.replyPreview();
+        }
+        Row({ space: 6 }) {
         if (this.isRecording) {
           // Recording mode: red dot + timer, 取消, send.
           Row({ space: 7 }) {
@@ -6993,10 +7000,12 @@ struct ChatPage {
           }.width(40).height(40);
         }
       }
+        .width('100%')
+        .constraintSize({ minHeight: 48, maxHeight: 120 })
+        .padding({ left: 12, right: 4, top: 4, bottom: 4 })
+        .alignItems(VerticalAlign.Center);
+      }
       .width('100%')
-      .constraintSize({ minHeight: 48, maxHeight: 120 })
-      .padding({ left: 12, right: 4, top: 4, bottom: 4 })
-      .alignItems(VerticalAlign.Center)
       .backgroundColor($r('app.color.surface'))
       .borderRadius(24);
     }.width('100%')
@@ -7053,11 +7062,6 @@ struct ChatPage {
         this.membershipBar();
       } else {
         Column() {
-          if (this.editingId !== 0) {
-            this.editPreview();
-          } else if (this.replyToId !== 0) {
-            this.replyPreview();
-          }
           this.inputBar();
           if (this.replyKbVisible()) {
             this.replyKeyboardPanel();

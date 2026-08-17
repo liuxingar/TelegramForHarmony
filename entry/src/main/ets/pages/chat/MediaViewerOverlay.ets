@@ -100,13 +100,11 @@ export struct MediaViewerOverlay {
 
   aboutToAppear(): void {
     this.pageIdx = this.initIdx;
-    this.store?.setViewerOpen(true);
     this.prefetchNeighbours(this.pageIdx);
   }
 
   // Leaving the viewer in landscape would strand the chat page sideways.
   aboutToDisappear(): void {
-    this.store?.setViewerOpen(false);
     if (this.videoLandscape) {
       setMediaViewerOrientation(getContext(this) as common.UIAbilityContext, false);
     }
@@ -132,7 +130,9 @@ export struct MediaViewerOverlay {
       viewerOpen: true,
       autoplayEnabled: true,
       powerSaving: false,
-      networkMetered: this.networkMetered()
+      networkMetered: this.networkMetered(),
+      // shouldPrefetchNeighbour 不看这个字段，查看器语境下填 false 即可。
+      reduceAnimations: false
     };
     if (!shouldPrefetchNeighbour(ctx)) {
       return;

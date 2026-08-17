@@ -1019,6 +1019,24 @@ export default function messageStoreTest() {
       });
       expect(thumbRequested).assertTrue();
     });
+    // I-1 回归：窗口内有多张带 photoFullFileId 的照片同时到达时（模拟查看
+    // 器打开期间又收到新消息触发 requestPhotos 的场景），store 不该对任何
+    // 一张发起高清下载——高清下载完全交给查看器自己对当前图驱动。
+    it('窗口内多张照片同时在场，不对任何一张自动发起高清下载', 0, () => {
+      const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
+      store.open();
+      pushNewMessage(b, photoMessage(90, 5, 961, 962));
+      pushNewMessage(b, photoMessage(91, 5, 963, 964));
+      pushNewMessage(b, photoMessage(92, 5, 965, 966));
+      const fullIds = [962, 964, 966];
+      for (const fullId of fullIds) {
+        const fullRequested = b.sent.some((json: string): boolean => {
+          const request = JSON.parse(json) as TdObject;
+          return request['@type'] === 'downloadFile' && request['file_id'] === fullId;
+        });
+        expect(fullRequested).assertFalse();
+      }
+    });
     it('live 到达的视频不再自动整文件下载', 0, () => {
       const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
       store.open();

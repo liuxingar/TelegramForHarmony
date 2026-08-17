@@ -8,7 +8,8 @@ import { formatUserStatus } from '../util/formatUserStatus';
 import { formatPreview } from '../util/formatPreview';
 import { formatMemberCount } from '../util/formatMemberCount';
 import {
-  KEY_POWER_ACTIVE, KEY_POWER_AUTOPLAY_GIF, KEY_POWER_AUTOPLAY_VIDEO, powerFeatureEnabled
+  KEY_POWER_ACTIVE, KEY_POWER_AUTOPLAY_GIF, KEY_POWER_AUTOPLAY_VIDEO, powerFeatureEnabled,
+  reduceAnimations
 } from './AppSettings';
 import { decideMedia, subjectOfEntry, MediaContext, MediaIntent } from './MediaPolicy';
 import { PollOptionInfo } from '../util/formatMsgContent';
@@ -110,6 +111,7 @@ export class MessageStore {
   private stickerFileToMsg: Map<number, number> = new Map();
   // Live incoming media is the only automatic-download/autosave candidate.
   // Initial history never starts a burst of full-resolution downloads.
+  // Consumed by ChatPage's autosave-to-gallery flow (consumeLiveIncomingMediaIds).
   private liveIncomingMediaIds: number[] = [];
   private inlineCustomEmojiFileToId: Map<number, string> = new Map();
   private inlineCustomEmojiPathById: Map<string, string> = new Map();
@@ -2542,25 +2544,19 @@ export class MessageStore {
   // 已进 TDLib 下载管理器（addFileToDownloads）的文件。用户明确要留下来的，
   // 本地不去取消它们。
   private managedFiles: Set<number> = new Set();
-  // 全屏查看器是否打开——decideMedia 只在打开时才升级高清图。
-  private viewerOpen: boolean = false;
-
-  setViewerOpen(open: boolean): void {
-    if (this.viewerOpen === open) {
-      return;
-    }
-    this.viewerOpen = open;
-  }
 
   private mediaContextFor(entry: MessageEntry): MediaContext {
     return {
       inWindow: this.inMediaWindow(entry.id),
       isPlaySlot: false, // 播放位竞选属二期，一期没有任何条目是播放位
-      viewerOpen: this.viewerOpen,
+      // decideMedia 不再按 viewerOpen 产出 'full'（见 MediaPolicy 注释），
+      // 全屏查看器是否打开对这里的决策没有影响，固定填 false。
+      viewerOpen: false,
       autoplayEnabled: powerFeatureEnabled(
         entry.isAnimation ? KEY_POWER_AUTOPLAY_GIF : KEY_POWER_AUTOPLAY_VIDEO),
       powerSaving: AppStorage.get<boolean>(KEY_POWER_ACTIVE) ?? false,
-      networkMetered: false
+      networkMetered: false,
+      reduceAnimations: reduceAnimations()
     };
   }
 
@@ -2643,14 +2639,16 @@ export class MessageStore {
           }
         }
       }
-      // 整段媒体（高清图 / 语音 / GIF / 显式整文件下载）统一交给 MediaPolicy
-      // 决策：缩略图已在上文入队（含去重与限速重试），这里只消费
-      // full/explicit —— stream 留给二期的播放位控制器，一期不会产出。
+      // 整段媒体（语音 / videoNote / GIF / 显式整文件下载）统一交给
+      // MediaPolicy 决策：缩略图已在上文入队（含去重与限速重试），高清图
+      // 不再由这里消费——它会对窗口内每一张有 photoFullFileId 的照片都发起
+      // 原图下载，查看器打开时只该给当前这一张升级，其余是浪费带宽（见
+      // MediaPolicy.decideMedia 的注释）。全屏查看器自己对当前图与左右
+      // 邻图调 requestFullPhoto 驱动高清下载。stream 留给二期的播放位
+      // 控制器，一期不会产出。
       const intents: MediaIntent[] = decideMedia(subjectOfEntry(e), this.mediaContextFor(e));
       for (const intent of intents) {
-        if (intent === 'full') {
-          this.requestFullPhoto(e.id, false, false);
-        } else if (intent === 'explicit') {
+        if (intent === 'explicit') {
           this.requestVideoDownload(e.id); // deduped via videoFileToMsg
         }
       }

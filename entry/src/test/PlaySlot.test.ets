@@ -84,5 +84,10 @@ export default function playSlotTest() {
       const list: PlaySlotCandidate[] = [cand(1, PLAY_SLOT_ENTER_RATIO, 500)];
       expect(pickPlaySlot(list, 500, '', '')).assertEqual(slotKey(1, -1));
     });
+
+    it('比例与离视口中心距离都相同时保留先出现者', 0, () => {
+      const list: PlaySlotCandidate[] = [cand(1, 0.8, 400), cand(2, 0.8, 600)];
+      expect(pickPlaySlot(list, 500, '', '')).assertEqual(slotKey(1, -1));
+    });
   });
 }

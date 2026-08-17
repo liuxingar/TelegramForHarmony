@@ -109,5 +109,18 @@ export default function playSlotRegistryTest() {
       r.reset();
       expect(r.current()).assertEqual('');
     });
+
+    it('reset 之后不喂 setScrolling(true, ...) 也能重新选出播放位', 0, () => {
+      const r = new PlaySlotRegistry();
+      r.setViewportCenter(500);
+      r.setScrolling(false, 0);
+      r.report(1, -1, 0.95, 500);
+      r.tick(PLAY_SLOT_SETTLE_MS);
+      r.reset();
+      r.setScrolling(false, 10_000);
+      r.report(2, -1, 0.95, 500);
+      r.tick(10_000 + PLAY_SLOT_SETTLE_MS);
+      expect(r.current()).assertEqual(slotKey(2, -1));
+    });
   });
 }

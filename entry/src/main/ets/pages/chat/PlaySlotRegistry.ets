@@ -80,7 +80,9 @@ export class PlaySlotRegistry {
     this.candidates.clear();
     this.pinned = '';
     this.stillSince = -1;
-    this.scrolling = false;
+    // 与构造函数一致：视为「尚未静止」，避免下一次 setScrolling(false, now)
+    // 因为和默认值相等被短路掉，导致 stillSince 永远停在 -1、播放位再也选不出来。
+    this.scrolling = true;
     this.setSlot('');
   }
 

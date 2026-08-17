@@ -64,6 +64,7 @@ import playSlotTest from './PlaySlot.test';
 import playSlotRegistryTest from './PlaySlotRegistry.test';
 import backgroundBlurTest from './BackgroundBlur.test';
 import themeTest from './Theme.test';
+import patternTileGridTest from './PatternTileGrid.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -132,4 +133,5 @@ export default function testsuite() {
   markdownBlocksTest();
   backgroundBlurTest();
   themeTest();
+  patternTileGridTest();
 }

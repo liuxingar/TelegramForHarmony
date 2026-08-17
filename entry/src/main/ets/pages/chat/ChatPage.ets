@@ -46,7 +46,8 @@ import {
 } from '../../store/ChatBackgroundStore';
 import { gradientStops } from '../../util/backgroundPresentation';
 import {
-  BackgroundRasterParams, cachedRaster, rasterSignature, rasterizeBackground
+  BackgroundRasterParams, cachedRaster, patternTileGrid, patternTileGridLayer,
+  rasterSignature, rasterizeBackground
 } from '../../util/chatBackgroundRaster';
 import {
   chatHeaderPresentation, chatHeaderTitle, ChatHeaderPresentation
@@ -7695,16 +7696,23 @@ struct ChatPage {
         Column().width('100%').height('100%')
           .backgroundColor($r('app.color.chat_bg'));
       }
-      // A pattern is a motif sheet laid over the fill, not a photo: it has to
-      // keep its own proportions (Contain), while a wallpaper photo fills the
-      // surface and crops (Cover). Cropping a pattern is what read as "the
-      // background ratio is wrong" — together with the store handing over the
-      // picker-sized thumbnail, which it no longer does.
-      if (this.chatBg.path !== '') {
+      // A pattern document is a small repeatable motif, not a standalone
+      // photo: the official client tiles it edge-to-edge at a fixed density
+      // instead of fitting one instance to the screen (see
+      // patternTileGrid()'s comment in chatBackgroundRaster.ets — fitting one
+      // instance with Contain is what used to leave the screen's off-axis
+      // edges bare on devices wider than the pattern's own ratio, e.g.
+      // tablets). A wallpaper photo still fills the surface and crops
+      // (Cover).
+      if (this.chatBg.path !== '' && this.chatBg.isPattern) {
+        patternTileGridLayer(
+          this.chatBg.path, this.chatBg.imageOpacity,
+          patternTileGrid(this.screenW, this.screenH));
+      } else if (this.chatBg.path !== '') {
         Image(this.chatBg.path.startsWith('/')
           ? `file://${this.chatBg.path}` : this.chatBg.path).draggable(false)
           .width('100%').height('100%')
-          .objectFit(this.chatBg.isPattern ? ImageFit.Contain : ImageFit.Cover)
+          .objectFit(ImageFit.Cover)
           .opacity(this.chatBg.imageOpacity)
           // Blurring needs a little overscan or transparent edge pixels become
           // visible around the viewport.
@@ -7721,7 +7729,11 @@ struct ChatPage {
       }
     }
     .width('100%').height('100%')
-    .hitTestBehavior(HitTestMode.None);
+    .hitTestBehavior(HitTestMode.None)
+    // The tile grid rounds up to a whole number of tiles and is centered by
+    // the Stack's default alignment, so it typically overruns the viewport a
+    // little on every edge — clip it back instead of letting it push out.
+    .clip(true);
     }
   }
 

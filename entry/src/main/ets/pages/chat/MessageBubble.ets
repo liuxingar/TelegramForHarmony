@@ -1,4 +1,5 @@
 import { MessageEntry, ReactionInfo, InlineBtn } from '../../store/MessageEntry';
+import { PLAY_SLOT_ENTER_RATIO, PLAY_SLOT_KEEP_RATIO } from './playSlot';
 import { TdObject } from '../../tdkit/TdTypes';
 import { getAccentColorStore, getUserStore } from '../../tdkit/Globals';
 import { AvatarView } from '../chatlist/AvatarView';
@@ -178,6 +179,12 @@ export struct MessageBubble {
   @Prop audioHasPrevious: boolean = false;
   @Prop audioHasNext: boolean = false;
   onAutoplayVideoNeedDownload: (messageId: number) => void = (): void => {};
+  // 播放位竞选上报：可见比例变化 / 组件消失。albumIndex 为 -1 表示非相册整条消息，
+  // 相册格子用该格自己在 albumMemberIds 里的下标。回调由 ChatPage 接（见 playSlot.ets）。
+  onMediaRatio: (messageId: number, albumIndex: number, ratio: number, centerY: number) => void =
+    (_messageId: number, _albumIndex: number, _ratio: number, _centerY: number): void => {};
+  onMediaGone: (messageId: number, albumIndex: number) => void =
+    (_messageId: number, _albumIndex: number): void => {};
   onAnimationTap: (messageId: number, isPlaying: boolean) => void =
     (_messageId: number, _isPlaying: boolean): void => {};
   onAnimationPlaybackFailed: (messageId: number) => void = (): void => {};
@@ -242,9 +249,26 @@ export struct MessageBubble {
   @State mediaVisible: boolean = true;
   @State stickerPlaybackFailed: boolean = false;
   @State linkPreviewOpening: boolean = false;
+  // 播放位竞选用的中心 y（vp）。只在 onAreaChange 回调里写、onVisibleAreaApproximateChange
+  // 回调里读，不参与 build() —— 用普通字段而非 @State，避免每帧 onAreaChange 触发重建。
+  private mediaCenterY: number = 0;
+  // 相册九宫格每格各自的中心 y，key 为 cell.idx。同样是普通 Map，不驱动刷新。
+  private albumCellCenterY: Map<number, number> = new Map<number, number>();
 
   aboutToAppear(): void {
     this.requestAutoplayDownload();
+  }
+
+  aboutToDisappear(): void {
+    // LazyForEach 回收组件时若不上报，候选表里会留下永远不消失的幽灵条目。
+    if (this.msg.contentType === 'video' && !this.msg.isAnimation) {
+      this.onMediaGone(this.msg.id, -1);
+    }
+    for (let i = 0; i < this.albumIsVideo.length; i++) {
+      if (this.albumIsVideoAt(i)) {
+        this.onMediaGone(this.albumMemberIdAt(i), i);
+      }
+    }
   }
 
   // Everything this row shows has to be re-seeded here.
@@ -1202,6 +1226,24 @@ export struct MessageBubble {
               ? str('mb_album_item_video', cell.idx + 1)
               : ((this.albumFailed[cell.idx] ?? false)
                 ? str('mb_photo_failed') : str('mb_album_item', cell.idx + 1)))
+            .onVisibleAreaApproximateChange(
+              { ratios: [0.0, PLAY_SLOT_KEEP_RATIO, PLAY_SLOT_ENTER_RATIO, 0.9],
+                expectedUpdateInterval: 200 },
+              (_visible: boolean, ratio: number): void => {
+                if (!this.albumIsVideoAt(cell.idx)) {
+                  return; // 相册竞选只看这一格是不是视频，图片格不上报
+                }
+                const memberId = this.albumMemberIdAt(cell.idx);
+                if (ratio <= 0) {
+                  this.onMediaGone(memberId, cell.idx);
+                } else {
+                  this.onMediaRatio(memberId, cell.idx, ratio, this.albumCellCenterY.get(cell.idx) ?? 0);
+                }
+              })
+            .onAreaChange((_old: Area, area: Area): void => {
+              this.albumCellCenterY.set(cell.idx,
+                (area.globalPosition.y as number) + (area.height as number) / 2);
+            })
             .onClick((e: ClickEvent) => {
               // Same as the single-media case: a failed cell offers retry.
               if (this.albumCellRetryable(cell.idx)) {
@@ -1610,14 +1652,31 @@ export struct MessageBubble {
       .accessibilityText(this.msg.contentType === 'video'
         ? this.videoAccessibilityText()
         : (this.msg.photoFailed ? str('mb_photo_failed') : str('mb_open_photo')))
-      .onVisibleAreaChange([0.0, 0.08], (visible: boolean, ratio: number): void => {
-        const nextVisible = visible && ratio > 0.02;
-        if (this.mediaVisible !== nextVisible) {
-          this.mediaVisible = nextVisible;
-          if (nextVisible) {
-            this.requestAutoplayDownload();
+      // onVisibleAreaChange 每帧都要重新计算可见比例，聊天列表里挂几十个媒体节点会
+      // 明显拖累功耗（HarmonyOS 文档已载明这点）；onVisibleAreaApproximateChange 按
+      // expectedUpdateInterval 限频上报，正是为这种「列表里大量媒体节点」的场景加的。
+      .onVisibleAreaApproximateChange(
+        { ratios: [0.0, 0.08, PLAY_SLOT_KEEP_RATIO, PLAY_SLOT_ENTER_RATIO, 0.9],
+          expectedUpdateInterval: 200 },
+        (visible: boolean, ratio: number): void => {
+          const nextVisible = visible && ratio > 0.02;
+          if (this.mediaVisible !== nextVisible) {
+            this.mediaVisible = nextVisible;
+            if (nextVisible) {
+              this.requestAutoplayDownload();
+            }
           }
-        }
+          if (this.msg.contentType !== 'video' || this.msg.isAnimation) {
+            return; // 只有普通视频参与播放位竞选：GIF/动图仍走整文件循环播放
+          }
+          if (ratio <= 0) {
+            this.onMediaGone(this.msg.id, -1);
+          } else {
+            this.onMediaRatio(this.msg.id, -1, ratio, this.mediaCenterY);
+          }
+        })
+      .onAreaChange((_old: Area, area: Area): void => {
+        this.mediaCenterY = (area.globalPosition.y as number) + (area.height as number) / 2;
       })
       .onClick((e: ClickEvent) => {
         // When the media shows a retry control, the tap has to retry. It used

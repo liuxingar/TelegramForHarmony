@@ -10859,6 +10859,118 @@
     {
       "name": "cl_my_story",
       "value": "قصتي"
+    },
+    {
+      "name": "ms_cache_title",
+      "value": "ذاكرة التخزين المؤقت"
+    },
+    {
+      "name": "ms_cache_limit",
+      "value": "حد ذاكرة التخزين المؤقت"
+    },
+    {
+      "name": "ms_cache_limit_sub",
+      "value": "عند تجاوز الحد، يتم حذف الوسائط الأقل استخدامًا مؤخرًا تلقائيًا"
+    },
+    {
+      "name": "ms_cache_unlimited",
+      "value": "غير محدود"
+    },
+    {
+      "name": "ms_autoplay_muted",
+      "value": "تشغيل صامت"
+    },
+    {
+      "name": "settings_media",
+      "value": "الوسائط"
+    },
+    {
+      "name": "settings_media_sub",
+      "value": "التشغيل التلقائي والتشغيل في الخلفية"
+    },
+    {
+      "name": "ms_autoplay_group",
+      "value": "التشغيل التلقائي"
+    },
+    {
+      "name": "cb_blur_amount",
+      "value": "درجة الضبابية"
+    },
+    {
+      "name": "meow_mode_custom",
+      "value": "WebPush مخصص"
+    },
+    {
+      "name": "meow_mode_meow",
+      "value": "MeoW"
+    },
+    {
+      "name": "meow_nickname_label",
+      "value": "اسم مستخدم MeoW"
+    },
+    {
+      "name": "meow_nickname_hint",
+      "value": "أدخل اسم مستخدم MeoW الخاص بك"
+    },
+    {
+      "name": "meow_register",
+      "value": "تسجيل"
+    },
+    {
+      "name": "meow_privacy_note",
+      "value": "في هذا الوضع، يحتفظ الخادم الوسيط بمفتاح فك التشفير ويمكنه رؤية المرسل وملخص كل رسالة. استخدمه فقط إذا كنت تثق بهذا الخادم."
+    },
+    {
+      "name": "meow_nickname_required",
+      "value": "أدخل اسم مستخدم MeoW"
+    },
+    {
+      "name": "meow_bad_response",
+      "value": "أعاد الخادم الوسيط بيانات غير مكتملة. يرجى المحاولة لاحقًا."
+    },
+    {
+      "name": "meow_network_error",
+      "value": "فشل طلب الشبكة. تحقق من اتصالك وحاول مرة أخرى."
+    },
+    {
+      "name": "meow_http_error",
+      "value": "أعاد الخادم الوسيط خطأ: %1$s"
+    },
+    {
+      "name": "meow_relay_unconfigured",
+      "value": "لا يحتوي هذا الإصدار على عنوان خادم وسيط للإشعارات"
+    },
+    {
+      "name": "meow_deregister_relay_failed",
+      "value": "فشل الخادم الوسيط في إلغاء الاشتراك (توقف التسليم المحلي بالفعل): %1$s"
+    },
+    {
+      "name": "meow_request_code",
+      "value": "الحصول على رمز التحقق"
+    },
+    {
+      "name": "meow_code_label",
+      "value": "رمز التحقق"
+    },
+    {
+      "name": "meow_code_hint",
+      "value": "أدخل الرمز الذي استلمته"
+    },
+    {
+      "name": "meow_code_sent",
+      "value": "تم إرسال رمز التحقق إلى MeoW الخاص بك. تحقق منه ثم أدخله أدناه."
+    },
+    {
+      "name": "meow_confirm",
+      "value": "إنهاء التسجيل"
+    },
+    {
+      "name": "meow_code_required",
+      "value": "أدخل رمز التحقق"
+    },
+    {
+      "name": "meow_code_invalid",
+      "value": "الرمز غير صحيح أو منتهي الصلاحية. اطلب رمزًا جديدًا."
     }
   ]
 }

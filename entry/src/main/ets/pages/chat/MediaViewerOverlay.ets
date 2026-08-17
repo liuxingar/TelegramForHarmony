@@ -6,10 +6,11 @@ import { formatTime } from '../../util/formatTime';
 import { StreamingVideoPlayer } from './StreamingVideoPlayer';
 import { setMediaViewerOrientation } from './LiveViewerUi';
 import {
-  KEY_POWER_EFFECT_BLUR, KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration
+  KEY_CURRENT_NETWORK_TYPE, KEY_POWER_EFFECT_BLUR, KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration
 } from '../../store/AppSettings';
 import { str } from '../../util/strings';
 import { LANGUAGE_EPOCH } from '../../util/appLanguage';
+import { MediaContext, shouldPrefetchNeighbour } from '../../store/MediaPolicy';
 
 const VIEWER_CHROME_BG: string = '#6e3e3e40';
 const VIEWER_MIN_SCALE: number = 1;
@@ -55,6 +56,12 @@ export struct MediaViewerOverlay {
 
   // Set once at construction by the page (index of the tapped album member).
   initIdx: number = 0;
+  // Bubble→viewer handoff: the play position the page had recorded for the
+  // tapped message (see ChatPage.bubblePositionMs), read once here just like
+  // initIdx. Only applies to that one message — a different album member
+  // reached by swiping starts at 0, since it never had a bubble play slot in
+  // this session.
+  initStartPositionMs: number = 0;
   store: MessageStore | null = null;
   chatTitle: string = '';
   @Prop nowSec: number = 0;
@@ -64,6 +71,14 @@ export struct MediaViewerOverlay {
   isVideoEntry: (entry: MessageEntry) => boolean = (): boolean => false;
   onRequestClose: () => void = (): void => {};
   onSaveMedia: () => void = (): void => {};
+  // Viewer→bubble handoff (the other direction): the page samples this on
+  // every tick and writes it back to bubblePositionMs when the viewer closes.
+  // 350ms-ish cadence from StreamingVideoPlayer, same "plain field, no @State"
+  // reasoning as the bubble side.
+  onPositionChanged: (positionMs: number) => void = (_positionMs: number): void => {};
+  // Captured once in aboutToAppear: which message initStartPositionMs belongs
+  // to, since viewerMsgId itself moves as the user swipes.
+  private initialViewerMsgId: number = 0;
 
   @State pageIdx: number = 0;
   // Landscape stays two-way with the page: its onBackPress must be able to see
@@ -99,12 +114,55 @@ export struct MediaViewerOverlay {
 
   aboutToAppear(): void {
     this.pageIdx = this.initIdx;
+    this.initialViewerMsgId = this.viewerMsgId;
+    this.prefetchNeighbours(this.pageIdx);
   }
 
   // Leaving the viewer in landscape would strand the chat page sideways.
   aboutToDisappear(): void {
     if (this.videoLandscape) {
       setMediaViewerOrientation(getContext(this) as common.UIAbilityContext, false);
+    }
+  }
+
+  private networkMetered(): boolean {
+    const type: string = AppStorage.get<string>(KEY_CURRENT_NETWORK_TYPE) ?? 'other';
+    return type === 'mobile' || type === 'roaming';
+  }
+
+  // Prefetches the left/right neighbours' full-resolution photos so paging
+  // to them lands already-sharp. Gated by the shared media policy: off on
+  // metered networks. Videos/GIFs are never prefetched — requestFullPhoto
+  // only ever fetches photoFullFileId, so this filter just avoids wasted
+  // lookups for entries that can't have one.
+  private prefetchNeighbours(index: number): void {
+    if (this.store === null) {
+      return;
+    }
+    const ctx: MediaContext = {
+      inWindow: true,
+      isPlaySlot: false,
+      viewerOpen: true,
+      autoplayEnabled: true,
+      powerSaving: false,
+      networkMetered: this.networkMetered(),
+      // shouldPrefetchNeighbour 不看这个字段，查看器语境下填 false 即可。
+      reduceAnimations: false
+    };
+    if (!shouldPrefetchNeighbour(ctx)) {
+      return;
+    }
+    const ids: number[] = this.siblingIds();
+    const neighbourIndexes: number[] = [index - 1, index + 1];
+    for (const i of neighbourIndexes) {
+      if (i < 0 || i >= ids.length) {
+        continue;
+      }
+      const id: number = ids[i];
+      if (this.siblingIsVideo(id)) {
+        continue;
+      }
+      this.store.requestFullPhoto(id, false, false);
     }
   }
 
@@ -415,6 +473,7 @@ export struct MediaViewerOverlay {
     if (this.store !== null && !this.siblingIsVideo(id)) {
       this.store.requestFullPhoto(id);
     }
+    this.prefetchNeighbours(index);
   }
 
   private isVideo(): boolean {
@@ -548,6 +607,10 @@ export struct MediaViewerOverlay {
                 posterPath: this.siblingPath(id),
                 showControls: this.chromeVisible,
                 landscape: this.videoLandscape,
+                // 全屏就该有声音，不受气泡自动播放静音开关影响。
+                muted: false,
+                startPositionMs: id === this.initialViewerMsgId ? this.initStartPositionMs : 0,
+                onPositionChanged: (positionMs: number): void => { this.onPositionChanged(positionMs); },
                 onBackgroundTap: () => { this.toggleChrome(); },
                 onSwipeNext: () => { this.switchViewer(1); },
                 onSwipePrev: () => { this.switchViewer(-1); },

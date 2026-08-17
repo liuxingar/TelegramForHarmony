@@ -59,6 +59,43 @@ function videoMessage(id: number, chatId: number, fileId: number, thumbId: numbe
   m['content'] = content;
   return m;
 }
+function photoMessage(id: number, chatId: number, thumbId: number, fullId: number): TdObject {
+  const smallFile: TdObject = { '@type': 'file' };
+  smallFile['id'] = thumbId - 1;
+  smallFile['size'] = 5000;
+  const smallSize: TdObject = { '@type': 'photoSize' };
+  smallSize['type'] = 's';
+  smallSize['photo'] = smallFile;
+  smallSize['width'] = 200;
+  smallSize['height'] = 200;
+  const midFile: TdObject = { '@type': 'file' };
+  midFile['id'] = thumbId;
+  midFile['size'] = 30000;
+  const midSize: TdObject = { '@type': 'photoSize' };
+  midSize['type'] = 'm';
+  midSize['photo'] = midFile;
+  midSize['width'] = 900;
+  midSize['height'] = 900;
+  const fullFile: TdObject = { '@type': 'file' };
+  fullFile['id'] = fullId;
+  fullFile['size'] = 200000;
+  const fullSize: TdObject = { '@type': 'photoSize' };
+  fullSize['type'] = 'x';
+  fullSize['photo'] = fullFile;
+  fullSize['width'] = 1600;
+  fullSize['height'] = 1600;
+  const photo: TdObject = { '@type': 'photo' };
+  photo['sizes'] = [smallSize, midSize, fullSize];
+  const content: TdObject = { '@type': 'messagePhoto' };
+  content['photo'] = photo;
+  const m: TdObject = { '@type': 'message' };
+  m['id'] = id;
+  m['chat_id'] = chatId;
+  m['is_outgoing'] = false;
+  m['date'] = 100;
+  m['content'] = content;
+  return m;
+}
 function animationMessage(id: number, chatId: number, fileId: number, thumbId: number): TdObject {
   const source: TdObject = { '@type': 'file' };
   source['id'] = fileId;
@@ -966,6 +1003,49 @@ export default function messageStoreTest() {
       expect(file['@type']).assertEqual('inputFileLocal');
       expect(file['path'] as string).assertEqual('/cache/videonote_1.mp4');
       expect(req!['chat_id']).assertEqual(5);
+    });
+    it('live 到达的照片只下缩略图，不下高清', 0, () => {
+      const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
+      store.open();
+      pushNewMessage(b, photoMessage(87, 5, 951, 952));
+      const fullRequested = b.sent.some((json: string): boolean => {
+        const request = JSON.parse(json) as TdObject;
+        return request['@type'] === 'downloadFile' && request['file_id'] === 952;
+      });
+      expect(fullRequested).assertFalse();
+      const thumbRequested = b.sent.some((json: string): boolean => {
+        const request = JSON.parse(json) as TdObject;
+        return request['@type'] === 'downloadFile' && request['file_id'] === 951;
+      });
+      expect(thumbRequested).assertTrue();
+    });
+    // I-1 回归：窗口内有多张带 photoFullFileId 的照片同时到达时（模拟查看
+    // 器打开期间又收到新消息触发 requestPhotos 的场景），store 不该对任何
+    // 一张发起高清下载——高清下载完全交给查看器自己对当前图驱动。
+    it('窗口内多张照片同时在场，不对任何一张自动发起高清下载', 0, () => {
+      const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
+      store.open();
+      pushNewMessage(b, photoMessage(90, 5, 961, 962));
+      pushNewMessage(b, photoMessage(91, 5, 963, 964));
+      pushNewMessage(b, photoMessage(92, 5, 965, 966));
+      const fullIds = [962, 964, 966];
+      for (const fullId of fullIds) {
+        const fullRequested = b.sent.some((json: string): boolean => {
+          const request = JSON.parse(json) as TdObject;
+          return request['@type'] === 'downloadFile' && request['file_id'] === fullId;
+        });
+        expect(fullRequested).assertFalse();
+      }
+    });
+    it('live 到达的视频不再自动整文件下载', 0, () => {
+      const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;
+      store.open();
+      pushNewMessage(b, videoMessage(88, 5, 2002, 2003));
+      const videoDownloaded = b.sent.some((json: string): boolean => {
+        const request = JSON.parse(json) as TdObject;
+        return request['@type'] === 'downloadFile' && request['file_id'] === 2002;
+      });
+      expect(videoDownloaded).assertFalse();
     });
     it('close_unsubscribes', 0, () => {
       const arr = setup(5); const b = arr[0] as FakeBridge; const store = arr[1] as MessageStore;

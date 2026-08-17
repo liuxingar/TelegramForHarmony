@@ -10859,6 +10859,118 @@
     {
       "name": "cl_my_story",
       "value": "La mia storia"
+    },
+    {
+      "name": "ms_cache_title",
+      "value": "Cache"
+    },
+    {
+      "name": "ms_cache_limit",
+      "value": "Limite cache"
+    },
+    {
+      "name": "ms_cache_limit_sub",
+      "value": "I contenuti multimediali usati meno di recente vengono rimossi automaticamente al superamento del limite"
+    },
+    {
+      "name": "ms_cache_unlimited",
+      "value": "Illimitato"
+    },
+    {
+      "name": "ms_autoplay_muted",
+      "value": "Riproduci senza audio"
+    },
+    {
+      "name": "settings_media",
+      "value": "Media"
+    },
+    {
+      "name": "settings_media_sub",
+      "value": "Riproduzione automatica e in background"
+    },
+    {
+      "name": "ms_autoplay_group",
+      "value": "Riproduzione automatica"
+    },
+    {
+      "name": "cb_blur_amount",
+      "value": "Intensità sfocatura"
+    },
+    {
+      "name": "meow_mode_custom",
+      "value": "WebPush personalizzato"
+    },
+    {
+      "name": "meow_mode_meow",
+      "value": "MeoW"
+    },
+    {
+      "name": "meow_nickname_label",
+      "value": "Nome utente MeoW"
+    },
+    {
+      "name": "meow_nickname_hint",
+      "value": "Inserisci il tuo nome utente MeoW"
+    },
+    {
+      "name": "meow_register",
+      "value": "Registrati"
+    },
+    {
+      "name": "meow_privacy_note",
+      "value": "In questa modalità, il server relay detiene la chiave di decrittazione e può vedere il mittente e un riepilogo di ogni messaggio. Usalo solo se ti fidi di questo server."
+    },
+    {
+      "name": "meow_nickname_required",
+      "value": "Inserisci un nome utente MeoW"
+    },
+    {
+      "name": "meow_bad_response",
+      "value": "Il server relay ha restituito dati incompleti. Riprova più tardi."
+    },
+    {
+      "name": "meow_network_error",
+      "value": "Richiesta di rete non riuscita. Controlla la connessione e riprova."
+    },
+    {
+      "name": "meow_http_error",
+      "value": "Il server relay ha restituito un errore: %1$s"
+    },
+    {
+      "name": "meow_relay_unconfigured",
+      "value": "Questa build non ha un indirizzo relay push configurato"
+    },
+    {
+      "name": "meow_deregister_relay_failed",
+      "value": "Il server relay non è riuscito ad annullare l'iscrizione (la consegna locale è già stata interrotta): %1$s"
+    },
+    {
+      "name": "meow_request_code",
+      "value": "Richiedi codice di verifica"
+    },
+    {
+      "name": "meow_code_label",
+      "value": "Codice di verifica"
+    },
+    {
+      "name": "meow_code_hint",
+      "value": "Inserisci il codice ricevuto"
+    },
+    {
+      "name": "meow_code_sent",
+      "value": "Un codice di verifica è stato inviato al tuo MeoW. Controllalo e inseriscilo qui sotto."
+    },
+    {
+      "name": "meow_confirm",
+      "value": "Completa la registrazione"
+    },
+    {
+      "name": "meow_code_required",
+      "value": "Inserisci il codice di verifica"
+    },
+    {
+      "name": "meow_code_invalid",
+      "value": "Il codice è errato o scaduto. Richiedine uno nuovo."
     }
   ]
 }

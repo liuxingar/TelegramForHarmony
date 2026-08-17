@@ -10859,6 +10859,118 @@
     {
       "name": "cl_my_story",
       "value": "Minha história"
+    },
+    {
+      "name": "ms_cache_title",
+      "value": "Cache"
+    },
+    {
+      "name": "ms_cache_limit",
+      "value": "Limite de cache"
+    },
+    {
+      "name": "ms_cache_limit_sub",
+      "value": "A mídia usada há mais tempo é removida automaticamente quando o limite é excedido"
+    },
+    {
+      "name": "ms_cache_unlimited",
+      "value": "Ilimitado"
+    },
+    {
+      "name": "ms_autoplay_muted",
+      "value": "Reproduzir sem som"
+    },
+    {
+      "name": "settings_media",
+      "value": "Mídia"
+    },
+    {
+      "name": "settings_media_sub",
+      "value": "Reprodução automática e em segundo plano"
+    },
+    {
+      "name": "ms_autoplay_group",
+      "value": "Reprodução automática"
+    },
+    {
+      "name": "cb_blur_amount",
+      "value": "Quantidade de desfoque"
+    },
+    {
+      "name": "meow_mode_custom",
+      "value": "WebPush personalizado"
+    },
+    {
+      "name": "meow_mode_meow",
+      "value": "MeoW"
+    },
+    {
+      "name": "meow_nickname_label",
+      "value": "Nome de usuário do MeoW"
+    },
+    {
+      "name": "meow_nickname_hint",
+      "value": "Digite seu nome de usuário do MeoW"
+    },
+    {
+      "name": "meow_register",
+      "value": "Registrar"
+    },
+    {
+      "name": "meow_privacy_note",
+      "value": "Neste modo, o servidor de retransmissão mantém a chave de descriptografia e pode ver o remetente e um resumo de cada mensagem. Use apenas se confiar nesse servidor."
+    },
+    {
+      "name": "meow_nickname_required",
+      "value": "Digite um nome de usuário do MeoW"
+    },
+    {
+      "name": "meow_bad_response",
+      "value": "O servidor de retransmissão retornou dados incompletos. Tente novamente mais tarde."
+    },
+    {
+      "name": "meow_network_error",
+      "value": "Falha na solicitação de rede. Verifique sua conexão e tente novamente."
+    },
+    {
+      "name": "meow_http_error",
+      "value": "O servidor de retransmissão retornou um erro: %1$s"
+    },
+    {
+      "name": "meow_relay_unconfigured",
+      "value": "Esta compilação não tem um endereço de retransmissão de push configurado"
+    },
+    {
+      "name": "meow_deregister_relay_failed",
+      "value": "O servidor de retransmissão não conseguiu cancelar a inscrição (a entrega local já foi interrompida): %1$s"
+    },
+    {
+      "name": "meow_request_code",
+      "value": "Solicitar código de verificação"
+    },
+    {
+      "name": "meow_code_label",
+      "value": "Código de verificação"
+    },
+    {
+      "name": "meow_code_hint",
+      "value": "Digite o código recebido"
+    },
+    {
+      "name": "meow_code_sent",
+      "value": "Um código de verificação foi enviado ao seu MeoW. Verifique e digite-o abaixo."
+    },
+    {
+      "name": "meow_confirm",
+      "value": "Concluir registro"
+    },
+    {
+      "name": "meow_code_required",
+      "value": "Digite o código de verificação"
+    },
+    {
+      "name": "meow_code_invalid",
+      "value": "O código está incorreto ou expirou. Solicite um novo."
     }
   ]
 }

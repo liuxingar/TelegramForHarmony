@@ -34,6 +34,8 @@ import { MessageEntry, buildMessageEntry } from '../../store/MessageEntry';
 import { ReplyKeyboard, KeyboardBtn, KB_TEXT } from '../../store/ReplyKeyboard';
 import { ChatEntry, computeInitials, isMutedFrom } from '../../store/ChatEntry';
 import { MessageBubble } from './MessageBubble';
+import { PlaySlotRegistry } from './PlaySlotRegistry';
+import { shouldCompete, slotKeyMessageId } from './playSlot';
 import { MediaViewerOverlay } from './MediaViewerOverlay';
 import { ForwardSheet } from './ForwardSheet';
 import { ScheduledSheet } from './ScheduledSheet';
@@ -44,7 +46,8 @@ import {
 } from '../../store/ChatBackgroundStore';
 import { gradientStops } from '../../util/backgroundPresentation';
 import {
-  BackgroundRasterParams, cachedRaster, rasterSignature, rasterizeBackground
+  BackgroundRasterParams, backgroundBlurRadius, cachedRaster, patternTileGrid,
+  patternTileGridLayer, rasterSignature, rasterizeBackground
 } from '../../util/chatBackgroundRaster';
 import {
   chatHeaderPresentation, chatHeaderTitle, ChatHeaderPresentation
@@ -52,6 +55,7 @@ import {
 import { MusicQueue } from '../../services/MusicQueue';
 import { VoiceState } from '../../services/VoicePlayback';
 import { setMediaViewerOrientation } from './LiveViewerUi';
+import { actionMenuRow } from './ActionMenuRow';
 import { AlbumGroupDataSource, contentFingerprint, DataSourceUpdateKind } from './AlbumGroupDataSource';
 import { BasicPrefetcher } from '@kit.ArkUI';
 import { guardKey } from '../../util/keyGuard';
@@ -62,7 +66,9 @@ import {
   KEY_POWER_ACTIVE, KEY_POWER_CHAT_EFFECTS, KEY_POWER_EMOJI, KEY_POWER_EMOJI_REACTIONS,
   KEY_POWER_EFFECT_BACKGROUND, KEY_POWER_EFFECT_BLUR, KEY_POWER_EFFECT_MENU,
   KEY_POWER_EFFECT_REACTION, KEY_POWER_EFFECT_REPLY, KEY_POWER_PARTICLES,
-  KEY_POWER_SMOOTH_TRANSITIONS, KEY_REDUCE_ANIM, KEY_SEND_BY_ENTER, KEY_TRANSLATE_CHATS,
+  KEY_POWER_SMOOTH_TRANSITIONS, KEY_POWER_AUTOPLAY_VIDEO,
+  KEY_REDUCE_ANIM, KEY_SEND_BY_ENTER, KEY_TRANSLATE_CHATS,
+  KEY_AUTOPLAY_MUTED, KEY_BG_BLUR, BG_BLUR_DEFAULT,
   powerAnimationDuration,
   powerFeatureEnabled, powerGroupAnimationDuration, powerGroupFeatureEnabled, autosaveEnabled,
   translateOptedOut, setTranslateOptedOut
@@ -71,7 +77,9 @@ import {
   getTranslationService, languageDisplayName, looksLikeTargetLanguage, resolveTranslateTarget,
   TRANSLATE_LANG_CODES
 } from '../../services/TranslationService';
-import { COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY, botButtonBg } from '../../util/theme';
+import {
+  COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY, botButtonBg, darkResourceMode
+} from '../../util/theme';
 import {
   normalizeTelegramLink, bareUsernameOf, inviteLinkOf, chatLinkActionOf,
   chatFolderInviteLinkOf, stickerSetLinkOf
@@ -85,7 +93,10 @@ import {
 } from '../../util/reactions';
 import { openWebUrl } from '../../util/webBrowserNav';
 import { TdObject, TdRequest, TdError } from '../../tdkit/TdTypes';
-import { searchMentions, loadBotCommands, MentionItem, CommandItem } from '../../store/InputSuggestions';
+import {
+  searchMentions, mentionOfUser, loadBotCommands, MentionItem, CommandItem
+} from '../../store/InputSuggestions';
+import { appendMention, mentionToken } from '../../util/mentionDraft';
 import { floatingLiveWindow } from './LiveFloatingWindow';
 import { MUTE_LONG, setMute } from '../../store/ChatActions';
 import { liveLocation, LiveLocationState } from '../../services/LiveLocationService';
@@ -255,13 +266,19 @@ struct ChatPage {
   @StorageProp(KEY_SEND_BY_ENTER) sendByEnter: boolean = false;
   @StorageProp('screenWidthVp') screenW: number = 360;
   @StorageProp('screenHeightVp') screenH: number = 780;
-  @StorageProp(KEY_POWER_ACTIVE) powerSaving: boolean = false;
+  @StorageProp(KEY_POWER_ACTIVE) @Watch('onAutoplayPolicyChanged') powerSaving: boolean = false;
   @StorageProp(KEY_POWER_CHAT_EFFECTS) powerChatEffects: boolean = true;
   @StorageProp(KEY_POWER_EFFECT_BACKGROUND) powerBackgroundEffect: boolean = false;
   @StorageProp(KEY_POWER_PARTICLES) powerParticles: boolean = true;
   @StorageProp(KEY_POWER_EMOJI) powerEmoji: boolean = true;
   @StorageProp(KEY_POWER_EMOJI_REACTIONS) powerEmojiReactions: boolean = true;
-  @StorageProp(KEY_REDUCE_ANIM) reduceAnimations: boolean = false;
+  @StorageProp(KEY_REDUCE_ANIM) @Watch('onAutoplayPolicyChanged') reduceAnimations: boolean = false;
+  // 「自动播放视频」开关。播放位竞选的总闸门之一，见 playSlotsEnabled()。
+  @StorageProp(KEY_POWER_AUTOPLAY_VIDEO) @Watch('onAutoplayPolicyChanged')
+  autoplayVideo: boolean = true;
+  // 聊天背景设置页的「模糊度」滑块（KEY_BG_BLUR）。拖动时要立即重算离屏合成图，
+  // 否则拖完滑块背景看起来没反应（命中旧签名的缓存图）。
+  @StorageProp(KEY_BG_BLUR) @Watch('onBgBlurChanged') bgBlur: number = BG_BLUR_DEFAULT;
   @State powerBackgroundPhase: boolean = false;
   // TDLib per-chat wallpaper. Solid/gradient fills render immediately;
   // wallpaper and pattern documents appear as soon as downloadFile completes.
@@ -301,7 +318,7 @@ struct ChatPage {
   private forwardMessageIds: number[] = [];
   @State nowSec: number = 0;
   private nowSecTimer: number = -1;
-  @State viewerMsgId: number = 0;
+  @State @Watch('onViewerTargetChanged') viewerMsgId: number = 0;
   @State chromeVisible: boolean = true;
   @State viewerVideoLandscape: boolean = false;
   @State viewerClosing: boolean = false;
@@ -377,6 +394,29 @@ struct ChatPage {
   private store: MessageStore | null = null;
   private scroller: Scroller = new Scroller();
   private didInitialScroll: boolean = false;
+  // 播放位竞选：滚动停下后选出唯一播放/下载的视频气泡（见 PlaySlotRegistry）。
+  private playSlots: PlaySlotRegistry = new PlaySlotRegistry();
+  private unsubPlaySlot: (() => void) | null = null;
+  @State playSlotKey: string = '';
+  // 新上位的播放位从哪一毫秒起播。换届时从 bubblePositionMs 查一次（见
+  // subscribe 回调），随 playSlotKey 一起下发给气泡——查看器交还的进度就是
+  // 靠这条路真正接到 VideoBubbleSurface.startPositionMs 上的。
+  @State playSlotStartMs: number = 0;
+  // 缓存设置 → 自动播放静音开关，唯一消费点：下发给气泡播放器的 muted。
+  @StorageProp(KEY_AUTOPLAY_MUTED) autoplayMuted: boolean = true;
+  // 气泡播放位的播放进度，按 messageId 记录。onPlaySlotPositionChanged 是
+  // 350ms 一次的高频回调，故意用普通 Map 而不是 @State/@Link/AppStorage——
+  // 写状态会让消息列表每 350ms 重建一次。打开全屏查看器时读它作为
+  // startPositionMs，关闭查看器时把最终进度写回。整个会话关闭时清空
+  // （见 aboutToDisappear），避免无界增长。
+  private bubblePositionMs: Map<number, number> = new Map<number, number>();
+  // 全屏查看器当前播放进度：只在查看器打开期间被 onPositionChanged 回调更新，
+  // 关闭时读一次写回 bubblePositionMs，同样是普通字段，不驱动渲染。
+  private viewerPositionMs: number = 0;
+  // 打开查看器那一刻从 bubblePositionMs 取到的起播位置，一次性字段，供
+  // MediaViewerOverlay 构造时读取（与 viewerInitIdx 同一模式）。
+  private viewerStartPositionMs: number = 0;
+  private slotTickTimer: number = -1;
   private lastMaxId: number = 0;
   @State atBottom: boolean = true;
   @State isMuted: boolean = false;
@@ -771,6 +811,12 @@ struct ChatPage {
     // the rows its operations touch, and it has to name them the same way the
     // LazyForEach key generator does.
     this.groupsData.setKeyBuilder(this.rowKeyOf);
+    this.unsubPlaySlot = this.playSlots.subscribe((key: string): void => {
+      // 起播位置必须在 playSlotKey 之前落下：气泡是靠 playSlotKey 的变化才
+      // 挂载 VideoBubbleSurface 的，晚一步这条播放器就已经从 0 开始了。
+      this.playSlotStartMs = key === '' ? 0 : (this.bubblePositionMs.get(slotKeyMessageId(key)) ?? 0);
+      this.playSlotKey = key;
+    });
     this.nowSec = Math.floor(Date.now() / 1000);
     const params = router.getParams() as Record<string, Object> | undefined;
     this.chatId = params !== undefined ? (params['chatId'] as number) : 0;
@@ -872,8 +918,19 @@ struct ChatPage {
     // store; the page only mirrors its snapshot into state.
     this.bgStore = new ChatBackgroundStore(
       getTdClient(), getChatStore(), getChatThemeStore(),
-      (): boolean => this.darkResourceMode()
+      (): boolean => darkResourceMode(getContext(this) as common.UIAbilityContext)
     );
+    // Seeds the store's state with the last known account-default background
+    // (captured process-wide by ChatBackgroundStore, warmed at app start by
+    // MainScreen's preload) BEFORE subscribe() below synchronously hands the
+    // listener the store's initial state. Without this, every freshly opened
+    // chat starts on emptyChatBackground() — colors.length === 0 — which
+    // paints the near-white chat_bg resource for however long the real
+    // resolution's TDLib round trip takes. Most chats resolve to the account
+    // default anyway, so this seed is usually the final answer, not a guess
+    // that gets thrown away; a chat with its own background still corrects
+    // itself as soon as refresh()/open() resolves it, same as before.
+    this.bgStore.seedFromDefault();
     this.unsubBg = this.bgStore.subscribe((state: ChatBackgroundState): void => {
       this.chatBg = state;
       this.syncBackgroundRaster();
@@ -1351,15 +1408,105 @@ struct ChatPage {
     });
   }
 
+  // 驻留判定是逐候选的，onVisibleAreaApproximateChange 只在跨阈值时触发——
+  // 一条视频稳稳停着反而不再有任何回调，所以判定不能只靠回调推动。这里用
+  // PlaySlotRegistry.nextCheckDelay() 查询"还有候选没攒满 PLAY_SLOT_DWELL_MS"，
+  // 有就排一个一次性定时器，到点再 tick() 一次；没有就什么也不做。
+  // scheduleSlotTick 只留一个在途定时器，重复调用安全。
+  private scheduleSlotTick(delayMs: number): void {
+    this.clearSlotTick();
+    this.slotTickTimer = setTimeout((): void => {
+      this.slotTickTimer = -1;
+      const now = Date.now();
+      this.playSlots.tick(now);
+      this.maybeScheduleNextSlotCheck(now);
+    }, delayMs + 10);
+  }
+
+  private clearSlotTick(): void {
+    if (this.slotTickTimer !== -1) {
+      clearTimeout(this.slotTickTimer);
+      this.slotTickTimer = -1;
+    }
+  }
+
+  // nextCheckDelay() < 0 表示没有候选正在攒驻留（要么无候选达标，要么都已
+  // 达标或已经是现任/被 pin），此时什么也不用排。
+  private maybeScheduleNextSlotCheck(now: number): void {
+    const delay = this.playSlots.nextCheckDelay(now);
+    if (delay >= 0) {
+      this.scheduleSlotTick(delay);
+    }
+  }
+
+  // 幂等的"补一次判定"：可以随便重复调用，不需要一次性 flag 挡着。立即跑
+  // 一次 tick（用于候选表在此刻已经攒够驻留、只是没有新的可见区回调触发
+  // 判定的情况，比如 onPageShow/closeViewer 这类没有新 ratio 上报的恢复路
+  // 径），再排一次后续检查。调用点见 driveVisibleWork()/onScrollIndex()/
+  // onPageShow()/closeViewer()——任何一次因为候选表还没填满（消息还没到、
+  // ratio 还没上报、被查看器盖住清空过）而选不出播放位，都会被下一次自然
+  // 发生的调用或已排的定时器补上，不会永久卡死。
+  //
+  // 守卫：查看器开着，或页面本身不可见时，直接不喂——List/气泡全程挂载，
+  // 这两种状态下即便候选表被后台悄悄填回来，也绝不能真的选出播放位去挂
+  // 播放器/拉下载（分别是 Critical-2 和 Important-3 的核心不变量）。
+  // closeViewer()/onPageShow() 这两条恢复路径都是先把状态改回"已关闭/
+  // 可见"再调这个方法，守卫在它们那次调用里天然放行。
+  private armPlaySlotSettle(): void {
+    if (this.viewerMsgId !== 0 || !this.pageVisible || !this.playSlotsEnabled()) {
+      return;
+    }
+    const now = Date.now();
+    // 恢复路径（closeViewer / onPageShow）走到这里时候选表还在（suspend()
+    // 保留了它），只是驻留计时被清了；resume() 按此刻重新起算，之后正常
+    // 攒满 PLAY_SLOT_DWELL_MS 就能自然选出播放位，不需要用户手动滑一下。
+    // 非恢复路径上 resume() 是空操作（见 PlaySlotRegistry.resume）。
+    this.playSlots.resume(now);
+    this.playSlots.tick(now);
+    this.maybeScheduleNextSlotCheck(now);
+  }
+
+  // 播放位竞选的总闸门：「自动播放视频」关掉、省电模式开启、减少动效开启，
+  // 三者任一成立就完全不竞选 —— 不挂播放器，更不发起任何分片下载。
+  // 判定本身是纯函数 shouldCompete()（见 playSlot.ets），这里只是把三个
+  // @StorageProp 喂给它。isAnimation 传 false：这是页面级闸门，动图本来就
+  // 不参加竞选，由 MessageBubble.isPlaySlot()/isAlbumCellPlaySlot() 兜底。
+  private playSlotsEnabled(): boolean {
+    return shouldCompete(this.autoplayVideo, this.powerSaving, this.reduceAnimations, false);
+  }
+
+  // 三个开关任一变化：关掉就立刻把正在播的那条停掉（reset() 会把播放位置空，
+  // 订阅者把 playSlotKey 清成 ''，气泡的 VideoBubbleSurface 随之卸载 →
+  // StreamingVideoPlayer.aboutToDisappear → release() → session.close()，
+  // 播放和下载一起停）；重新打开则补一次判定让它自然重新选出来。
+  private onAutoplayPolicyChanged(): void {
+    if (!this.playSlotsEnabled()) {
+      this.clearSlotTick();
+      this.playSlots.reset();
+      return;
+    }
+    this.armPlaySlotSettle();
+  }
+
   onPageHide(): void {
     console.info(`[ChatDiag] hide msgs=${this.messages.length} groups=${this.groups.length} ds=${this.groupsData.totalCount()}`);
     this.pageVisible = false;
     // 页面不可见时停表，回来时补一次即时值再续上。
     this.clearNowSecTimer();
+    // 切走（含被查看器等页面盖住）立刻停播放位——不能等 aboutToDisappear，
+    // 那要等到组件真被销毁才会跑，用户已经在别的页面上等了半天下载还在跑。
+    this.clearSlotTick();
+    this.playSlots.suspend();
   }
 
   onPageShow(): void {
     this.pageVisible = true;
+    // onPageHide 只 suspend() 了播放位：候选表还在，被清掉的是当前播放位和
+    // 驻留计时。回到这个页面时几何没变、onVisibleAreaApproximateChange 不会
+    // 再触发，候选表也就不会被重新灌满——保留候选正是为了这一刻还能选得出
+    // 来。armPlaySlotSettle() 里的 resume() 按此刻重新起算驻留，稳住 400ms
+    // 后自然选出播放位。
+    this.armPlaySlotSettle();
     // The list changed while this page was hidden. See hiddenListDirty: the
     // framework applies hidden-period notifications incompletely, so rebuild
     // its key table from the dataset before the user can see mismatched rows.
@@ -1384,6 +1531,15 @@ struct ChatPage {
     // 退出会话时播放器可能还开着（返回手势不走 closeViewer），为播放拉起的
     // 下载得在这里也停掉，否则回到列表页它还在后台跑。
     this.releasePlaybackRequests();
+    this.clearSlotTick();
+    this.playSlots.reset();
+    // 进度表只在这一次会话内有意义（交接回全屏查看器/回到播放位），会话
+    // 结束就清空，避免长会话里随刷屏无界增长。
+    this.bubblePositionMs.clear();
+    if (this.unsubPlaySlot !== null) {
+      this.unsubPlaySlot();
+      this.unsubPlaySlot = null;
+    }
     if (this.cachedCountTimer !== -1) {
       clearTimeout(this.cachedCountTimer);
       this.cachedCountTimer = -1;
@@ -2011,12 +2167,30 @@ struct ChatPage {
     }
   }
 
+  // 查看目标变了（打开、Swiper 左右滑到相册的另一条、胶片条跳转、关闭）：
+  // 进度必须从 0 重记。否则用户滑到下一条后 350ms 内（onPositionChanged 的
+  // 上报周期）就关掉查看器，closeViewer 会把上一条的进度写进新消息的
+  // bubblePositionMs，回到气泡就从一个莫名其妙的位置起播。
+  // closeViewer 在 animateTo 把 viewerMsgId 清零之前已经读走了进度，所以
+  // 关闭那一次的清零不会吃掉正确的值。
+  private onViewerTargetChanged(): void {
+    this.viewerPositionMs = 0;
+  }
+
   private closeViewer(): void {
     if (this.viewerMsgId === 0 || this.viewerClosing) {
       return;
     }
     this.releasePlaybackRequests();
     this.exitViewerLandscape();
+    // 交接:把查看器最终播放到的位置写回气泡进度表，并把这条 pin 成播放位——
+    // 用户刚看完的这条回到列表后应当继续播。取值/计算都要在 viewerMsgId 被
+    // animateTo 里的回调清零之前完成。
+    const viewerMessageId = this.viewerMsgId;
+    this.bubblePositionMs.set(viewerMessageId, this.viewerPositionMs);
+    // pin 是有时效的（PLAY_SLOT_PIN_TTL_MS）：只为「刚看完的这条回到列表后
+    // 接着播」服务，过期后它跟别的候选一样要重新攒够驻留才能当选。
+    this.playSlots.pin(viewerMessageId, this.albumIndexForViewer(viewerMessageId), Date.now());
     const duration: number = this.chatEffectDuration(KEY_POWER_EFFECT_BLUR, 260);
     this.viewerClosing = true;
     animateTo({ duration, curve: Curve.Friction }, () => {
@@ -2024,6 +2198,12 @@ struct ChatPage {
       this.viewerInitIdx = 0;
       this.chromeVisible = true;
     });
+    // 查看器关掉了，重新喂一次"已停止"把播放位判定跑起来。候选表这一刻
+    // 可能还是空的（open 时 reset() 清空过，且几何没变不会自然重新上报），
+    // 那就先选不出来——下一次真正的滚动/新消息到达会用同一个幂等方法再补
+    // 一次，不会永久卡住。pin() 记的目标在候选表补上之前一样选不出来，
+    // 是同一个幂等收敛，不需要额外处理。
+    this.armPlaySlotSettle();
     setTimeout((): void => { this.viewerClosing = false; }, Math.max(80, duration));
   }
 
@@ -2522,19 +2702,6 @@ struct ChatPage {
     this.liveCallIsRtmp = entry.isRtmpLive;
     this.liveLoadState = 'ready';
     this.settleTopCardLoading();
-  }
-
-  private darkResourceMode(): boolean {
-    try {
-      const color = (getContext(this) as common.UIAbilityContext)
-        .resourceManager.getColorSync($r('app.color.chat_bg'));
-      const red = (color >>> 16) & 0xFF;
-      const green = (color >>> 8) & 0xFF;
-      const blue = color & 0xFF;
-      return red * 0.299 + green * 0.587 + blue * 0.114 < 128;
-    } catch (_error) {
-      return false;
-    }
   }
 
   private refreshMembership(): void {
@@ -3102,6 +3269,19 @@ struct ChatPage {
     if (this.mediaEntryIsPhoto(m)) {
       this.store.requestFullPhoto(messageId);
     }
+    // 交接:取气泡播放位记录的进度，必须在 playSlots.suspend() 让气泡播放器
+    // 卸载之前完成——bubblePositionMs 本身不受 suspend() 影响，但卸载之后
+    // 气泡播放器不会再有新的 onPositionChanged，读早读晚不影响这一次的值；
+    // 保险起见仍然按“先取、后卸载”的顺序写。
+    this.viewerStartPositionMs = this.bubblePositionMs.get(messageId) ?? 0;
+    // 全屏查看器是页内叠层，不是新页面，不会触发 onPageHide——List 和气泡
+    // 照样挂着，onVisibleAreaApproximateChange 只算几何不算遮挡，ratio 不
+    // 变就不会自己释放播放位。不在这里主动停掉，播放位气泡的播放器会和
+    // 查看器自己的播放器同时跑、同一个文件还可能互抢下载分片。
+    // 用 suspend() 而不是 reset()：候选表要留着，否则关闭查看器后几何没变、
+    // 没有任何新的 ratio 上报，列表就再也选不出播放位（“哑掉”）。
+    this.clearSlotTick();
+    this.playSlots.suspend();
     // Position the viewer Swiper on the tapped album member.
     const sib = this.siblingIdsFor(messageId);
     this.viewerInitIdx = Math.max(0, sib.indexOf(messageId));
@@ -3120,6 +3300,14 @@ struct ChatPage {
       }
     }
     return [messageId];
+  }
+
+  // playSlot 的 albumIndex 语义：整条消息传 -1，相册成员传该格在 memberIds
+  // 里的下标。查看器交接（closeViewer 里的 pin）用这个把 viewerMsgId 换算
+  // 回同一套坐标。
+  private albumIndexForViewer(messageId: number): number {
+    const sib = this.siblingIdsFor(messageId);
+    return sib.length > 1 ? sib.indexOf(messageId) : -1;
   }
 
   private onLanguageEpochChanged(): void {
@@ -3709,10 +3897,25 @@ struct ChatPage {
   private pickMention(item: MentionItem): void {
     const idx = this.draft.lastIndexOf('@');
     const head = idx >= 0 ? this.draft.substring(0, idx) : this.draft;
-    const token = item.username !== '' ? `@${item.username}` : item.name;
-    this.draft = `${head}${token} `;
+    this.draft = `${head}${mentionToken(item.name, item.username)} `;
     this.mentionItems = [];
     setTimeout((): void => { focusControl.requestFocus('chat_composer'); }, 0);
+  }
+
+  // Long press on a group message avatar → append that sender's mention to the
+  // draft. The message entry has the sender's name but not their username, so
+  // the username is fetched here; the name is the fallback if it has none.
+  private mentionSender(userId: number, fallbackName: string): void {
+    mentionOfUser(getTdClient(), userId).then((item: MentionItem): void => {
+      const name = item.name !== '' ? item.name : fallbackName;
+      const token = mentionToken(name, item.username);
+      if (token === '') {
+        return;
+      }
+      this.draft = appendMention(this.draft, token);
+      this.mentionItems = [];
+      setTimeout((): void => { focusControl.requestFocus('chat_composer'); }, 0);
+    });
   }
 
   private pickCommand(item: CommandItem): void {
@@ -4045,68 +4248,57 @@ struct ChatPage {
     });
   }
 
-  @Builder
-  headerMenuRow(symbol: string, label: string, danger: boolean, onTap: () => void) {
-    Row({ space: 10 }) {
-      SymbolGlyph($r(symbol)).fontSize(18)
-        .fontColor([danger ? '#FF3B30' : COLOR_TEXT_PRIMARY]);
-      Text(label).fontSize(15).fontColor(danger ? '#FF3B30' : COLOR_TEXT_PRIMARY);
-    }
-    .width('100%').padding({ left: 14, right: 14, top: 11, bottom: 11 })
-    .alignItems(VerticalAlign.Center)
-    .stateStyles({
-      normal: this.headerMenuRowNormalStyle,
-      pressed: this.headerMenuRowPressedStyle
-    })
-    .animation({
-      duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 100),
-      curve: Curve.EaseOut
-    })
-    .onClick(() => {
+  // actionMenuRow's onTap fires directly on click; the header dropdown also
+  // needs to close itself first (unlike the bubble menu, whose bindContextMenu
+  // host closes on its own), so every row action is wrapped through here.
+  private closeHeaderMenuThen(action: () => void): () => void {
+    return (): void => {
       this.headerMenuShow = false;
-      onTap();
-    });
+      action();
+    };
   }
 
   @Builder
   headerMenu() {
     Column() {
-      this.headerMenuRow('sys.symbol.magnifyingglass', str('cp_search'), false, () => { this.enterSearch(); });
+      actionMenuRow('sys.symbol.magnifyingglass', str('cp_search'), false,
+        this.closeHeaderMenuThen((): void => { this.enterSearch(); }));
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
-      this.headerMenuRow('sys.symbol.info_circle', str('cp_profile'), false, () => { this.openProfile(); });
+      actionMenuRow('sys.symbol.info_circle', str('cp_profile'), false,
+        this.closeHeaderMenuThen((): void => { this.openProfile(); }));
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
-      this.headerMenuRow(this.isMuted ? 'sys.symbol.bell' : 'sys.symbol.bell_slash',
+      actionMenuRow(this.isMuted ? 'sys.symbol.bell' : 'sys.symbol.bell_slash',
         this.headerMuteUpdating ? str('cp_updating_notifications') : (this.isMuted ? str('cp_unmute') : str('cp_mute')),
-        false, () => { this.toggleChatMute(); });
+        false, this.closeHeaderMenuThen((): void => { this.toggleChatMute(); }));
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
-      this.headerMenuRow('sys.symbol.clock', str('cp_auto_delete'), false, () => { this.chooseAutoDelete(); });
+      actionMenuRow('sys.symbol.clock', str('cp_auto_delete'), false,
+        this.closeHeaderMenuThen((): void => { this.chooseAutoDelete(); }));
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
-      this.headerMenuRow('sys.symbol.calendar', str('sched_title'), false, () => { this.openScheduledSheet(); });
-      this.headerMenuRow('sys.symbol.calendar_badge_clock', str('cp_jump_to_date'), false,
-        () => { this.pickJumpDate(); });
+      actionMenuRow('sys.symbol.calendar', str('sched_title'), false,
+        this.closeHeaderMenuThen((): void => { this.openScheduledSheet(); }));
+      actionMenuRow('sys.symbol.calendar_badge_clock', str('cp_jump_to_date'), false,
+        this.closeHeaderMenuThen((): void => { this.pickJumpDate(); }));
       if (this.liveLocationActive) {
-        this.headerMenuRow('sys.symbol.stop_circle', str('cp_stop_location'), true,
-          () => { this.confirmStopLiveLocation(); });
+        actionMenuRow('sys.symbol.stop_circle', str('cp_stop_location'), true,
+          this.closeHeaderMenuThen((): void => { this.confirmStopLiveLocation(); }));
       }
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
       // 总开关开着时这个会话默认就在翻，所以这一项显示「关闭翻译」；总开关
       // 关着时它就是"只翻这个会话"的入口。单条消息的翻译不受这里影响。
-      this.headerMenuRow('sys.symbol.translate',
+      actionMenuRow('sys.symbol.translate',
         this.translationActive() ? str('cp_translate_chat_off') : str('cp_translate_chat_on'),
-        false, () => { this.toggleTranslatable(); });
-      this.headerMenuRow('sys.symbol.xmark_circle', str('cp_clear_history'), false, () => { this.confirmClearHistory(); });
+        false, this.closeHeaderMenuThen((): void => { this.toggleTranslatable(); }));
+      actionMenuRow('sys.symbol.xmark_circle', str('cp_clear_history'), false,
+        this.closeHeaderMenuThen((): void => { this.confirmClearHistory(); }));
       if (this.isGroup && this.membershipState === 'writable') {
         Divider().color($r('app.color.divider')).strokeWidth(0.7);
-        this.headerMenuRow('sys.symbol.trash', this.isChannel ? str('cp_leave_channel') : str('cp_leave_group'), true,
-          () => { this.confirmLeaveChat(); });
+        actionMenuRow('sys.symbol.trash', this.isChannel ? str('cp_leave_channel') : str('cp_leave_group'), true,
+          this.closeHeaderMenuThen((): void => { this.confirmLeaveChat(); }));
       }
     }
-    .width(200)
-    .backgroundColor($r('app.color.surface'))
-    .borderRadius(14)
-    .shadow({ radius: 10, color: '#26000000', offsetX: 0, offsetY: 4 })
-    .clip(true);
+    .width(262)
+    .padding({ top: 6, bottom: 6 });
   }
 
   // Horizontal center (vp, window coords) of the smiley button — the anchor
@@ -4992,6 +5184,23 @@ struct ChatPage {
     this.deleteDialog.open();
   }
 
+  // 长按菜单里的单条删除：复用 deleteSelected() 的弹窗逻辑，只是目标 id 只有一个。
+  // 不处于多选模式时 doDeleteMessages 内部的 exitSelect() 只是把已经为 false/[]
+  // 的 selecting/selectedIds 再赋一次同样的值，是无害的空操作。
+  private deleteMessage(messageId: number): void {
+    const ids: number[] = [messageId];
+    this.deleteDialog = new CustomDialogController({
+      builder: DeleteMessagesDialog({
+        peerName: this.isGroup || this.isChannel ? '' : this.headerText().titleText,
+        onConfirm: (revoke: boolean): void => { this.doDeleteMessages(ids, revoke); }
+      }),
+      autoCancel: true,
+      customStyle: true,
+      alignment: DialogAlignment.Center
+    });
+    this.deleteDialog.open();
+  }
+
   private doDeleteMessages(ids: number[], revoke: boolean): void {
     const req: TdRequest = { '@type': 'deleteMessages' };
     req['chat_id'] = this.chatId;
@@ -5200,6 +5409,9 @@ struct ChatPage {
     const end: number = hasViewport ? this.curEndIdx : this.groups.length - 1;
     this.driveTranslations(start, end);
     this.syncMediaWindow(start, end);
+    // 同一个道理：数据一变（新消息到达、翻页、被查看器等场景清空候选表后
+    // 恢复）就补一次播放位判定，不指望用户正好在这一刻滚动。
+    this.armPlaySlotSettle();
   }
 
   // 把可见行区间换算成消息 id 区间交给 store。外扩几行做缓冲，滑动时不会
@@ -6396,7 +6608,9 @@ struct ChatPage {
     });
   }
 
-  // Edit strip above the input bar: pencil accent + original excerpt + ✕.
+  // Edit strip: pencil accent + original excerpt + ✕. Sits inside the same
+  // rounded card as the input row (no own background/border/divider) so the
+  // composer reads as one continuous surface.
   @Builder
   editPreview() {
     Row({ space: 10 }) {
@@ -6415,18 +6629,19 @@ struct ChatPage {
       .justifyContent(FlexAlign.Center)
       .onClick(() => { this.cancelEdit(); });
     }
-    .width('100%').height(44).padding({ left: 12, right: 8 })
-    .backgroundColor($r('app.color.surface'));
+    .width('100%').height(44).padding({ left: 12, right: 8 });
   }
 
-  // Reply preview strip above the input bar (Telegram style): accent bar, sender
-  // name, message excerpt, and an ✕ to cancel.
+  // Reply preview strip (Telegram style): accent bar, "回复 <name>", quoted
+  // excerpt, and an ✕ to cancel. Sits inside the same rounded card as the
+  // input row (no own background/border/divider) so the composer reads as
+  // one continuous surface, with the accent bar spanning both text lines.
   @Builder
   replyPreview() {
     Row({ space: 10 }) {
       Row().width(3).height(34).borderRadius(2).backgroundColor(COLOR_PRIMARY);
       Column({ space: 1 }) {
-        Text(this.replyToName).fontSize(13).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
+        Text(`${str('mb_reply')} ${this.replyToName}`).fontSize(13).fontColor(COLOR_PRIMARY).fontWeight(FontWeight.Medium)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
         Text(this.replyToText).fontSize(13).fontColor(COLOR_TEXT_SECONDARY)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
@@ -6446,8 +6661,6 @@ struct ChatPage {
         .onClick(() => { this.clearReply(); });
     }
     .width('100%').padding({ left: 16, right: 16, top: 7, bottom: 7 })
-    .backgroundColor($r('app.color.surface'))
-    .border({ width: { top: 0.7 }, color: $r('app.color.divider') })
     .alignItems(VerticalAlign.Center)
     .transition(
       TransitionEffect.translate({ y: 12 })
@@ -6598,7 +6811,13 @@ struct ChatPage {
   @Builder
   inputBar() {
     Row() {
-      Row({ space: 6 }) {
+      Column() {
+        if (this.editingId !== 0) {
+          this.editPreview();
+        } else if (this.replyToId !== 0) {
+          this.replyPreview();
+        }
+        Row({ space: 6 }) {
         if (this.isRecording) {
           // Recording mode: red dot + timer, 取消, send.
           Row({ space: 7 }) {
@@ -6781,10 +7000,12 @@ struct ChatPage {
           }.width(40).height(40);
         }
       }
+        .width('100%')
+        .constraintSize({ minHeight: 48, maxHeight: 120 })
+        .padding({ left: 12, right: 4, top: 4, bottom: 4 })
+        .alignItems(VerticalAlign.Center);
+      }
       .width('100%')
-      .constraintSize({ minHeight: 48, maxHeight: 120 })
-      .padding({ left: 12, right: 4, top: 4, bottom: 4 })
-      .alignItems(VerticalAlign.Center)
       .backgroundColor($r('app.color.surface'))
       .borderRadius(24);
     }.width('100%')
@@ -6841,11 +7062,6 @@ struct ChatPage {
         this.membershipBar();
       } else {
         Column() {
-          if (this.editingId !== 0) {
-            this.editPreview();
-          } else if (this.replyToId !== 0) {
-            this.replyPreview();
-          }
           this.inputBar();
           if (this.replyKbVisible()) {
             this.replyKeyboardPanel();
@@ -7421,9 +7637,16 @@ struct ChatPage {
     return {
       colors: this.chatBg.colors, angle: this.chatBg.angle, path: this.chatBg.path,
       isPattern: this.chatBg.isPattern, imageOpacity: this.chatBg.imageOpacity,
-      dimming: this.chatBg.dimming, blurred: this.chatBg.blurred,
+      dimming: this.chatBg.dimming, blurred: this.chatBg.blurred, userBlur: this.bgBlur,
       width: this.screenW, height: this.screenH
     };
+  }
+
+  // The blur-amount slider (ChatBackgroundPage) changes KEY_BG_BLUR in
+  // AppStorage; @Watch fires this so the chat's background re-composites at
+  // the new radius instead of keeping whatever was last rasterised.
+  private onBgBlurChanged(): void {
+    this.syncBackgroundRaster();
   }
 
   private bgRasterTimer: number = -1;
@@ -7495,24 +7718,35 @@ struct ChatPage {
         Column().width('100%').height('100%')
           .backgroundColor($r('app.color.chat_bg'));
       }
-      // A pattern is a motif sheet laid over the fill, not a photo: it has to
-      // keep its own proportions (Contain), while a wallpaper photo fills the
-      // surface and crops (Cover). Cropping a pattern is what read as "the
-      // background ratio is wrong" — together with the store handing over the
-      // picker-sized thumbnail, which it no longer does.
-      if (this.chatBg.path !== '') {
+      // A pattern document is a small repeatable motif, not a standalone
+      // photo: the official client tiles it edge-to-edge at a fixed density
+      // instead of fitting one instance to the screen (see
+      // patternTileGrid()'s comment in chatBackgroundRaster.ets — fitting one
+      // instance with Contain is what used to leave the screen's off-axis
+      // edges bare on devices wider than the pattern's own ratio, e.g.
+      // tablets). A wallpaper photo still fills the surface and crops
+      // (Cover).
+      if (this.chatBg.path !== '' && this.chatBg.isPattern) {
+        patternTileGridLayer(
+          this.chatBg.path, this.chatBg.imageOpacity,
+          patternTileGrid(this.screenW, this.screenH),
+          backgroundBlurRadius(this.chatBg.path, this.chatBg.isPattern, this.chatBg.blurred, this.bgBlur));
+      } else if (this.chatBg.path !== '') {
         Image(this.chatBg.path.startsWith('/')
           ? `file://${this.chatBg.path}` : this.chatBg.path).draggable(false)
           .width('100%').height('100%')
-          .objectFit(this.chatBg.isPattern ? ImageFit.Contain : ImageFit.Cover)
+          .objectFit(ImageFit.Cover)
           .opacity(this.chatBg.imageOpacity)
           // Blurring needs a little overscan or transparent edge pixels become
-          // visible around the viewport.
+          // visible around the viewport. Gated on the actual radius (not just
+          // the `blurred` flag) so a user-set blur of 0 doesn't overscan either.
           .scale({
-            x: this.chatBg.blurred ? 1.08 : 1,
-            y: this.chatBg.blurred ? 1.08 : 1
+            x: backgroundBlurRadius(this.chatBg.path, this.chatBg.isPattern, this.chatBg.blurred, this.bgBlur) > 0
+              ? 1.08 : 1,
+            y: backgroundBlurRadius(this.chatBg.path, this.chatBg.isPattern, this.chatBg.blurred, this.bgBlur) > 0
+              ? 1.08 : 1
           })
-          .blur(this.chatBg.blurred ? 12 : 0);
+          .blur(backgroundBlurRadius(this.chatBg.path, this.chatBg.isPattern, this.chatBg.blurred, this.bgBlur));
       }
       if (this.chatBg.dimming > 0) {
         Column().width('100%').height('100%')
@@ -7521,7 +7755,11 @@ struct ChatPage {
       }
     }
     .width('100%').height('100%')
-    .hitTestBehavior(HitTestMode.None);
+    .hitTestBehavior(HitTestMode.None)
+    // The tile grid rounds up to a whole number of tiles and is centered by
+    // the Stack's default alignment, so it typically overruns the viewport a
+    // little on every edge — clip it back instead of letting it push out.
+    .clip(true);
     }
   }
 
@@ -7604,6 +7842,8 @@ struct ChatPage {
                 albumPaths: g.photoPaths, albumFileIds: g.photoFileIds, albumRatios: g.photoRatios,
                 albumMemberIds: g.memberIds, albumIsVideo: g.photoIsVideo,
                 albumProgress: g.photoProgress, albumFailed: g.photoFailed,
+                albumVideoFileIds: g.videoFileIds, albumVideoFileSizes: g.videoFileSizes,
+                albumVideoMimeTypes: g.videoMimeTypes,
                 albumCaption: g.caption,
                 albumCaptionEntities: g.captionEntities,
                 onMediaTap: (id: number, x: number, y: number): void => {
@@ -7620,6 +7860,9 @@ struct ChatPage {
                 onAvatarTap: (uid: number): void => {
                   const params: Record<string, Object> = { 'userId': uid };
                   router.pushUrl({ url: 'pages/profile/ProfilePage', params: params });
+                },
+                onAvatarLongPress: (uid: number, name: string): void => {
+                  this.mentionSender(uid, name);
                 },
                 onReplyTap: (id: number): void => { this.onReplyTap(id); },
                 onEditMsg: (id: number): void => { this.startEdit(id); },
@@ -7704,12 +7947,14 @@ struct ChatPage {
                 },
                 onSetReaction: (id: number, emoji: string, chosen: boolean): void => { this.toggleReaction(id, emoji, chosen); },
                 onReplyTo: (id: number): void => { this.startReply(id); },
+                editingActive: this.editingId !== 0,
                 onCopyText: (id: number): void => { this.copyMessageText(id); },
                 onCopyCode: (text: string): void => { this.copyPlainText(text, str('cp_code_copied')); },
                 onCopyLink: (id: number): void => { this.copyMessageLink(id); },
                 onForwardMsg: (_id: number): void => { this.openForwardPicker(g.memberIds); },
                 onReportMsg: (id: number): void => { promptAction.showToast({ message: $r('app.string.cp_report_wip'), duration: 1500 }); },
                 onSelectMsg: (id: number): void => { this.enterSelect(id); },
+                onDeleteMsg: (id: number): void => { this.deleteMessage(id); },
                 onOpenReactions: (id: number): void => { this.openReactionSheet(id); },
                 onRecognizeSpeech: (id: number): void => { this.recognizeSpeech(id); },
                 onVideoNoteDownload: (id: number): void => {
@@ -7721,6 +7966,43 @@ struct ChatPage {
                 onLiveStreamTap: (): void => { this.onLiveStreamTap(); },
                 showAvatar: g.showAvatar,
                 showSenderName: g.showSenderName,
+                playSlotKey: this.playSlotKey,
+                autoplayMuted: this.autoplayMuted,
+                onPlaySlotPositionChanged: (msgId: number, albumIndex: number, positionMs: number): void => {
+                  this.bubblePositionMs.set(msgId, positionMs);
+                },
+                onMediaRatio: (msgId: number, albumIndex: number, ratio: number, centerY: number): void => {
+                  // 查看器开着/页面不可见时不灌候选表——不然它在不该增长的
+                  // 时候被一批陈旧 ratio 填满，查看器一关或页面一恢复就可能
+                  // 直接 elect 出播放位（同一个根因见 armPlaySlotSettle）。
+                  if (this.viewerMsgId !== 0 || !this.pageVisible) {
+                    return;
+                  }
+                  // 「自动播放视频」关掉 / 省电模式 / 减少动效：闸门加在这里
+                  // 而不是挂载点上——连候选表都不灌，就连分片下载都不会发起
+                  // （spec §1：powerSaving 只影响 stream，退回封面 + 播放按钮）。
+                  if (!this.playSlotsEnabled()) {
+                    return;
+                  }
+                  const now = Date.now();
+                  // report() 内部已经跑过一次 elect：ratio 已经攒够驻留（或
+                  // 本来就是现任/被 pin）的候选会立即当选。这里只需要为还
+                  // 没攒够的候选补一个"驻留到点后再查一次"的定时器。
+                  this.playSlots.report(msgId, albumIndex, ratio, centerY, now);
+                  this.maybeScheduleNextSlotCheck(now);
+                },
+                onMediaGone: (msgId: number, albumIndex: number): void => {
+                  // 移除永远安全，不加守卫——挡住反而会在候选表里留幽灵条目。
+                  this.playSlots.drop(msgId, albumIndex);
+                },
+                // 播完 / 内嵌播放失败：立刻让出播放位，由其它候选重新竞选。
+                // 不会自我循环，理由见 PlaySlotRegistry.retire()。
+                onPlaySlotEnded: (msgId: number, albumIndex: number): void => {
+                  const now = Date.now();
+                  this.playSlots.retire(msgId, albumIndex, now);
+                  this.maybeScheduleNextSlotCheck(now);
+                },
+                playSlotStartMs: this.playSlotStartMs,
                 animateIn: this.freshSinceId !== 0 && g.head.id > this.freshSinceId });
               }
               .layoutWeight(1);
@@ -7797,6 +8079,12 @@ struct ChatPage {
           }
         })
         .onScrollIndex((start: number, end: number) => {
+          // List 首次布局完成即触发一次（哪怕用户从未滑动），是首屏唯一能可靠
+          // 拿到的信号；正常滚动时它也会随可见区间变化反复触发。判定本身现在
+          // 是逐候选驻留（见 PlaySlotRegistry），与列表是否仍在滚动无关，这里
+          // 只是幂等地补一次 tick + 重排后续检查——onScrollStop 那次是重复但
+          // 无害的（scheduleSlotTick 只留一个在途）。
+          this.armPlaySlotSettle();
           this.refreshAtBottom();
           this.curStartIdx = start;
           this.curEndIdx = end;
@@ -7844,6 +8132,14 @@ struct ChatPage {
           if (this.listUserScrollActive) {
             this.updateFloatDate(this.curStartIdx);
           }
+        })
+        .onScrollStop(() => {
+          this.armPlaySlotSettle();
+        })
+        .onAreaChange((_old: Area, area: Area): void => {
+          const y: number = area.globalPosition.y as number;
+          const height: number = area.height as number;
+          this.playSlots.setViewportCenter(y + height / 2);
         });
         if (this.visibleGroupCount === 0) {
           this.messageListStateLayer();
@@ -8136,6 +8432,7 @@ struct ChatPage {
           messages: this.messages,
           groups: this.groups,
           initIdx: this.viewerInitIdx,
+          initStartPositionMs: this.viewerStartPositionMs,
           tapX: this.tapX,
           tapY: this.tapY,
           store: this.store,
@@ -8144,7 +8441,8 @@ struct ChatPage {
           effectDuration: (key: string, ms: number): number => this.chatEffectDuration(key, ms),
           isVideoEntry: (entry: MessageEntry): boolean => this.mediaEntryIsVideo(entry),
           onRequestClose: (): void => { this.closeViewer(); },
-          onSaveMedia: (): void => { this.saveViewerMedia(); }
+          onSaveMedia: (): void => { this.saveViewerMedia(); },
+          onPositionChanged: (positionMs: number): void => { this.viewerPositionMs = positionMs; }
         })
       }
     }

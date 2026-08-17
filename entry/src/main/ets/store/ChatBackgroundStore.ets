@@ -32,6 +32,46 @@ export function emptyChatBackground(): ChatBackgroundState {
 
 type Listener = (state: ChatBackgroundState) => void;
 
+// The last fully-resolved account-default background, remembered process-wide
+// so a freshly opened ChatPage can seed its initial `chatBg` from it instead
+// of `emptyChatBackground()`. Without this, every chat that resolves to the
+// account default (the common case) starts one frame — really, however long
+// the getChat/getInstalledBackgrounds round trip takes — on the empty state,
+// whose `colors.length === 0` branch paints the near-white `chat_bg` resource
+// in light mode. That's the white flash: not a rendering-layer bug, but the
+// store's own `subscribe()` synchronously handing a brand-new ChatPage's
+// listener the constructor's empty state before `open()` has had a chance to
+// resolve anything real.
+//
+// Keyed by dark/light because the two modes usually resolve to different
+// wallpapers; a stale wrong-mode snapshot would itself flash the wrong colors
+// for a frame, which is why a mismatch just falls back to empty instead of
+// serving the other mode's cache.
+let lastDefaultSnapshot: ChatBackgroundState | null = null;
+let lastDefaultIsDark: boolean = false;
+
+// Only a state that actually carries something visible (a fill or a path) is
+// worth caching — the transient "cleared" state some code paths patch through
+// on their way to a real background would otherwise overwrite a good snapshot
+// with an empty one and reintroduce exactly the flash this exists to avoid.
+function rememberDefaultSnapshot(state: ChatBackgroundState, forDark: boolean): void {
+  if (state.colors.length === 0 && state.path === '') {
+    return;
+  }
+  lastDefaultSnapshot = state;
+  lastDefaultIsDark = forDark;
+}
+
+// Returns the last known account-default snapshot for the given mode, or an
+// empty background if none has resolved yet (first run) or the cached one is
+// for the other color mode.
+export function defaultChatBackgroundSnapshot(forDark: boolean): ChatBackgroundState {
+  if (lastDefaultSnapshot !== null && lastDefaultIsDark === forDark) {
+    return lastDefaultSnapshot;
+  }
+  return emptyChatBackground();
+}
+
 // Inflated .tgv → .svg, remembered for the process.
 //
 // A fresh ChatBackgroundStore is constructed for every chat that opens, so
@@ -77,6 +117,17 @@ export class ChatBackgroundStore {
     return this.state;
   }
 
+  // Seeds this store's initial state from the last known account-default
+  // snapshot (see rememberDefaultSnapshot above), before the first
+  // subscribe() call synchronously hands that state to the page. No emit —
+  // there are no listeners yet, and open()/refresh() will patch a real
+  // (possibly different) state in shortly after regardless. Call this before
+  // subscribe(), only for a store that is about to open() the account default
+  // (chatId 0, or a chat known to have no specific background/theme).
+  seedFromDefault(): void {
+    this.state = defaultChatBackgroundSnapshot(this.isDarkMode());
+  }
+
   subscribe(listener: Listener): () => void {
     this.listeners = [...this.listeners, listener];
     listener(this.state);
@@ -93,6 +144,12 @@ export class ChatBackgroundStore {
 
   private patch(next: ChatBackgroundState): void {
     this.state = next;
+    // Only remember this as "the account default" when this chat has no
+    // background/theme of its own — a chat-specific wallpaper isn't what most
+    // other chats should be seeded with.
+    if (!this.hasSpecificBackground()) {
+      rememberDefaultSnapshot(next, this.isDarkMode());
+    }
     this.emit();
   }
 

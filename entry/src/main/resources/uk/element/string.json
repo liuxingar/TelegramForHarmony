@@ -10859,6 +10859,118 @@
     {
       "name": "cl_my_story",
       "value": "Моя історія"
+    },
+    {
+      "name": "ms_cache_title",
+      "value": "Кеш"
+    },
+    {
+      "name": "ms_cache_limit",
+      "value": "Ліміт кешу"
+    },
+    {
+      "name": "ms_cache_limit_sub",
+      "value": "Коли ліміт перевищено, найдавніше використані медіафайли видаляються автоматично"
+    },
+    {
+      "name": "ms_cache_unlimited",
+      "value": "Без обмежень"
+    },
+    {
+      "name": "ms_autoplay_muted",
+      "value": "Відтворення без звуку"
+    },
+    {
+      "name": "settings_media",
+      "value": "Медіа"
+    },
+    {
+      "name": "settings_media_sub",
+      "value": "Автовідтворення та фонове відтворення"
+    },
+    {
+      "name": "ms_autoplay_group",
+      "value": "Автовідтворення"
+    },
+    {
+      "name": "cb_blur_amount",
+      "value": "Ступінь розмиття"
+    },
+    {
+      "name": "meow_mode_custom",
+      "value": "Власний WebPush"
+    },
+    {
+      "name": "meow_mode_meow",
+      "value": "MeoW"
+    },
+    {
+      "name": "meow_nickname_label",
+      "value": "Ім'я користувача MeoW"
+    },
+    {
+      "name": "meow_nickname_hint",
+      "value": "Введіть ваше ім'я користувача MeoW"
+    },
+    {
+      "name": "meow_register",
+      "value": "Зареєструвати"
+    },
+    {
+      "name": "meow_privacy_note",
+      "value": "У цьому режимі сервер-ретранслятор зберігає ключ розшифрування і бачить відправника та короткий зміст кожного повідомлення. Використовуйте, лише якщо довіряєте цьому серверу."
+    },
+    {
+      "name": "meow_nickname_required",
+      "value": "Введіть ім'я користувача MeoW"
+    },
+    {
+      "name": "meow_bad_response",
+      "value": "Сервер-ретранслятор повернув неповні дані. Спробуйте пізніше."
+    },
+    {
+      "name": "meow_network_error",
+      "value": "Не вдалося виконати мережевий запит. Перевірте з'єднання та спробуйте ще раз."
+    },
+    {
+      "name": "meow_http_error",
+      "value": "Сервер-ретранслятор повернув помилку: %1$s"
+    },
+    {
+      "name": "meow_relay_unconfigured",
+      "value": "У цій збірці не налаштовано адресу ретранслятора push-сповіщень"
+    },
+    {
+      "name": "meow_deregister_relay_failed",
+      "value": "Серверу-ретранслятору не вдалося скасувати підписку (локальну доставку вже зупинено): %1$s"
+    },
+    {
+      "name": "meow_request_code",
+      "value": "Отримати код підтвердження"
+    },
+    {
+      "name": "meow_code_label",
+      "value": "Код підтвердження"
+    },
+    {
+      "name": "meow_code_hint",
+      "value": "Введіть отриманий код"
+    },
+    {
+      "name": "meow_code_sent",
+      "value": "Код підтвердження надіслано у ваш MeoW. Перевірте та введіть його нижче."
+    },
+    {
+      "name": "meow_confirm",
+      "value": "Завершити реєстрацію"
+    },
+    {
+      "name": "meow_code_required",
+      "value": "Введіть код підтвердження"
+    },
+    {
+      "name": "meow_code_invalid",
+      "value": "Код неправильний або застарів. Запросіть новий."
     }
   ]
 }

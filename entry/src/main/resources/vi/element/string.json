@@ -10859,6 +10859,118 @@
     {
       "name": "cl_my_story",
       "value": "Tin của tôi"
+    },
+    {
+      "name": "ms_cache_title",
+      "value": "Bộ nhớ đệm"
+    },
+    {
+      "name": "ms_cache_limit",
+      "value": "Giới hạn bộ nhớ đệm"
+    },
+    {
+      "name": "ms_cache_limit_sub",
+      "value": "Phương tiện lâu chưa dùng nhất sẽ tự động bị xóa khi vượt quá giới hạn"
+    },
+    {
+      "name": "ms_cache_unlimited",
+      "value": "Không giới hạn"
+    },
+    {
+      "name": "ms_autoplay_muted",
+      "value": "Phát không có âm thanh"
+    },
+    {
+      "name": "settings_media",
+      "value": "Media"
+    },
+    {
+      "name": "settings_media_sub",
+      "value": "Tự động phát và phát nền"
+    },
+    {
+      "name": "ms_autoplay_group",
+      "value": "Tự động phát"
+    },
+    {
+      "name": "cb_blur_amount",
+      "value": "Mức độ làm mờ"
+    },
+    {
+      "name": "meow_mode_custom",
+      "value": "WebPush tùy chỉnh"
+    },
+    {
+      "name": "meow_mode_meow",
+      "value": "MeoW"
+    },
+    {
+      "name": "meow_nickname_label",
+      "value": "Tên người dùng MeoW"
+    },
+    {
+      "name": "meow_nickname_hint",
+      "value": "Nhập tên người dùng MeoW của bạn"
+    },
+    {
+      "name": "meow_register",
+      "value": "Đăng ký"
+    },
+    {
+      "name": "meow_privacy_note",
+      "value": "Ở chế độ này, máy chủ trung chuyển giữ khóa giải mã và có thể thấy người gửi cùng bản tóm tắt của mỗi tin nhắn. Chỉ sử dụng nếu bạn tin tưởng máy chủ này."
+    },
+    {
+      "name": "meow_nickname_required",
+      "value": "Nhập tên người dùng MeoW"
+    },
+    {
+      "name": "meow_bad_response",
+      "value": "Máy chủ trung chuyển trả về dữ liệu không đầy đủ. Vui lòng thử lại sau."
+    },
+    {
+      "name": "meow_network_error",
+      "value": "Yêu cầu mạng thất bại. Kiểm tra kết nối và thử lại."
+    },
+    {
+      "name": "meow_http_error",
+      "value": "Máy chủ trung chuyển trả về lỗi: %1$s"
+    },
+    {
+      "name": "meow_relay_unconfigured",
+      "value": "Bản dựng này chưa cấu hình địa chỉ trung chuyển đẩy thông báo"
+    },
+    {
+      "name": "meow_deregister_relay_failed",
+      "value": "Máy chủ trung chuyển hủy đăng ký thất bại (đã dừng gửi cục bộ): %1$s"
+    },
+    {
+      "name": "meow_request_code",
+      "value": "Gửi mã xác minh"
+    },
+    {
+      "name": "meow_code_label",
+      "value": "Mã xác minh"
+    },
+    {
+      "name": "meow_code_hint",
+      "value": "Nhập mã bạn đã nhận được"
+    },
+    {
+      "name": "meow_code_sent",
+      "value": "Mã xác minh đã được gửi đến MeoW của bạn. Hãy kiểm tra và nhập mã bên dưới."
+    },
+    {
+      "name": "meow_confirm",
+      "value": "Hoàn tất đăng ký"
+    },
+    {
+      "name": "meow_code_required",
+      "value": "Nhập mã xác minh"
+    },
+    {
+      "name": "meow_code_invalid",
+      "value": "Mã sai hoặc đã hết hạn. Hãy yêu cầu mã mới."
     }
   ]
 }

@@ -10859,6 +10859,118 @@
     {
       "name": "cl_my_story",
       "value": "マイストーリー"
+    },
+    {
+      "name": "ms_cache_title",
+      "value": "キャッシュ"
+    },
+    {
+      "name": "ms_cache_limit",
+      "value": "キャッシュの上限"
+    },
+    {
+      "name": "ms_cache_limit_sub",
+      "value": "上限を超えると、最も長く使用されていないメディアが自動的に削除されます"
+    },
+    {
+      "name": "ms_cache_unlimited",
+      "value": "無制限"
+    },
+    {
+      "name": "ms_autoplay_muted",
+      "value": "ミュート再生"
+    },
+    {
+      "name": "settings_media",
+      "value": "メディア"
+    },
+    {
+      "name": "settings_media_sub",
+      "value": "自動再生とバックグラウンド再生"
+    },
+    {
+      "name": "ms_autoplay_group",
+      "value": "自動再生"
+    },
+    {
+      "name": "cb_blur_amount",
+      "value": "ぼかしの強さ"
+    },
+    {
+      "name": "meow_mode_custom",
+      "value": "カスタム WebPush"
+    },
+    {
+      "name": "meow_mode_meow",
+      "value": "MeoW"
+    },
+    {
+      "name": "meow_nickname_label",
+      "value": "MeoW ユーザー名"
+    },
+    {
+      "name": "meow_nickname_hint",
+      "value": "MeoW のユーザー名を入力してください"
+    },
+    {
+      "name": "meow_register",
+      "value": "登録"
+    },
+    {
+      "name": "meow_privacy_note",
+      "value": "このモードでは、中継サーバーが復号鍵を保持し、各メッセージの送信者と要約を確認できます。信頼できるサーバーの場合のみ使用してください。"
+    },
+    {
+      "name": "meow_nickname_required",
+      "value": "MeoW のユーザー名を入力してください"
+    },
+    {
+      "name": "meow_bad_response",
+      "value": "中継サーバーから不完全なデータが返されました。しばらくしてから再試行してください。"
+    },
+    {
+      "name": "meow_network_error",
+      "value": "ネットワークリクエストに失敗しました。接続を確認して再試行してください。"
+    },
+    {
+      "name": "meow_http_error",
+      "value": "中継サーバーがエラーを返しました：%1$s"
+    },
+    {
+      "name": "meow_relay_unconfigured",
+      "value": "このビルドにはプッシュ中継アドレスが設定されていません"
+    },
+    {
+      "name": "meow_deregister_relay_failed",
+      "value": "中継サーバーでの登録解除に失敗しました（ローカルの配信は既に停止済み）：%1$s"
+    },
+    {
+      "name": "meow_request_code",
+      "value": "認証コードを取得"
+    },
+    {
+      "name": "meow_code_label",
+      "value": "認証コード"
+    },
+    {
+      "name": "meow_code_hint",
+      "value": "受け取ったコードを入力してください"
+    },
+    {
+      "name": "meow_code_sent",
+      "value": "確認コードをあなたの MeoW に送信しました。確認して以下に入力してください。"
+    },
+    {
+      "name": "meow_confirm",
+      "value": "登録を完了"
+    },
+    {
+      "name": "meow_code_required",
+      "value": "認証コードを入力してください"
+    },
+    {
+      "name": "meow_code_invalid",
+      "value": "コードが間違っているか期限切れです。再度取得してください。"
     }
   ]
 }

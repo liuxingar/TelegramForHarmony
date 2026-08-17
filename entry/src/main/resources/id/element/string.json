@@ -10859,6 +10859,118 @@
     {
       "name": "cl_my_story",
       "value": "Kisah Saya"
+    },
+    {
+      "name": "ms_cache_title",
+      "value": "Cache"
+    },
+    {
+      "name": "ms_cache_limit",
+      "value": "Batas cache"
+    },
+    {
+      "name": "ms_cache_limit_sub",
+      "value": "Media yang paling lama tidak digunakan akan otomatis dihapus saat batas terlampaui"
+    },
+    {
+      "name": "ms_cache_unlimited",
+      "value": "Tidak terbatas"
+    },
+    {
+      "name": "ms_autoplay_muted",
+      "value": "Putar tanpa suara"
+    },
+    {
+      "name": "settings_media",
+      "value": "Media"
+    },
+    {
+      "name": "settings_media_sub",
+      "value": "Putar otomatis dan pemutaran latar belakang"
+    },
+    {
+      "name": "ms_autoplay_group",
+      "value": "Putar otomatis"
+    },
+    {
+      "name": "cb_blur_amount",
+      "value": "Tingkat blur"
+    },
+    {
+      "name": "meow_mode_custom",
+      "value": "WebPush Kustom"
+    },
+    {
+      "name": "meow_mode_meow",
+      "value": "MeoW"
+    },
+    {
+      "name": "meow_nickname_label",
+      "value": "Nama pengguna MeoW"
+    },
+    {
+      "name": "meow_nickname_hint",
+      "value": "Masukkan nama pengguna MeoW Anda"
+    },
+    {
+      "name": "meow_register",
+      "value": "Daftar"
+    },
+    {
+      "name": "meow_privacy_note",
+      "value": "Dalam mode ini, server relai menyimpan kunci dekripsi dan dapat melihat pengirim serta ringkasan setiap pesan. Gunakan hanya jika Anda memercayai server tersebut."
+    },
+    {
+      "name": "meow_nickname_required",
+      "value": "Masukkan nama pengguna MeoW"
+    },
+    {
+      "name": "meow_bad_response",
+      "value": "Server relai mengembalikan data yang tidak lengkap. Coba lagi nanti."
+    },
+    {
+      "name": "meow_network_error",
+      "value": "Permintaan jaringan gagal. Periksa koneksi Anda dan coba lagi."
+    },
+    {
+      "name": "meow_http_error",
+      "value": "Server relai mengembalikan kesalahan: %1$s"
+    },
+    {
+      "name": "meow_relay_unconfigured",
+      "value": "Build ini tidak memiliki alamat relai push yang dikonfigurasi"
+    },
+    {
+      "name": "meow_deregister_relay_failed",
+      "value": "Server relai gagal membatalkan langganan (pengiriman lokal sudah dihentikan): %1$s"
+    },
+    {
+      "name": "meow_request_code",
+      "value": "Kirim kode verifikasi"
+    },
+    {
+      "name": "meow_code_label",
+      "value": "Kode verifikasi"
+    },
+    {
+      "name": "meow_code_hint",
+      "value": "Masukkan kode yang Anda terima"
+    },
+    {
+      "name": "meow_code_sent",
+      "value": "Kode verifikasi telah dikirim ke MeoW Anda. Periksa dan masukkan kode di bawah ini."
+    },
+    {
+      "name": "meow_confirm",
+      "value": "Selesaikan pendaftaran"
+    },
+    {
+      "name": "meow_code_required",
+      "value": "Masukkan kode verifikasi"
+    },
+    {
+      "name": "meow_code_invalid",
+      "value": "Kode salah atau sudah kedaluwarsa. Minta kode baru."
     }
   ]
 }

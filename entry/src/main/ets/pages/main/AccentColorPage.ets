@@ -8,7 +8,8 @@ import {
 } from '../../util/accentPresentation';
 import { syncAccentPrimary } from '../../util/accentTheme';
 import {
-  COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
+  COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY,
+  darkResourceMode
 } from '../../util/theme';
 import { str } from '../../util/strings';
 import { LANGUAGE_EPOCH } from '../../util/appLanguage';
@@ -33,7 +34,7 @@ struct AccentColorPage {
 
   aboutToAppear(): void {
     this.active = true;
-    const dark = this.darkMode();
+    const dark = darkResourceMode(getContext(this) as common.UIAbilityContext);
     this.off = getAccentColorStore().subscribe((palettes: AccentPalettes): void => {
       this.namePreviews = this.orderPreviews(
         palettes.nameColors.map((c: TdObject): AccentPreview | null => accentPreviewOf(c, dark)),
@@ -80,19 +81,6 @@ struct AccentColorPage {
     return rows;
   }
 
-  private darkMode(): boolean {
-    try {
-      const color = (getContext(this) as common.UIAbilityContext)
-        .resourceManager.getColorSync($r('app.color.chat_bg'));
-      const red = (color >>> 16) & 0xFF;
-      const green = (color >>> 8) & 0xFF;
-      const blue = color & 0xFF;
-      return red * 0.299 + green * 0.587 + blue * 0.114 < 128;
-    } catch (_error) {
-      return false;
-    }
-  }
-
   private refreshSelection(): void {
     getAccentColorStore().currentSelection().then((ids: [number, number]): void => {
       if (!this.active) { return; }
@@ -112,7 +100,8 @@ struct AccentColorPage {
   // Live preview: your own message color is what OTHERS see in groups — your
   // outgoing bubbles never carry a name, so the page shows it here instead.
   private previewNameColor(): string {
-    const hex = getAccentColorStore().nameColorHex(this.currentNameId, this.darkMode());
+    const hex = getAccentColorStore().nameColorHex(
+      this.currentNameId, darkResourceMode(getContext(this) as common.UIAbilityContext));
     return hex !== '' ? hex : '#3390EC';
   }
 

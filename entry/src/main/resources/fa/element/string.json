@@ -10859,6 +10859,118 @@
     {
       "name": "cl_my_story",
       "value": "استوری من"
+    },
+    {
+      "name": "ms_cache_title",
+      "value": "حافظه پنهان"
+    },
+    {
+      "name": "ms_cache_limit",
+      "value": "حد حافظه پنهان"
+    },
+    {
+      "name": "ms_cache_limit_sub",
+      "value": "هنگام عبور از حد، رسانه‌هایی که مدت طولانی استفاده نشده‌اند به‌طور خودکار پاک می‌شوند"
+    },
+    {
+      "name": "ms_cache_unlimited",
+      "value": "نامحدود"
+    },
+    {
+      "name": "ms_autoplay_muted",
+      "value": "پخش بی‌صدا"
+    },
+    {
+      "name": "settings_media",
+      "value": "رسانه"
+    },
+    {
+      "name": "settings_media_sub",
+      "value": "پخش خودکار و پخش در پس‌زمینه"
+    },
+    {
+      "name": "ms_autoplay_group",
+      "value": "پخش خودکار"
+    },
+    {
+      "name": "cb_blur_amount",
+      "value": "میزان تاری"
+    },
+    {
+      "name": "meow_mode_custom",
+      "value": "WebPush سفارشی"
+    },
+    {
+      "name": "meow_mode_meow",
+      "value": "MeoW"
+    },
+    {
+      "name": "meow_nickname_label",
+      "value": "نام کاربری MeoW"
+    },
+    {
+      "name": "meow_nickname_hint",
+      "value": "نام کاربری MeoW خود را وارد کنید"
+    },
+    {
+      "name": "meow_register",
+      "value": "ثبت‌نام"
+    },
+    {
+      "name": "meow_privacy_note",
+      "value": "در این حالت، سرور واسط کلید رمزگشایی را نگه می‌دارد و می‌تواند فرستنده و خلاصه هر پیام را ببیند. فقط در صورتی از آن استفاده کنید که به این سرور اعتماد دارید."
+    },
+    {
+      "name": "meow_nickname_required",
+      "value": "نام کاربری MeoW را وارد کنید"
+    },
+    {
+      "name": "meow_bad_response",
+      "value": "سرور واسط داده ناقصی برگرداند. لطفاً بعداً دوباره تلاش کنید."
+    },
+    {
+      "name": "meow_network_error",
+      "value": "درخواست شبکه ناموفق بود. اتصال خود را بررسی کرده و دوباره تلاش کنید."
+    },
+    {
+      "name": "meow_http_error",
+      "value": "سرور واسط خطا برگرداند: %1$s"
+    },
+    {
+      "name": "meow_relay_unconfigured",
+      "value": "این نسخه هیچ آدرس واسط پوش‌نوتیفیکیشنی تنظیم نشده دارد"
+    },
+    {
+      "name": "meow_deregister_relay_failed",
+      "value": "سرور واسط در لغو اشتراک ناموفق بود (تحویل محلی متوقف شده است): %1$s"
+    },
+    {
+      "name": "meow_request_code",
+      "value": "دریافت کد تأیید"
+    },
+    {
+      "name": "meow_code_label",
+      "value": "کد تأیید"
+    },
+    {
+      "name": "meow_code_hint",
+      "value": "کدی که دریافت کردید را وارد کنید"
+    },
+    {
+      "name": "meow_code_sent",
+      "value": "کد تأیید به MeoW شما ارسال شد. آن را بررسی کرده و در زیر وارد کنید."
+    },
+    {
+      "name": "meow_confirm",
+      "value": "پایان ثبت‌نام"
+    },
+    {
+      "name": "meow_code_required",
+      "value": "کد تأیید را وارد کنید"
+    },
+    {
+      "name": "meow_code_invalid",
+      "value": "کد اشتباه است یا منقضی شده است. کد جدیدی درخواست کنید."
     }
   ]
 }

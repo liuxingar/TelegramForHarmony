@@ -7,7 +7,9 @@ import { installStringsFromContext } from '../util/strings';
 import { refreshLocale } from '../util/intlFormat';
 import { bumpLanguageEpoch } from '../util/appLanguage';
 import { backgroundGraceTask } from '../services/BackgroundGraceTask';
-import { initSettings, refreshPowerSavingState } from '../store/AppSettings';
+import { initSettings, refreshPowerSavingState, KEY_CACHE_LIMIT } from '../store/AppSettings';
+import { CACHE_LIMIT_DEFAULT, shouldTrimNow } from '../store/CacheLimit';
+import { applyCacheLimit } from '../store/StorageApi';
 import { beginNetworkMonitoring, refreshNetworkState } from '../services/NetworkStateService';
 import { updateChecker } from '../services/UpdateChecker';
 import { liveLocation } from '../services/LiveLocationService';
@@ -22,6 +24,8 @@ const DOMAIN = 0x0000;
 export default class EntryAbility extends UIAbility {
   // 上一次见到的系统语言，用来判断配置变更里语言到底变没变。
   private lastLanguage: string = '';
+  // 上一次跑缓存收缩的时间戳；配合 CACHE_TRIM_MIN_INTERVAL_MS 防止频繁切前台反复触发重操作。
+  private lastCacheTrimAt: number = 0;
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     // Before anything that formats text: stores build chat previews during
@@ -192,6 +196,15 @@ export default class EntryAbility extends UIAbility {
     backgroundGraceTask.end();
     AppStorage.setOrCreate('appForegroundEpoch', Date.now());
     setTdOnlineState(true);
+    const limit: number = AppStorage.get<number>(KEY_CACHE_LIMIT) ?? CACHE_LIMIT_DEFAULT;
+    const now = Date.now();
+    if (shouldTrimNow(limit, this.lastCacheTrimAt, now)) {
+      this.lastCacheTrimAt = now;
+      // applyCacheLimit 内部已吞掉 TdError，这里的 catch 只兜底 Promise 层面的意外异常。
+      applyCacheLimit(limit).catch((e: Error): void => {
+        console.error(`EntryAbility cache trim failed: ${e.message}`);
+      });
+    }
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
   }
 

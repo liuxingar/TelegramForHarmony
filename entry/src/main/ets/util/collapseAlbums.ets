@@ -14,6 +14,12 @@ export interface AlbumGroup {
   photoIsVideo: boolean[]; // parallel to photoPaths — true for video members (play icon overlay)
   photoProgress: number[]; // parallel to photoPaths — thumbnail download progress (0-100)
   photoFailed: boolean[];  // parallel to photoPaths — tap the failed cell to retry
+  // Full-resolution video source, parallel to photoPaths. 0/'' for photo
+  // members. Needed to mount a play-slot player in a grid cell (see
+  // VideoBubbleSurface) — the thumbnail file above is never enough to stream.
+  videoFileIds: number[];
+  videoFileSizes: number[];
+  videoMimeTypes: string[];
   caption: string;         // album caption (from whichever member carries text)
   captionEntities: TdObject[]; // the caption's TDLib entities (links/mentions/hashtags)
   dateLabel: string;       // date pill shown above this row when the day changes ('' = none)
@@ -169,6 +175,9 @@ export function collapseAlbums(list: MessageEntry[]): AlbumGroup[] {
       const photoIsVideo: boolean[] = [];
       const photoProgress: number[] = [];
       const photoFailed: boolean[] = [];
+      const videoFileIds: number[] = [];
+      const videoFileSizes: number[] = [];
+      const videoMimeTypes: string[] = [];
       const albumMembers: MessageEntry[] = [];
       let caption = '';
       let captionEntities: TdObject[] = [];
@@ -182,6 +191,9 @@ export function collapseAlbums(list: MessageEntry[]): AlbumGroup[] {
         photoIsVideo.push(list[j].contentType === 'video');
         photoProgress.push(list[j].photoProgress);
         photoFailed.push(list[j].photoFailed);
+        videoFileIds.push(list[j].videoFileId);
+        videoFileSizes.push(list[j].videoFileSize);
+        videoMimeTypes.push(list[j].videoMimeType);
         if (list[j].text !== '') {
           caption = list[j].text;
           captionEntities = list[j].textEntities;
@@ -190,7 +202,9 @@ export function collapseAlbums(list: MessageEntry[]): AlbumGroup[] {
       }
       const displayHead = albumHead(albumMembers);
       groups.push({
-        key: `a_${m.albumId}_${m.id}_${memberIds.join(',')}_${photoFileIds.join(',')}_${photoPaths.join('|')}_${photoProgress.map(progressBucket).join(',')}_${photoFailed.join(',')}_${albumMembers.map((item: MessageEntry): string => item.sendState).join(',')}_${caption}_${captionEntities.map((entity: TdObject): string => JSON.stringify(entity)).join('|')}_${dateLabel}_${mutableSig(displayHead)}`,
+        // videoFileIds 进 key：视频文件 id 迟到（TDLib 异步补上）时这一格
+        // 得跟着重建，否则播放位选中它也挂不上播放器（videoFileId 还是 0）。
+        key: `a_${m.albumId}_${m.id}_${memberIds.join(',')}_${photoFileIds.join(',')}_${photoPaths.join('|')}_${photoProgress.map(progressBucket).join(',')}_${photoFailed.join(',')}_${videoFileIds.join(',')}_${albumMembers.map((item: MessageEntry): string => item.sendState).join(',')}_${caption}_${captionEntities.map((entity: TdObject): string => JSON.stringify(entity)).join('|')}_${dateLabel}_${mutableSig(displayHead)}`,
         head: displayHead,
         memberIds,
         photoPaths,
@@ -199,6 +213,9 @@ export function collapseAlbums(list: MessageEntry[]): AlbumGroup[] {
         photoIsVideo,
         photoProgress,
         photoFailed,
+        videoFileIds,
+        videoFileSizes,
+        videoMimeTypes,
         caption,
         captionEntities,
         dateLabel,
@@ -220,6 +237,9 @@ export function collapseAlbums(list: MessageEntry[]): AlbumGroup[] {
         photoIsVideo: [],
         photoProgress: [],
         photoFailed: [],
+        videoFileIds: [],
+        videoFileSizes: [],
+        videoMimeTypes: [],
         caption: '',
         captionEntities: [],
         dateLabel,

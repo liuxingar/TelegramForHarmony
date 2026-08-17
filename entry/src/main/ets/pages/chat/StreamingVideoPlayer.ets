@@ -73,6 +73,12 @@ export struct StreamingVideoPlayer {
   @Prop posterPath: string = '';
   @Prop showControls: boolean = true;
   @Prop landscape: boolean = false;
+  // Embed mode: mounted directly in a chat bubble instead of the fullscreen
+  // viewer. No control bar / gestures / speed / rotate — just poster +
+  // surface + buffering hint. See build() and onPlayingChanged() below.
+  @Prop embedded: boolean = false;
+  @Watch('onMutedChanged') @Prop muted: boolean = false;
+  @Prop startPositionMs: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   onBackgroundTap: () => void = (): void => {};
@@ -80,6 +86,12 @@ export struct StreamingVideoPlayer {
   onSwipePrev: () => void = (): void => {};
   onOrientationChange: (landscape: boolean) => void =
     (_landscape: boolean): void => {};
+  onPositionChanged: (positionMs: number) => void =
+    (_positionMs: number): void => {};
+  onEnded: () => void = (): void => {};
+  // 内嵌模式专用：播放失败。内嵌模式没有重试按钮（见 build()），失败的那一条
+  // 必须把播放位让出去，否则它会一直占着位子谁也播不了。
+  onFailed: () => void = (): void => {};
   private player: IjkMediaPlayer | null = null;
   private session: VideoStreamSession | null = null;
   private rangeServer: VideoRangeServer | null = null;
@@ -139,8 +151,13 @@ export struct StreamingVideoPlayer {
   }
 
   // 播放状态变化时同步"视频后台播放"保活（开关关闭则不挂任务，
-  // 切后台由系统正常挂起）。
+  // 切后台由系统正常挂起）。内嵌模式（列表内播放位）从不申请保活——
+  // 划走气泡就该正常息屏/挂起，不能被一段列表预览挡住。
   onPlayingChanged(): void {
+    if (this.embedded) {
+      mediaPlaybackKeepAlive.release('video');
+      return;
+    }
     if (this.isPlaying && (AppStorage.get<boolean>(KEY_BG_PLAY_VIDEO) ?? false)) {
       const context = getUiAbilityContext();
       if (context !== null) {
@@ -229,6 +246,26 @@ export struct StreamingVideoPlayer {
     this.isPlaying = false;
   }
 
+  // 应用当前 muted 状态到原生播放器音量。onPrepared（起播）和 onMutedChanged
+  // （@Watch，静音开关中途拨动）两处共用，避免两份重复的音量字符串字面量。
+  private applyMutedVolume(): void {
+    if (this.player === null || !this.isPrepared) {
+      return;
+    }
+    const volume: string = this.muted ? '0.0' : '1.0';
+    this.player.setVolume(volume, volume);
+  }
+
+  // muted 中途变化（缓存设置里的「静音播放」开关）时对已挂载的播放器实例
+  // 重设音量，不等下一次换届/重新 prepare。播放器可能还没建好（isPrepared
+  // 为 false）或者已经 release（this.player 为 null）——两种情况都在
+  // applyMutedVolume() 里判空短路，不会在原生层触碰一个未就绪/已释放的实例。
+  // 全屏查看器路径 muted 恒为字面量 false，构造后不会再变，这里不会为它
+  // 产生任何额外的 setVolume 调用；@Watch 本身也不在初始赋值时触发。
+  private onMutedChanged(): void {
+    this.applyMutedVolume();
+  }
+
   private async initPlayer(context: object): Promise<void> {
     if (!this.active || this.player !== null || this.session !== null) {
       return;
@@ -302,6 +339,11 @@ export struct StreamingVideoPlayer {
           this.isPrepared = true;
           this.durationMs = Math.max(0, player.getDuration());
           player.setSpeed(SPEEDS[this.speedIdx]);
+          this.applyMutedVolume();
+          if (this.startPositionMs > 0) {
+            player.seekTo(`${Math.floor(this.startPositionMs)}`);
+            this.currentTimeMs = this.startPositionMs;
+          }
           player.start();
           this.isPlaying = true;
           this.isCompleted = false;
@@ -311,8 +353,14 @@ export struct StreamingVideoPlayer {
       const completionListener: OnCompletionListener = {
         onCompletion: (): void => {
           this.isPlaying = false;
-          this.isCompleted = true;
           this.currentTimeMs = this.durationMs;
+          if (this.embedded) {
+            // No replay affordance in embed mode — the mount point (chat
+            // bubble) decides what happens next (fall back to poster, etc).
+            this.onEnded();
+            return;
+          }
+          this.isCompleted = true;
         }
       };
       // bufferedPercent tracks the actual TDLib download (subscribeProgress
@@ -381,6 +429,11 @@ export struct StreamingVideoPlayer {
     this.isPrepared = false;
     this.videoVisible = false;
     this.isPlaying = false;
+    if (this.embedded) {
+      // 内嵌模式（气泡播放位）：不展示重试 UI，直接把播放位让出去，回落到
+      // 封面 + 播放按钮。点开全屏才是这里的重试入口。
+      this.onFailed();
+    }
   }
 
   private retry(): void {
@@ -545,6 +598,7 @@ export struct StreamingVideoPlayer {
       }
       if (!this.dragging) {
         this.currentTimeMs = Math.max(0, this.player.getCurrentPosition());
+        this.onPositionChanged(this.currentTimeMs);
       }
       const duration = this.player.getDuration();
       if (duration > 0) {
@@ -786,7 +840,8 @@ export struct StreamingVideoPlayer {
       this.seekFeedback();
       // Controls hidden → both halves remain interactive. Exclusive recognition
       // delays the single tap just enough to distinguish the double-tap seek.
-      if (!this.showControls) {
+      // Embedded (chat-bubble) mode never renders the gesture layer at all.
+      if (!this.embedded && !this.showControls) {
         Row() {
           this.tapZone(false);
           this.tapZone(true);
@@ -797,30 +852,56 @@ export struct StreamingVideoPlayer {
       // Actual prepare/stall state: centered and explicit, while the poster
       // remains visible underneath instead of flashing a featureless black frame.
       if (this.status !== '' && !this.hasError) {
-        Column({ space: 8 }) {
-          if (this.bufferedPercent > 0 && this.bufferedPercent < 100) {
-            Stack() {
-              Progress({ value: this.bufferedPercent, total: 100, type: ProgressType.Ring })
-                .width(44).height(44).color(Color.White);
-              Text(`${this.bufferedPercent}%`).fontSize(10).fontColor(Color.White);
+        if (this.embedded) {
+          // Embedded (chat-bubble) buffering indicator: a plain ring centered
+          // over the video — no percentage text, no dark card behind it, just
+          // the ring riding on top of the poster/surface.
+          //
+          // bufferedPercent stays 0 until the first real progress sample
+          // arrives; a fully-empty ring there reads as "nothing is happening"
+          // rather than "buffering", so it floors at a small fixed sliver
+          // instead.
+          Progress({
+            value: this.bufferedPercent > 0 ? this.bufferedPercent : 8,
+            total: 100,
+            type: ProgressType.Ring
+          })
+            .width(32)
+            .height(32)
+            .color(Color.White)
+            .backgroundColor('#33FFFFFF')
+            .align(Alignment.Center)
+            // Purely decorative — must not steal the tap that opens/toggles
+            // controls on the video underneath.
+            .hitTestBehavior(HitTestMode.Transparent);
+        } else {
+          Column({ space: 8 }) {
+            if (this.bufferedPercent > 0 && this.bufferedPercent < 100) {
+              Stack() {
+                Progress({ value: this.bufferedPercent, total: 100, type: ProgressType.Ring })
+                  .width(44).height(44).color(Color.White);
+                Text(`${this.bufferedPercent}%`).fontSize(10).fontColor(Color.White);
+              }
+            } else {
+              LoadingProgress().width(38).height(38).color(Color.White);
             }
-          } else {
-            LoadingProgress().width(38).height(38).color(Color.White);
+            Text(this.status)
+              .fontSize(13)
+              .fontColor(Color.White)
+              .fontWeight(FontWeight.Medium);
           }
-          Text(this.status)
-            .fontSize(13)
-            .fontColor(Color.White)
-            .fontWeight(FontWeight.Medium);
+          .alignItems(HorizontalAlign.Center)
+          .padding({ left: 18, right: 18, top: 15, bottom: 15 })
+          .backgroundColor('#70000000')
+          .borderRadius(16)
+          .transition(TransitionEffect.OPACITY
+            .combine(TransitionEffect.scale({ x: 0.9, y: 0.9 }))
+            .animation({ duration: 180, curve: Curve.EaseOut }));
         }
-        .alignItems(HorizontalAlign.Center)
-        .padding({ left: 18, right: 18, top: 15, bottom: 15 })
-        .backgroundColor('#70000000')
-        .borderRadius(16)
-        .transition(TransitionEffect.OPACITY
-          .combine(TransitionEffect.scale({ x: 0.9, y: 0.9 }))
-          .animation({ duration: 180, curve: Curve.EaseOut }));
       }
-      if (this.hasError) {
+      // 内嵌模式不画错误 UI：那颗"重试"按钮会吃掉气泡"点开全屏"的点击，而
+      // 失败的这一条本来就已经通过 onFailed() 让出播放位、即将卸载回封面。
+      if (this.hasError && !this.embedded) {
         Column({ space: 8 }) {
           SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
             .fontSize(30)
@@ -894,7 +975,7 @@ export struct StreamingVideoPlayer {
         .animation({ duration: 120, curve: Curve.EaseOut })
         .onClick(() => { this.replay(); });
       }
-      if (this.showControls && !this.hasError) {
+      if (!this.embedded && this.showControls && !this.hasError) {
         Column() {
           Row() {
             this.tapZone(false);

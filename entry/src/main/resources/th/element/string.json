@@ -10859,6 +10859,118 @@
     {
       "name": "cl_my_story",
       "value": "สตอรี่ของฉัน"
+    },
+    {
+      "name": "ms_cache_title",
+      "value": "แคช"
+    },
+    {
+      "name": "ms_cache_limit",
+      "value": "ขีดจำกัดแคช"
+    },
+    {
+      "name": "ms_cache_limit_sub",
+      "value": "สื่อที่ไม่ได้ใช้งานนานที่สุดจะถูกล้างโดยอัตโนมัติเมื่อเกินขีดจำกัด"
+    },
+    {
+      "name": "ms_cache_unlimited",
+      "value": "ไม่จำกัด"
+    },
+    {
+      "name": "ms_autoplay_muted",
+      "value": "เล่นแบบปิดเสียง"
+    },
+    {
+      "name": "settings_media",
+      "value": "สื่อ"
+    },
+    {
+      "name": "settings_media_sub",
+      "value": "เล่นอัตโนมัติและเล่นในพื้นหลัง"
+    },
+    {
+      "name": "ms_autoplay_group",
+      "value": "เล่นอัตโนมัติ"
+    },
+    {
+      "name": "cb_blur_amount",
+      "value": "ระดับความเบลอ"
+    },
+    {
+      "name": "meow_mode_custom",
+      "value": "WebPush กำหนดเอง"
+    },
+    {
+      "name": "meow_mode_meow",
+      "value": "MeoW"
+    },
+    {
+      "name": "meow_nickname_label",
+      "value": "ชื่อผู้ใช้ MeoW"
+    },
+    {
+      "name": "meow_nickname_hint",
+      "value": "ป้อนชื่อผู้ใช้ MeoW ของคุณ"
+    },
+    {
+      "name": "meow_register",
+      "value": "ลงทะเบียน"
+    },
+    {
+      "name": "meow_privacy_note",
+      "value": "ในโหมดนี้ เซิร์ฟเวอร์ตัวกลางจะเก็บกุญแจถอดรหัสและสามารถเห็นผู้ส่งและสรุปเนื้อหาของแต่ละข้อความได้ ใช้เฉพาะเมื่อคุณเชื่อถือเซิร์ฟเวอร์นี้"
+    },
+    {
+      "name": "meow_nickname_required",
+      "value": "กรุณาป้อนชื่อผู้ใช้ MeoW"
+    },
+    {
+      "name": "meow_bad_response",
+      "value": "เซิร์ฟเวอร์ตัวกลางส่งข้อมูลที่ไม่สมบูรณ์กลับมา โปรดลองอีกครั้งภายหลัง"
+    },
+    {
+      "name": "meow_network_error",
+      "value": "คำขอเครือข่ายล้มเหลว โปรดตรวจสอบการเชื่อมต่อแล้วลองอีกครั้ง"
+    },
+    {
+      "name": "meow_http_error",
+      "value": "เซิร์ฟเวอร์ตัวกลางส่งข้อผิดพลาดกลับมา: %1$s"
+    },
+    {
+      "name": "meow_relay_unconfigured",
+      "value": "บิลด์นี้ยังไม่ได้ตั้งค่าที่อยู่เซิร์ฟเวอร์ตัวกลางสำหรับพุช"
+    },
+    {
+      "name": "meow_deregister_relay_failed",
+      "value": "เซิร์ฟเวอร์ตัวกลางยกเลิกการสมัครไม่สำเร็จ (การส่งในเครื่องหยุดแล้ว): %1$s"
+    },
+    {
+      "name": "meow_request_code",
+      "value": "ขอรหัสยืนยัน"
+    },
+    {
+      "name": "meow_code_label",
+      "value": "รหัสยืนยัน"
+    },
+    {
+      "name": "meow_code_hint",
+      "value": "ป้อนรหัสที่คุณได้รับ"
+    },
+    {
+      "name": "meow_code_sent",
+      "value": "ส่งรหัสยืนยันไปยัง MeoW ของคุณแล้ว โปรดตรวจสอบแล้วป้อนรหัสด้านล่าง"
+    },
+    {
+      "name": "meow_confirm",
+      "value": "เสร็จสิ้นการลงทะเบียน"
+    },
+    {
+      "name": "meow_code_required",
+      "value": "กรุณาป้อนรหัสยืนยัน"
+    },
+    {
+      "name": "meow_code_invalid",
+      "value": "รหัสไม่ถูกต้องหรือหมดอายุแล้ว โปรดขอรหัสใหม่"
     }
   ]
 }

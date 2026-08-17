@@ -10859,6 +10859,118 @@
     {
       "name": "cl_my_story",
       "value": "Meine Story"
+    },
+    {
+      "name": "ms_cache_title",
+      "value": "Cache"
+    },
+    {
+      "name": "ms_cache_limit",
+      "value": "Cache-Limit"
+    },
+    {
+      "name": "ms_cache_limit_sub",
+      "value": "Bei Überschreitung des Limits wird das am längsten nicht verwendete Medium automatisch gelöscht"
+    },
+    {
+      "name": "ms_cache_unlimited",
+      "value": "Unbegrenzt"
+    },
+    {
+      "name": "ms_autoplay_muted",
+      "value": "Stumm abspielen"
+    },
+    {
+      "name": "settings_media",
+      "value": "Medien"
+    },
+    {
+      "name": "settings_media_sub",
+      "value": "Automatische Wiedergabe und Hintergrundwiedergabe"
+    },
+    {
+      "name": "ms_autoplay_group",
+      "value": "Automatische Wiedergabe"
+    },
+    {
+      "name": "cb_blur_amount",
+      "value": "Unschärfegrad"
+    },
+    {
+      "name": "meow_mode_custom",
+      "value": "Eigenes WebPush"
+    },
+    {
+      "name": "meow_mode_meow",
+      "value": "MeoW"
+    },
+    {
+      "name": "meow_nickname_label",
+      "value": "MeoW-Benutzername"
+    },
+    {
+      "name": "meow_nickname_hint",
+      "value": "Gib deinen MeoW-Benutzernamen ein"
+    },
+    {
+      "name": "meow_register",
+      "value": "Registrieren"
+    },
+    {
+      "name": "meow_privacy_note",
+      "value": "In diesem Modus besitzt der Relay-Server den Entschlüsselungsschlüssel und kann den Absender sowie eine Zusammenfassung jeder Nachricht sehen. Nutze dies nur, wenn du diesem Server vertraust."
+    },
+    {
+      "name": "meow_nickname_required",
+      "value": "Bitte gib einen MeoW-Benutzernamen ein"
+    },
+    {
+      "name": "meow_bad_response",
+      "value": "Der Relay-Server hat unvollständige Daten zurückgegeben. Bitte versuche es später erneut."
+    },
+    {
+      "name": "meow_network_error",
+      "value": "Netzwerkanfrage fehlgeschlagen. Überprüfe deine Verbindung und versuche es erneut."
+    },
+    {
+      "name": "meow_http_error",
+      "value": "Relay-Server meldete einen Fehler: %1$s"
+    },
+    {
+      "name": "meow_relay_unconfigured",
+      "value": "Für diesen Build ist keine Push-Relay-Adresse konfiguriert"
+    },
+    {
+      "name": "meow_deregister_relay_failed",
+      "value": "Der Relay-Server konnte das Abonnement nicht kündigen (lokale Zustellung wurde bereits gestoppt): %1$s"
+    },
+    {
+      "name": "meow_request_code",
+      "value": "Bestätigungscode anfordern"
+    },
+    {
+      "name": "meow_code_label",
+      "value": "Bestätigungscode"
+    },
+    {
+      "name": "meow_code_hint",
+      "value": "Gib den erhaltenen Code ein"
+    },
+    {
+      "name": "meow_code_sent",
+      "value": "Ein Bestätigungscode wurde an dein MeoW gesendet. Prüfe ihn und gib ihn unten ein."
+    },
+    {
+      "name": "meow_confirm",
+      "value": "Registrierung abschließen"
+    },
+    {
+      "name": "meow_code_required",
+      "value": "Bitte gib den Bestätigungscode ein"
+    },
+    {
+      "name": "meow_code_invalid",
+      "value": "Der Code ist falsch oder abgelaufen. Fordere einen neuen an."
     }
   ]
 }

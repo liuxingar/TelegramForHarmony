@@ -1,7 +1,7 @@
 import { getTdClient } from '../tdkit/Globals';
-import { TdObject, TdRequest } from '../tdkit/TdTypes';
-import { AutoDownloadPolicy } from './AppSettings';
+import { TdObject, TdRequest, TdError } from '../tdkit/TdTypes';
 import { str } from '../util/strings';
+import { buildCacheTrimRequest, shouldTrimCache } from './CacheLimit';
 
 export interface StorageUsage {
   filesSize: number;
@@ -288,29 +288,6 @@ export async function clearAllDrafts(): Promise<void> {
   await getTdClient().send(request, 20000);
 }
 
-function tdNetworkType(network: string): TdObject {
-  if (network === 'wifi') { return { '@type': 'networkTypeWiFi' }; }
-  if (network === 'roaming') { return { '@type': 'networkTypeMobileRoaming' }; }
-  return { '@type': 'networkTypeMobile' };
-}
-
-export async function syncAutoDownloadSettings(policy: AutoDownloadPolicy): Promise<void> {
-  const settings: TdObject = { '@type': 'autoDownloadSettings' };
-  settings['is_auto_download_enabled'] = policy.photos || policy.videos || policy.files;
-  settings['max_photo_file_size'] = policy.photos ? 10 * 1024 * 1024 : 0;
-  settings['max_video_file_size'] = policy.videos ? policy.videoLimit : 0;
-  settings['max_other_file_size'] = policy.files ? policy.fileLimit : 0;
-  settings['video_upload_bitrate'] = 0;
-  settings['preload_large_videos'] = policy.preloadLargeVideos;
-  settings['preload_next_audio'] = policy.preloadNextAudio;
-  settings['preload_stories'] = policy.preloadStories;
-  settings['use_less_data_for_calls'] = policy.lessDataForCalls;
-  const request: TdRequest = { '@type': 'setAutoDownloadSettings' };
-  request['settings'] = settings;
-  request['type'] = tdNetworkType(policy.network);
-  await getTdClient().send(request, 15000);
-}
-
 export async function prepareAutosaveSettings(): Promise<void> {
   await getTdClient().send({ '@type': 'getAutosaveSettings' } as TdRequest, 15000);
 }
@@ -327,4 +304,16 @@ export async function syncAutosaveSettings(scope: string, enabled: boolean,
   request['scope'] = { '@type': scopeType } as TdObject;
   request['settings'] = settings;
   await getTdClient().send(request, 15000);
+}
+
+export async function applyCacheLimit(limitBytes: number): Promise<void> {
+  if (!shouldTrimCache(limitBytes)) {
+    return;
+  }
+  try {
+    await getTdClient().send(buildCacheTrimRequest(limitBytes) as TdRequest, 60000);
+  } catch (e) {
+    const error = e as TdError;
+    console.error(`StorageApi.applyCacheLimit failed: ${error.message}`);
+  }
 }

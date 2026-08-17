@@ -26,6 +26,7 @@ import storyStoreTest from './StoryStore.test';
 import linkNavTest from './LinkNav.test';
 import deepLinkTest from './DeepLink.test';
 import webPushRegistrationTest from './WebPushRegistration.test';
+import meowPushRegistrationTest from './MeowPushRegistration.test';
 import streamSegmentMathTest from './StreamSegmentMath.test';
 import groupCallApiTest from './GroupCallApi.test';
 import liveStreamStoreTest from './LiveStreamStore.test';
@@ -57,6 +58,14 @@ import mediaPickTest from './MediaPick.test';
 import chatBackgroundStoreTest from './ChatBackgroundStore.test';
 import chatHeaderPresentationTest from './ChatHeaderPresentation.test';
 import translationServiceTest from './TranslationService.test';
+import mediaPolicyTest from './MediaPolicy.test';
+import mentionDraftTest from './MentionDraft.test';
+import cacheLimitTest from './CacheLimit.test';
+import playSlotTest from './PlaySlot.test';
+import playSlotRegistryTest from './PlaySlotRegistry.test';
+import backgroundBlurTest from './BackgroundBlur.test';
+import themeTest from './Theme.test';
+import patternTileGridTest from './PatternTileGrid.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -87,6 +96,7 @@ export default function testsuite() {
   linkNavTest();
   deepLinkTest();
   webPushRegistrationTest();
+  meowPushRegistrationTest();
   streamSegmentMathTest();
   groupCallApiTest();
   liveStreamStoreTest();
@@ -116,6 +126,14 @@ export default function testsuite() {
   mediaPickTest();
   chatBackgroundStoreTest();
   chatHeaderPresentationTest();
+  mentionDraftTest();
+  mediaPolicyTest();
+  cacheLimitTest();
+  playSlotTest();
+  playSlotRegistryTest();
   customEmojiReactionsTest();
   markdownBlocksTest();
+  backgroundBlurTest();
+  themeTest();
+  patternTileGridTest();
 }

@@ -3,19 +3,7 @@ import { getAccentColorStore } from '../tdkit/Globals';
 import { AccentPalettes } from '../store/AccentColorStore';
 import { TdError, TdObject } from '../tdkit/TdTypes';
 import { profileAccentPreviewOf } from './accentPresentation';
-import { applyAccentPrimary } from './theme';
-
-function darkResourceMode(context: common.UIAbilityContext): boolean {
-  try {
-    const color = context.resourceManager.getColorSync($r('app.color.chat_bg'));
-    const red = (color >>> 16) & 0xFF;
-    const green = (color >>> 8) & 0xFF;
-    const blue = color & 0xFF;
-    return red * 0.299 + green * 0.587 + blue * 0.114 < 128;
-  } catch (_error) {
-    return false;
-  }
-}
+import { applyAccentPrimary, darkResourceMode } from './theme';
 
 // Re-derives the app primary color from the account's profile accent color.
 // No selection (or no palette entry) restores the built-in primary.

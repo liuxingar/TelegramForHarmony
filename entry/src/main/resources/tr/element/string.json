@@ -10859,6 +10859,118 @@
     {
       "name": "cl_my_story",
       "value": "Hikayem"
+    },
+    {
+      "name": "ms_cache_title",
+      "value": "Önbellek"
+    },
+    {
+      "name": "ms_cache_limit",
+      "value": "Önbellek sınırı"
+    },
+    {
+      "name": "ms_cache_limit_sub",
+      "value": "Sınır aşıldığında en uzun süredir kullanılmayan medya otomatik olarak temizlenir"
+    },
+    {
+      "name": "ms_cache_unlimited",
+      "value": "Sınırsız"
+    },
+    {
+      "name": "ms_autoplay_muted",
+      "value": "Sessiz oynat"
+    },
+    {
+      "name": "settings_media",
+      "value": "Medya"
+    },
+    {
+      "name": "settings_media_sub",
+      "value": "Otomatik oynatma ve arka planda oynatma"
+    },
+    {
+      "name": "ms_autoplay_group",
+      "value": "Otomatik oynatma"
+    },
+    {
+      "name": "cb_blur_amount",
+      "value": "Bulanıklık miktarı"
+    },
+    {
+      "name": "meow_mode_custom",
+      "value": "Özel WebPush"
+    },
+    {
+      "name": "meow_mode_meow",
+      "value": "MeoW"
+    },
+    {
+      "name": "meow_nickname_label",
+      "value": "MeoW kullanıcı adı"
+    },
+    {
+      "name": "meow_nickname_hint",
+      "value": "MeoW kullanıcı adınızı girin"
+    },
+    {
+      "name": "meow_register",
+      "value": "Kaydol"
+    },
+    {
+      "name": "meow_privacy_note",
+      "value": "Bu modda aktarım sunucusu şifre çözme anahtarını tutar ve her mesajın göndericisini ve özetini görebilir. Yalnızca bu sunucuya güveniyorsanız kullanın."
+    },
+    {
+      "name": "meow_nickname_required",
+      "value": "MeoW kullanıcı adını girin"
+    },
+    {
+      "name": "meow_bad_response",
+      "value": "Aktarım sunucusu eksik veri döndürdü. Lütfen daha sonra tekrar deneyin."
+    },
+    {
+      "name": "meow_network_error",
+      "value": "Ağ isteği başarısız oldu. Bağlantınızı kontrol edip tekrar deneyin."
+    },
+    {
+      "name": "meow_http_error",
+      "value": "Aktarım sunucusu hata döndürdü: %1$s"
+    },
+    {
+      "name": "meow_relay_unconfigured",
+      "value": "Bu sürümde yapılandırılmış bir push aktarım adresi yok"
+    },
+    {
+      "name": "meow_deregister_relay_failed",
+      "value": "Aktarım sunucusu aboneliği iptal edemedi (yerel teslimat zaten durduruldu): %1$s"
+    },
+    {
+      "name": "meow_request_code",
+      "value": "Doğrulama kodu gönder"
+    },
+    {
+      "name": "meow_code_label",
+      "value": "Doğrulama kodu"
+    },
+    {
+      "name": "meow_code_hint",
+      "value": "Aldığınız kodu girin"
+    },
+    {
+      "name": "meow_code_sent",
+      "value": "Doğrulama kodu MeoW hesabınıza gönderildi. Kontrol edip aşağıya girin."
+    },
+    {
+      "name": "meow_confirm",
+      "value": "Kaydı tamamla"
+    },
+    {
+      "name": "meow_code_required",
+      "value": "Doğrulama kodunu girin"
+    },
+    {
+      "name": "meow_code_invalid",
+      "value": "Kod yanlış veya süresi doldu. Yeni bir kod isteyin."
     }
   ]
 }

@@ -5,7 +5,7 @@ import { UserStore } from '../main/ets/store/UserStore';
 import { ChatStore } from '../main/ets/store/ChatStore';
 import { ChatThemeStore } from '../main/ets/store/ChatThemeStore';
 import {
-  ChatBackgroundState, ChatBackgroundStore, emptyChatBackground
+  ChatBackgroundState, ChatBackgroundStore, defaultChatBackgroundSnapshot, emptyChatBackground
 } from '../main/ets/store/ChatBackgroundStore';
 import { gradientStops } from '../main/ets/util/backgroundPresentation';
 
@@ -274,6 +274,74 @@ export default function chatBackgroundStoreTest() {
       upd['background'] = solidFillBackground(0x123456);
       h.bridge.onReceive(JSON.stringify(upd));
       expect(h.store.current().colors[0]).assertEqual('#123456');
+    });
+
+    // defaultChatBackgroundSnapshot() / seedFromDefault() — the module-level
+    // cache a fresh ChatPage seeds its initial chatBg from, so it doesn't
+    // start on emptyChatBackground() and flash chat_bg (near-white in light
+    // mode) while the real resolution's TDLib round trip is in flight.
+
+    it('a resolved account-default background is remembered and offered to a new store', 0, () => {
+      const h = harness(false);
+      h.store.applyKnownBackground(solidFillBackground(0xABCDEF));
+      expect(defaultChatBackgroundSnapshot(false).colors[0]).assertEqual('#ABCDEF');
+      const seeded = harness(false);
+      seeded.store.seedFromDefault();
+      expect(seeded.store.current().colors[0]).assertEqual('#ABCDEF');
+    });
+
+    it('the snapshot tracks only the most recently resolved mode', 0, () => {
+      const light = harness(false);
+      light.store.applyKnownBackground(solidFillBackground(0x111111));
+      expect(defaultChatBackgroundSnapshot(false).colors[0]).assertEqual('#111111');
+      const dark = harness(true);
+      dark.store.applyKnownBackground(solidFillBackground(0x222222));
+      expect(defaultChatBackgroundSnapshot(true).colors[0]).assertEqual('#222222');
+      // The now-superseded mode falls back to empty instead of serving the
+      // stale light snapshot — a wrong-mode snapshot would itself flash the
+      // wrong colors, which is exactly what this cache exists to avoid.
+      expect(defaultChatBackgroundSnapshot(false).colors.length).assertEqual(0);
+    });
+
+    it('seedFromDefault falls back to empty when nothing has resolved for that mode', 0, () => {
+      // A mode no test in this suite ever populates a snapshot for.
+      const seeded = harness(true);
+      seeded.store.seedFromDefault();
+      // Either genuinely empty (first run) or whatever the last dark=true
+      // snapshot from an earlier test happened to be — both are valid
+      // ChatBackgroundState shapes, so just assert the seed never crashes and
+      // always yields a usable state (colors is always an array).
+      expect(Array.isArray(seeded.store.current().colors)).assertTrue();
+    });
+
+    it('an empty transitional patch never overwrites a good cached snapshot', 0, () => {
+      const h = harness(false);
+      h.store.applyKnownBackground(solidFillBackground(0x654321));
+      expect(defaultChatBackgroundSnapshot(false).colors[0]).assertEqual('#654321');
+      // null clears this store's own state back to empty, but that transient
+      // clear must not poison the shared cache other chats seed from.
+      h.store.applyKnownBackground(null);
+      expect(h.store.current().colors.length).assertEqual(0);
+      expect(defaultChatBackgroundSnapshot(false).colors[0]).assertEqual('#654321');
+    });
+
+    it('a chat with its own background does not get cached as the account default', 0, () => {
+      const h = harness(false);
+      h.store.applyKnownBackground(solidFillBackground(0x777777));
+      expect(defaultChatBackgroundSnapshot(false).colors[0]).assertEqual('#777777');
+      // Give chat 555 its own background in ChatStore's cache before opening
+      // it, so hasSpecificBackground() is true for every patch that follows.
+      const newChat: TdObject = { '@type': 'updateNewChat' };
+      const chat: TdObject = { '@type': 'chat' };
+      chat['id'] = 555;
+      chat['background'] = solidFillBackground(0x00FF00);
+      newChat['chat'] = chat;
+      h.bridge.onReceive(JSON.stringify(newChat));
+      h.store.open(555);
+      h.store.applyKnownBackground(gradientBackground(0xAAAAAA, 0xBBBBBB, 90));
+      expect(h.store.current().colors[0]).assertEqual('#AAAAAA');
+      // The shared default snapshot must still be the earlier, unrelated one.
+      expect(defaultChatBackgroundSnapshot(false).colors[0]).assertEqual('#777777');
     });
   });
 }

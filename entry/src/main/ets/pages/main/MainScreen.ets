@@ -11,13 +11,16 @@ import { ContactsPage } from './ContactsPage';
 import { SettingsPage } from './SettingsPage';
 import { MyProfilePage } from './MyProfilePage';
 import { TdObject, TdRequest, TdError } from '../../tdkit/TdTypes';
-import { COLOR_DIVIDER, COLOR_PRIMARY, COLOR_TAB_PILL_BG, COLOR_TAB_UNSELECTED } from '../../util/theme';
+import {
+  COLOR_DIVIDER, COLOR_PRIMARY, COLOR_TAB_PILL_BG, COLOR_TAB_UNSELECTED, darkResourceMode
+} from '../../util/theme';
 import { KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration } from '../../store/AppSettings';
 import { updateChecker, STORAGE_UPDATE_AVAILABLE } from '../../services/UpdateChecker';
 import { str } from '../../util/strings';
 import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 import { ChatBackgroundState, preloadDefaultChatBackground } from '../../store/ChatBackgroundStore';
 import { rasterizeBackground } from '../../util/chatBackgroundRaster';
+import { KEY_BG_BLUR, BG_BLUR_DEFAULT } from '../../store/AppSettings';
 
 // Translucent tint over a backdrop blur — the frosted-glass dock material.
 const DOCK_BG: ResourceColor = $r('app.color.dock_glass');
@@ -38,6 +41,7 @@ export struct MainScreen {
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   @StorageProp('screenWidthVp') screenW: number = 360;
   @StorageProp('screenHeightVp') screenH: number = 780;
+  @StorageProp(KEY_BG_BLUR) bgBlur: number = BG_BLUR_DEFAULT;
   @StorageProp(STORAGE_UPDATE_AVAILABLE) updateAvailable: boolean = false;
   // 回前台补偿：后台期间的来电 push 可能被系统拒绝，前台一刻重查一次。
   @StorageProp('appIsForeground') @Watch('onAppForegroundChanged') appIsForeground: boolean = true;
@@ -55,21 +59,6 @@ export struct MainScreen {
   private unsubCall: (() => void) | null = null;
   private callPagePushed: boolean = false;
 
-  // Same luminance probe ChatPage uses; a chat theme picks its light or dark
-  // background from it.
-  private darkResourceMode(): boolean {
-    try {
-      const color = (getContext(this) as common.UIAbilityContext)
-        .resourceManager.getColorSync($r('app.color.chat_bg'));
-      const red = (color >>> 16) & 0xFF;
-      const green = (color >>> 8) & 0xFF;
-      const blue = color & 0xFF;
-      return red * 0.299 + green * 0.587 + blue * 0.114 < 128;
-    } catch (_error) {
-      return false;
-    }
-  }
-
   aboutToAppear(): void {
     // 已登录才查更新（MainScreen 只在登录后渲染），内部按 6 小时节流。
     updateChecker.check(false).catch((): void => {});
@@ -78,14 +67,14 @@ export struct MainScreen {
     // inflatedPatterns，之后每个会话都是命中。
     preloadDefaultChatBackground(
       getTdClient(), getChatStore(), getChatThemeStore(),
-      (): boolean => this.darkResourceMode(),
+      (): boolean => darkResourceMode(getContext(this) as common.UIAbilityContext),
       // 顺带把合成也做掉：第一次进会话时这张 jpg 已经在缓存里，不用再等
       // 离屏渲染 + 编码。
       (state: ChatBackgroundState): void => {
         rasterizeBackground(this.getUIContext(), {
           colors: state.colors, angle: state.angle, path: state.path,
           isPattern: state.isPattern, imageOpacity: state.imageOpacity,
-          dimming: state.dimming, blurred: state.blurred,
+          dimming: state.dimming, blurred: state.blurred, userBlur: this.bgBlur,
           width: this.screenW, height: this.screenH
         }, (getContext(this) as common.UIAbilityContext).cacheDir);
       });

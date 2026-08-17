@@ -1,6 +1,7 @@
 import { preferences } from '@kit.ArkData';
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { batteryInfo, commonEventManager } from '@kit.BasicServicesKit';
+import { CACHE_LIMIT_DEFAULT } from './CacheLimit';
 
 // User settings that outlive the process. Each one is mirrored into AppStorage
 // so any component can bind it with @StorageProp and re-render on change, while
@@ -52,42 +53,20 @@ export const KEY_POWER_EFFECT_BACKGROUND: string = 'powerEffectBackground';
 // Data & storage. The current network is supplied by NetworkStateService and
 // is intentionally kept in AppStorage only; user choices below are persisted.
 export const KEY_CURRENT_NETWORK_TYPE: string = 'currentNetworkType'; // none | wifi | mobile | roaming | other
-export const KEY_AUTO_WIFI_PHOTO: string = 'autoWifiPhoto';
-export const KEY_AUTO_WIFI_VIDEO: string = 'autoWifiVideo';
-export const KEY_AUTO_WIFI_FILE: string = 'autoWifiFile';
-export const KEY_AUTO_WIFI_VIDEO_LIMIT: string = 'autoWifiVideoLimit';
-export const KEY_AUTO_WIFI_FILE_LIMIT: string = 'autoWifiFileLimit';
-export const KEY_AUTO_WIFI_PRELOAD_VIDEO: string = 'autoWifiPreloadVideo';
-export const KEY_AUTO_WIFI_NEXT_AUDIO: string = 'autoWifiNextAudio';
-export const KEY_AUTO_WIFI_STORIES: string = 'autoWifiStories';
-export const KEY_AUTO_MOBILE_PHOTO: string = 'autoMobilePhoto';
-export const KEY_AUTO_MOBILE_VIDEO: string = 'autoMobileVideo';
-export const KEY_AUTO_MOBILE_FILE: string = 'autoMobileFile';
-export const KEY_AUTO_MOBILE_VIDEO_LIMIT: string = 'autoMobileVideoLimit';
-export const KEY_AUTO_MOBILE_FILE_LIMIT: string = 'autoMobileFileLimit';
-export const KEY_AUTO_MOBILE_PRELOAD_VIDEO: string = 'autoMobilePreloadVideo';
-export const KEY_AUTO_MOBILE_NEXT_AUDIO: string = 'autoMobileNextAudio';
-export const KEY_AUTO_MOBILE_STORIES: string = 'autoMobileStories';
-export const KEY_AUTO_ROAMING_PHOTO: string = 'autoRoamingPhoto';
-export const KEY_AUTO_ROAMING_VIDEO: string = 'autoRoamingVideo';
-export const KEY_AUTO_ROAMING_FILE: string = 'autoRoamingFile';
-export const KEY_AUTO_ROAMING_VIDEO_LIMIT: string = 'autoRoamingVideoLimit';
-export const KEY_AUTO_ROAMING_FILE_LIMIT: string = 'autoRoamingFileLimit';
-export const KEY_AUTO_ROAMING_PRELOAD_VIDEO: string = 'autoRoamingPreloadVideo';
-export const KEY_AUTO_ROAMING_NEXT_AUDIO: string = 'autoRoamingNextAudio';
-export const KEY_AUTO_ROAMING_STORIES: string = 'autoRoamingStories';
-export const KEY_AUTO_LESS_DATA_CALLS: string = 'autoLessDataCalls';
 export const KEY_AUTOSAVE_PRIVATE: string = 'autosavePrivate';
 export const KEY_AUTOSAVE_GROUP: string = 'autosaveGroup';
 export const KEY_AUTOSAVE_CHANNEL: string = 'autosaveChannel';
+// 缓存上限（字节）。0 = 不限，见 CacheLimit.ets。
+export const KEY_CACHE_LIMIT: string = 'cacheLimit';
+// 聊天背景模糊半径（vp）。用户可调，见 chatBackgroundRaster.ets 的
+// backgroundBlurRadius —— pattern 与"需要模糊"的照片壁纸都用这一个值。
+export const KEY_BG_BLUR: string = 'bgBlur';
+export const BG_BLUR_DEFAULT: number = 8;
+export const BG_BLUR_MIN: number = 0;
+export const BG_BLUR_MAX: number = 20;
+// 自动播放时静音。默认开启 —— 聊天列表里突然出声是最招人烦的行为。
+export const KEY_AUTOPLAY_MUTED: string = 'autoplayMuted';
 export const POWER_THRESHOLD_DEFAULT: number = 10;
-
-export const AUTO_WIFI_VIDEO_LIMIT_DEFAULT: number = 64 * 1024 * 1024;
-export const AUTO_WIFI_FILE_LIMIT_DEFAULT: number = 32 * 1024 * 1024;
-export const AUTO_MOBILE_VIDEO_LIMIT_DEFAULT: number = 10 * 1024 * 1024;
-export const AUTO_MOBILE_FILE_LIMIT_DEFAULT: number = 2 * 1024 * 1024;
-export const AUTO_ROAMING_VIDEO_LIMIT_DEFAULT: number = 2 * 1024 * 1024;
-export const AUTO_ROAMING_FILE_LIMIT_DEFAULT: number = 1024 * 1024;
 
 export const TEXT_SIZE_MIN: number = 12;
 export const TEXT_SIZE_MAX: number = 24;
@@ -146,6 +125,18 @@ export const KEY_WEBPUSH_ACCEPTED: string = 'webPushAccepted';
 export const KEY_WEBPUSH_ENDPOINT: string = 'webPushEndpoint';
 export const KEY_WEBPUSH_P256DH: string = 'webPushP256dh';
 export const KEY_WEBPUSH_AUTH: string = 'webPushAuth';
+// 页面顶部模式记忆：'custom'（手工三字段）或 'meow'（用户名代填）。
+export const KEY_WEBPUSH_MODE: string = 'webPushMode';
+export const WEBPUSH_MODE_CUSTOM: string = 'custom';
+export const WEBPUSH_MODE_MEOW: string = 'meow';
+// MeoW 模式：中转服务器不认识 Telegram userId —— 主键是客户端自己生成的随机
+// subKey（见 MeowPushRegistration.getOrCreateMeowSubKey，用
+// CryptoArchitectureKit 的安全随机生成，首次用到时才生成并落盘）。secret 在
+// 验证码确认成功那一步返回一次，之后改昵称/注销都要带上它才能生效，不带就
+// 只能读。昵称一并存下来，方便回填输入框。
+export const KEY_MEOW_SUBKEY: string = 'meowSubKey';
+export const KEY_MEOW_SECRET: string = 'meowSecret';
+export const KEY_MEOW_NICKNAME: string = 'meowNickname';
 
 // 翻译。目标语言 '' 表示跟随系统语言；整聊天翻译是总开关，关闭时会话里
 // 不出现整聊天翻译入口（单条翻译不受它控制）。
@@ -160,6 +151,10 @@ const DATA_STRING_KEYS: string[] = [
   KEY_WEBPUSH_ENDPOINT,
   KEY_WEBPUSH_P256DH,
   KEY_WEBPUSH_AUTH,
+  KEY_WEBPUSH_MODE,
+  KEY_MEOW_SUBKEY,
+  KEY_MEOW_SECRET,
+  KEY_MEOW_NICKNAME,
   KEY_TRANSLATE_TARGET,
   KEY_TRANSLATE_OPT_OUT
 ];
@@ -177,50 +172,17 @@ const DATA_BOOLEAN_TRUE_DEFAULTS: string[] = [
   // 音乐/语音/直播默认续播（符合平台惯例）；视频默认不续播。
   KEY_BG_PLAY_MUSIC,
   KEY_BG_PLAY_VOICE,
-  KEY_BG_PLAY_LIVE,
-  KEY_AUTO_WIFI_PHOTO,
-  KEY_AUTO_WIFI_VIDEO,
-  KEY_AUTO_WIFI_FILE,
-  KEY_AUTO_WIFI_PRELOAD_VIDEO,
-  KEY_AUTO_WIFI_NEXT_AUDIO,
-  KEY_AUTO_WIFI_STORIES,
-  KEY_AUTO_MOBILE_PHOTO,
-  KEY_AUTO_MOBILE_VIDEO,
-  KEY_AUTO_MOBILE_NEXT_AUDIO
+  KEY_BG_PLAY_LIVE
 ];
 
 const DATA_BOOLEAN_FALSE_DEFAULTS: string[] = [
   KEY_WEBPUSH_ENABLED,
   KEY_WEBPUSH_ACCEPTED,
   KEY_BG_PLAY_VIDEO,
-  KEY_AUTO_MOBILE_FILE,
-  KEY_AUTO_MOBILE_PRELOAD_VIDEO,
-  KEY_AUTO_MOBILE_STORIES,
-  KEY_AUTO_ROAMING_PHOTO,
-  KEY_AUTO_ROAMING_VIDEO,
-  KEY_AUTO_ROAMING_FILE,
-  KEY_AUTO_ROAMING_PRELOAD_VIDEO,
-  KEY_AUTO_ROAMING_NEXT_AUDIO,
-  KEY_AUTO_ROAMING_STORIES,
-  KEY_AUTO_LESS_DATA_CALLS,
   KEY_AUTOSAVE_PRIVATE,
   KEY_AUTOSAVE_GROUP,
   KEY_AUTOSAVE_CHANNEL,
   KEY_TRANSLATE_CHATS
-];
-
-interface NumberDefault {
-  key: string;
-  value: number;
-}
-
-const DATA_NUMBER_DEFAULTS: NumberDefault[] = [
-  { key: KEY_AUTO_WIFI_VIDEO_LIMIT, value: AUTO_WIFI_VIDEO_LIMIT_DEFAULT },
-  { key: KEY_AUTO_WIFI_FILE_LIMIT, value: AUTO_WIFI_FILE_LIMIT_DEFAULT },
-  { key: KEY_AUTO_MOBILE_VIDEO_LIMIT, value: AUTO_MOBILE_VIDEO_LIMIT_DEFAULT },
-  { key: KEY_AUTO_MOBILE_FILE_LIMIT, value: AUTO_MOBILE_FILE_LIMIT_DEFAULT },
-  { key: KEY_AUTO_ROAMING_VIDEO_LIMIT, value: AUTO_ROAMING_VIDEO_LIMIT_DEFAULT },
-  { key: KEY_AUTO_ROAMING_FILE_LIMIT, value: AUTO_ROAMING_FILE_LIMIT_DEFAULT }
 ];
 
 function applyPowerState(percent: number): void {
@@ -324,9 +286,9 @@ export async function initSettings(context: common.Context): Promise<void> {
     for (const key of DATA_BOOLEAN_FALSE_DEFAULTS) {
       AppStorage.setOrCreate(key, await s.get(key, false) as boolean);
     }
-    for (const item of DATA_NUMBER_DEFAULTS) {
-      AppStorage.setOrCreate(item.key, await s.get(item.key, item.value) as number);
-    }
+    AppStorage.setOrCreate(KEY_CACHE_LIMIT, await s.get(KEY_CACHE_LIMIT, CACHE_LIMIT_DEFAULT) as number);
+    AppStorage.setOrCreate(KEY_BG_BLUR, await s.get(KEY_BG_BLUR, BG_BLUR_DEFAULT) as number);
+    AppStorage.setOrCreate(KEY_AUTOPLAY_MUTED, await s.get(KEY_AUTOPLAY_MUTED, true) as boolean);
     for (const key of DATA_STRING_KEYS) {
       AppStorage.setOrCreate(key, await s.get(key, '') as string);
     }
@@ -362,9 +324,6 @@ export async function initSettings(context: common.Context): Promise<void> {
     }
     for (const key of DATA_BOOLEAN_FALSE_DEFAULTS) {
       AppStorage.setOrCreate(key, false);
-    }
-    for (const item of DATA_NUMBER_DEFAULTS) {
-      AppStorage.setOrCreate(item.key, item.value);
     }
     for (const key of DATA_STRING_KEYS) {
       AppStorage.setOrCreate(key, '');
@@ -406,92 +365,8 @@ export function setString(key: string, value: string): void {
   persist(key, value);
 }
 
-export interface AutoDownloadPolicy {
-  network: string;
-  photos: boolean;
-  videos: boolean;
-  files: boolean;
-  videoLimit: number;
-  fileLimit: number;
-  preloadLargeVideos: boolean;
-  preloadNextAudio: boolean;
-  preloadStories: boolean;
-  lessDataForCalls: boolean;
-}
-
 function boolValue(key: string, fallback: boolean): boolean {
   return AppStorage.get<boolean>(key) ?? fallback;
-}
-
-function numberValue(key: string, fallback: number): number {
-  const value = AppStorage.get<number>(key) ?? fallback;
-  return Number.isFinite(value) && value >= 0 ? value : fallback;
-}
-
-// "other" is treated like mobile data: it avoids an unexpectedly large
-// download on Ethernet/VPN transports whose metering status is unknown.
-export function autoDownloadPolicy(networkOverride: string = ''): AutoDownloadPolicy {
-  let network = networkOverride !== '' ? networkOverride
-    : (AppStorage.get<string>(KEY_CURRENT_NETWORK_TYPE) ?? 'other');
-  if (network === 'none') {
-    network = 'none';
-  } else if (network !== 'wifi' && network !== 'mobile' && network !== 'roaming') {
-    network = 'mobile';
-  }
-  if (network === 'wifi') {
-    return {
-      network, photos: boolValue(KEY_AUTO_WIFI_PHOTO, true),
-      videos: boolValue(KEY_AUTO_WIFI_VIDEO, true), files: boolValue(KEY_AUTO_WIFI_FILE, true),
-      videoLimit: numberValue(KEY_AUTO_WIFI_VIDEO_LIMIT, AUTO_WIFI_VIDEO_LIMIT_DEFAULT),
-      fileLimit: numberValue(KEY_AUTO_WIFI_FILE_LIMIT, AUTO_WIFI_FILE_LIMIT_DEFAULT),
-      preloadLargeVideos: boolValue(KEY_AUTO_WIFI_PRELOAD_VIDEO, true),
-      preloadNextAudio: boolValue(KEY_AUTO_WIFI_NEXT_AUDIO, true),
-      preloadStories: boolValue(KEY_AUTO_WIFI_STORIES, true),
-      lessDataForCalls: boolValue(KEY_AUTO_LESS_DATA_CALLS, false)
-    };
-  }
-  if (network === 'roaming') {
-    return {
-      network, photos: boolValue(KEY_AUTO_ROAMING_PHOTO, false),
-      videos: boolValue(KEY_AUTO_ROAMING_VIDEO, false), files: boolValue(KEY_AUTO_ROAMING_FILE, false),
-      videoLimit: numberValue(KEY_AUTO_ROAMING_VIDEO_LIMIT, AUTO_ROAMING_VIDEO_LIMIT_DEFAULT),
-      fileLimit: numberValue(KEY_AUTO_ROAMING_FILE_LIMIT, AUTO_ROAMING_FILE_LIMIT_DEFAULT),
-      preloadLargeVideos: boolValue(KEY_AUTO_ROAMING_PRELOAD_VIDEO, false),
-      preloadNextAudio: boolValue(KEY_AUTO_ROAMING_NEXT_AUDIO, false),
-      preloadStories: boolValue(KEY_AUTO_ROAMING_STORIES, false),
-      lessDataForCalls: boolValue(KEY_AUTO_LESS_DATA_CALLS, false)
-    };
-  }
-  if (network === 'none') {
-    return {
-      network, photos: false, videos: false, files: false, videoLimit: 0, fileLimit: 0,
-      preloadLargeVideos: false, preloadNextAudio: false, preloadStories: false,
-      lessDataForCalls: boolValue(KEY_AUTO_LESS_DATA_CALLS, false)
-    };
-  }
-  return {
-    network, photos: boolValue(KEY_AUTO_MOBILE_PHOTO, true),
-    videos: boolValue(KEY_AUTO_MOBILE_VIDEO, true), files: boolValue(KEY_AUTO_MOBILE_FILE, false),
-    videoLimit: numberValue(KEY_AUTO_MOBILE_VIDEO_LIMIT, AUTO_MOBILE_VIDEO_LIMIT_DEFAULT),
-    fileLimit: numberValue(KEY_AUTO_MOBILE_FILE_LIMIT, AUTO_MOBILE_FILE_LIMIT_DEFAULT),
-    preloadLargeVideos: boolValue(KEY_AUTO_MOBILE_PRELOAD_VIDEO, false),
-    preloadNextAudio: boolValue(KEY_AUTO_MOBILE_NEXT_AUDIO, true),
-    preloadStories: boolValue(KEY_AUTO_MOBILE_STORIES, false),
-    lessDataForCalls: boolValue(KEY_AUTO_LESS_DATA_CALLS, false)
-  };
-}
-
-export function shouldAutoDownload(kind: string, size: number): boolean {
-  const policy = autoDownloadPolicy();
-  if (kind === 'photo') { return policy.photos; }
-  const safeSize = Number.isFinite(size) && size > 0 ? size : Number.MAX_SAFE_INTEGER;
-  if (kind === 'video' || kind === 'animation') {
-    return policy.videos && safeSize <= policy.videoLimit;
-  }
-  if (kind === 'file' || kind === 'audio') {
-    return policy.files && safeSize <= policy.fileLimit;
-  }
-  return false;
 }
 
 // --- 整聊天翻译的会话例外 -----------------------------------------------

@@ -1,12 +1,16 @@
 import { MessageEntry, ReactionInfo, InlineBtn } from '../../store/MessageEntry';
+import { PLAY_SLOT_ENTER_RATIO, PLAY_SLOT_KEEP_RATIO, slotKey } from './playSlot';
+import { VideoBubbleSurface } from './VideoBubbleSurface';
 import { TdObject } from '../../tdkit/TdTypes';
 import { getAccentColorStore, getUserStore } from '../../tdkit/Globals';
 import { AvatarView } from '../chatlist/AvatarView';
+import { actionMenuRow } from './ActionMenuRow';
 import {
   KEY_TEXT_SIZE, KEY_BUBBLE_RADIUS, KEY_REDUCE_ANIM, TEXT_SIZE_DEFAULT, RADIUS_DEFAULT,
-  KEY_POWER_ACTIVE, KEY_POWER_AUTOPLAY_GIF, KEY_POWER_AUTOPLAY_VIDEO, KEY_POWER_CHAT_EFFECTS,
+  KEY_POWER_ACTIVE, KEY_POWER_AUTOPLAY_GIF, KEY_POWER_CHAT_EFFECTS,
   KEY_POWER_EFFECT_MESSAGE, KEY_POWER_EFFECT_REACTION, KEY_POWER_EMOJI, KEY_POWER_EMOJI_CHAT,
-  KEY_POWER_EMOJI_REACTIONS, KEY_POWER_STICKERS, KEY_POWER_STICKER_AUTOPLAY
+  KEY_POWER_EMOJI_REACTIONS, KEY_POWER_STICKERS, KEY_POWER_STICKER_AUTOPLAY,
+  KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration
 } from '../../store/AppSettings';
 import { TgsStickerView } from './TgsStickerView';
 import { WebmStickerView } from './WebmStickerView';
@@ -52,6 +56,11 @@ const LINK_PREVIEW_HEIGHT_RATIO: number = 0.62;
 const QUICK_REACTIONS: string[] = ['❤️', '👍', '👎', '🔥', '🥰', '👏'];
 // Media whose caption can be replaced via editMessageCaption.
 const EDITABLE_CAPTION_TYPES: string[] = ['photo', 'video', 'file', 'audio', 'voice'];
+// Swipe-to-reply: how far (vp) the bubble can be dragged left, and how far it
+// must travel before release commits to a reply (both negative — drag is
+// leftward-only).
+const SWIPE_REPLY_MAX: number = -56;
+const SWIPE_REPLY_TRIGGER: number = -40;
 
 // NOT @Reusable, deliberately.
 //
@@ -107,7 +116,11 @@ struct LiveSenderAvatar {
 
 @Component
 export struct MessageBubble {
-  @Prop msg: MessageEntry;
+  // @Watch fires whenever ChatPage hands down a new msg object (edits, status
+  // changes, "replace media", etc.) — not once per frame — so the transition
+  // check inside onMsgPropChanged is cheap and only fires onMediaGone on an
+  // actual video→non-video flip (see onMsgPropChanged for why this matters).
+  @Prop @Watch('onMsgPropChanged') msg: MessageEntry;
   // Chat-theme outgoing bubble color ('' = the standard theme resource color).
   @Prop themeBubbleOut: string = '';
   @Prop nowSec: number;
@@ -122,9 +135,17 @@ export struct MessageBubble {
   @Prop albumFileIds: number[];
   @Prop albumRatios: number[];
   @Prop albumMemberIds: number[];
-  @Prop albumIsVideo: boolean[];
+  // Same reasoning as msg above: fires on a new albumIsVideo array reference
+  // from ChatPage, not per frame; onAlbumIsVideoChanged only emits when a
+  // specific cell actually flips true→false.
+  @Prop @Watch('onAlbumIsVideoChanged') albumIsVideo: boolean[];
   @Prop albumProgress: number[];
   @Prop albumFailed: boolean[];
+  // 相册视频格子的播放位数据源：缩略图（albumFileIds/albumPaths）不足以起播，
+  // 播放位选中的那一格要挂 VideoBubbleSurface，需要真正的视频文件信息。
+  @Prop albumVideoFileIds: number[];
+  @Prop albumVideoFileSizes: number[];
+  @Prop albumVideoMimeTypes: string[];
   @Prop albumCaption: string;
   albumCaptionEntities: TdObject[] = [];
   @StorageProp('screenWidthVp') screenW: number = 360;
@@ -140,6 +161,9 @@ export struct MessageBubble {
   onCommentTap: (messageId: number) => void = (): void => {};
   onBotCallback: (messageId: number, data: string) => void = (): void => {};
   onAvatarTap: (userId: number) => void = (): void => {};
+  // Long press on a group message avatar → mention that sender in the composer.
+  onAvatarLongPress: (userId: number, name: string) => void =
+    (_userId: number, _name: string): void => {};
   onReplyTap: (messageId: number) => void = (): void => {};
   onFileTap: (messageId: number) => void = (): void => {};
   onFileSave: (messageId: number) => void = (): void => {};
@@ -175,6 +199,28 @@ export struct MessageBubble {
   @Prop audioHasPrevious: boolean = false;
   @Prop audioHasNext: boolean = false;
   onAutoplayVideoNeedDownload: (messageId: number) => void = (): void => {};
+  // 播放位竞选上报：可见比例变化 / 组件消失。albumIndex 为 -1 表示非相册整条消息，
+  // 相册格子用该格自己在 albumMemberIds 里的下标。回调由 ChatPage 接（见 playSlot.ets）。
+  onMediaRatio: (messageId: number, albumIndex: number, ratio: number, centerY: number) => void =
+    (_messageId: number, _albumIndex: number, _ratio: number, _centerY: number): void => {};
+  onMediaGone: (messageId: number, albumIndex: number) => void =
+    (_messageId: number, _albumIndex: number): void => {};
+  // 当前播放位的 key（playSlot.slotKey 的输出），'' 表示没有播放位。
+  @Prop playSlotKey: string = '';
+  // 自动播放静音开关（KEY_AUTOPLAY_MUTED，由 ChatPage 用 @StorageProp 下发）。
+  @Prop autoplayMuted: boolean = true;
+  // 播放位视频的播放进度：每 350ms 一次的高频回调，故意不接到 @State——接上去
+  // 会让 ChatPage 每 350ms 重建整个消息列表。ChatPage 用普通 Map 接住（按
+  // messageId 记录），供全屏查看器交接时读取。
+  onPlaySlotPositionChanged: (messageId: number, albumIndex: number, positionMs: number) => void =
+    (_messageId: number, _albumIndex: number, _positionMs: number): void => {};
+  // 播放位视频播完或内嵌播放失败：这一条主动退位，让同屏其它候选重新竞选。
+  // 不接的话播完的那条会永久霸占播放位，同屏另一条永远起不来。
+  onPlaySlotEnded: (messageId: number, albumIndex: number) => void =
+    (_messageId: number, _albumIndex: number): void => {};
+  // 播放位起播位置（毫秒）。由 ChatPage 在换届时从气泡进度表查出并随
+  // playSlotKey 一起下发——全屏查看器交还的进度就是靠这条路接上的。
+  @Prop playSlotStartMs: number = 0;
   onAnimationTap: (messageId: number, isPlaying: boolean) => void =
     (_messageId: number, _isPlaying: boolean): void => {};
   onAnimationPlaybackFailed: (messageId: number) => void = (): void => {};
@@ -185,6 +231,9 @@ export struct MessageBubble {
   // emoji 参数其实是 reaction key：标准 emoji 原样，自定义 emoji 为 'ce:<id>'。
   onSetReaction: (messageId: number, emoji: string, isChosen: boolean) => void = (): void => {};
   onReplyTo: (messageId: number) => void = (): void => {};
+  // Blocks swipe-to-reply while the composer is in edit mode (avoids the two
+  // states fighting over the reply/edit strip). Long-press → 回复 is unaffected.
+  @Prop editingActive: boolean = false;
   onEditMsg: (messageId: number) => void = (): void => {};
   onShowReactors: (messageId: number, emoji: string) => void = (): void => {};
   onTranslateMsg: (messageId: number) => void = (): void => {};
@@ -200,6 +249,7 @@ export struct MessageBubble {
   onForwardMsg: (messageId: number) => void = (): void => {};
   onReportMsg: (messageId: number) => void = (): void => {};
   onSelectMsg: (messageId: number) => void = (): void => {};
+  onDeleteMsg: (messageId: number) => void = (): void => {};
   // "转发自 X" tapped: (originChatId, originMsgId, originUserId) — chat ids for a
   // channel/chat origin, user id for a user origin.
   onForwardTap: (chatId: number, messageId: number, userId: number) => void = (): void => {};
@@ -233,15 +283,83 @@ export struct MessageBubble {
   @StorageProp(KEY_POWER_STICKERS) stickersEnabled: boolean = true;
   @StorageProp(KEY_POWER_STICKER_AUTOPLAY) stickerAutoplay: boolean = true;
   @StorageProp(KEY_POWER_AUTOPLAY_GIF) @Watch('onPlaybackPolicyChanged') autoplayGif: boolean = true;
-  @StorageProp(KEY_POWER_AUTOPLAY_VIDEO) autoplayVideo: boolean = true;
   @Prop showAvatar: boolean = true;     // last row of a same-sender run
   @Prop showSenderName: boolean = true; // first row of a same-sender run
   @State mediaVisible: boolean = true;
   @State stickerPlaybackFailed: boolean = false;
   @State linkPreviewOpening: boolean = false;
+  // Controlled context-menu presentation — mirrors ChatRow's bubble-lift preview
+  // (see ChatRow.ets bindContextMenu) so long-pressing a message bubble gets the
+  // same lift/scale animation as long-pressing a chat-list row.
+  @State private msgContextMenuShown: boolean = false;
+  // Swipe-to-reply: live horizontal offset (vp, always <= 0 — the bubble only
+  // drags leftward) applied as a translate on the bubble container while
+  // dragging, then sprung back to 0 on release. onReplyTo fires once the drag
+  // clears SWIPE_REPLY_TRIGGER; it never fires mid-drag.
+  @State private swipeReplyX: number = 0;
+  // 播放位竞选用的中心 y（vp）。只在 onAreaChange 回调里写、onVisibleAreaApproximateChange
+  // 回调里读，不参与 build() —— 用普通字段而非 @State，避免每帧 onAreaChange 触发重建。
+  private mediaCenterY: number = 0;
+  // 相册九宫格每格各自的中心 y，key 为 cell.idx。同样是普通 Map，不驱动刷新。
+  private albumCellCenterY: Map<number, number> = new Map<number, number>();
+  // 上一次已知的「整条消息是否参与竞选」状态，供 onMsgPropChanged 判断翻转。
+  // 普通字段而非 @State：只在 @Watch 回调里读写，不参与 build()。
+  private wasCompetingVideo: boolean = false;
+  // 上一次已知的「相册第 idx 格是否参与竞选」状态，key 为 cell.idx。同样是普通 Map。
+  private albumWasCompetingVideo: Map<number, boolean> = new Map<number, boolean>();
+
+  private isCompetingVideo(): boolean {
+    return this.msg.contentType === 'video' && !this.msg.isAnimation;
+  }
 
   aboutToAppear(): void {
     this.requestAutoplayDownload();
+    // 只记录初始状态，不在这里上报——上报的语义是「不再参与竞选」，首次挂载时
+    // 谈不上「不再」。真正的上报发生在 aboutToDisappear（组件销毁）和
+    // onMsgPropChanged / onAlbumIsVideoChanged（同一组件原地翻转）两条路径上。
+    this.wasCompetingVideo = this.isCompetingVideo();
+    for (let i = 0; i < this.albumIsVideo.length; i++) {
+      this.albumWasCompetingVideo.set(i, this.albumIsVideoAt(i));
+    }
+  }
+
+  aboutToDisappear(): void {
+    // LazyForEach 回收组件时若不上报，候选表里会留下永远不消失的幽灵条目。
+    if (this.isCompetingVideo()) {
+      this.onMediaGone(this.msg.id, -1);
+    }
+    for (let i = 0; i < this.albumIsVideo.length; i++) {
+      if (this.albumIsVideoAt(i)) {
+        this.onMediaGone(this.albumMemberIdAt(i), i);
+      }
+    }
+  }
+
+  // "替换媒体"（约 1511 行附近的菜单项）能在同一条消息 id 上把 contentType 从
+  // video 改成 photo；组件按 messageId 复用、不会走 aboutToDisappear，所以那次
+  // 上报的「静默停止」不够——候选表里旧的可见比例记录还在，播放位可能锁定一个
+  // 已经不是视频的气泡。这里在 @Prop msg 每次被 ChatPage 换成新对象时（编辑、
+  // 状态变化、替换媒体等，不是每帧）比较一次「参与竞选」状态，只在从 true 翻到
+  // false 的那一次补发 onMediaGone，翻转之外什么也不做。
+  private onMsgPropChanged(): void {
+    const competing = this.isCompetingVideo();
+    if (this.wasCompetingVideo && !competing) {
+      this.onMediaGone(this.msg.id, -1);
+    }
+    this.wasCompetingVideo = competing;
+  }
+
+  // 同样的翻转检测，作用在相册每一格上：某格从「是视频」变成「不是视频」时补发
+  // 一次 onMediaGone，只在那一次触发，不逐帧触发。
+  private onAlbumIsVideoChanged(): void {
+    for (let i = 0; i < this.albumIsVideo.length; i++) {
+      const isVideo = this.albumIsVideoAt(i);
+      const wasVideo = this.albumWasCompetingVideo.get(i) ?? false;
+      if (wasVideo && !isVideo) {
+        this.onMediaGone(this.albumMemberIdAt(i), i);
+      }
+      this.albumWasCompetingVideo.set(i, isVideo);
+    }
   }
 
   // Everything this row shows has to be re-seeded here.
@@ -259,10 +377,12 @@ export struct MessageBubble {
       this.msg.videoPath !== '' || this.msg.videoFailed || !this.mediaVisible) {
       return;
     }
-    const allowed = this.msg.isAnimation
-      ? (this.autoplayGif && !this.powerSaving && !this.reduceAnim)
-      : (this.autoplayVideo && !this.powerSaving && !this.reduceAnim);
-    if (allowed || (this.msg.isAnimation && this.animationForcePlay)) {
+    // 普通视频：可见不等于要看。整文件下载改由「点开」或二期的播放位触发，
+    // 这里只放行 GIF/动图 —— 它们体积小且要无限循环，仍走整文件路径。
+    if (!this.msg.isAnimation) {
+      return;
+    }
+    if ((this.autoplayGif && !this.powerSaving && !this.reduceAnim) || this.animationForcePlay) {
       this.onAutoplayVideoNeedDownload(this.msg.id);
     }
   }
@@ -327,6 +447,36 @@ export struct MessageBubble {
   private reactionDuration(duration: number): number {
     return this.chatEffectsEnabled && this.reactionEffectsEnabled &&
       this.emojiEnabled && this.emojiReactionsEnabled && !this.powerSaving ? duration : 0;
+  }
+
+  // Swipe-to-reply's snap-back/settle animation — degrades to an instant jump
+  // under 省电模式/减少动效, matching the rest of the bubble's motion gating.
+  private swipeReplyDuration(duration: number): number {
+    return this.powerSaving || this.reduceAnim ? 0 : duration;
+  }
+
+  private swipeReplyEligible(): boolean {
+    // System/hidden rows carry no replyable message; editing owns the
+    // reply/edit strip below and must not fight a concurrent swipe.
+    return !this.editingActive && this.msg.contentType !== 'system' && this.msg.contentType !== 'hidden';
+  }
+
+  private onSwipeReplyUpdate(offsetX: number): void {
+    if (!this.swipeReplyEligible()) {
+      return;
+    }
+    // Leftward-only, clamped to SWIPE_REPLY_MAX (both negative).
+    this.swipeReplyX = Math.max(SWIPE_REPLY_MAX, Math.min(0, offsetX));
+  }
+
+  private onSwipeReplyEnd(): void {
+    const triggered: boolean = this.swipeReplyEligible() && this.swipeReplyX <= SWIPE_REPLY_TRIGGER;
+    animateTo({ duration: this.swipeReplyDuration(180), curve: Curve.EaseOut }, (): void => {
+      this.swipeReplyX = 0;
+    });
+    if (triggered) {
+      this.onReplyTo(this.msg.id);
+    }
   }
 
   // Keep the bubble's own colors intact and dim the whole surface while held.
@@ -413,18 +563,28 @@ export struct MessageBubble {
     .scale({ x: 0.97, y: 0.94 })
   }
 
+  // albumIndex -1 表示非相册整条消息；相册格子传该格自己在 albumMemberIds
+  // 里的下标（与上报给 PlaySlotRegistry 的 key 一致，见 onMediaRatio）。
+  // 排除 isAnimation：onVisibleAreaApproximateChange 只在"视频→动图"翻转时
+  // 停止上报新的 ratio，不会追溯撤回已经选中的候选，所以消息对象翻转的那
+  // 一帧 playSlotKey 可能还没跟着变——这里兜一道，不让动图错挂流式播放器。
+  private isPlaySlot(albumIndex: number): boolean {
+    return this.playSlotKey !== '' && !this.msg.isAnimation &&
+      this.playSlotKey === slotKey(this.msg.id, albumIndex);
+  }
+
+  // 普通视频的播放已经交给播放位机制（isPlaySlot → VideoBubbleSurface 分片流
+  // 式播放），这里只剩动图（GIF）走整文件下载 + 循环播放（SmartLoopVideo）。
+  // 圆形视频消息（videoNote）走的是另一条独立分支，不受这里影响。
   private autoplayInlineVideo(): boolean {
-    if (this.msg.contentType !== 'video' || this.msg.videoPath === '' ||
+    if (this.msg.contentType !== 'video' || !this.msg.isAnimation || this.msg.videoPath === '' ||
       !this.mediaVisible || !this.appIsForeground || this.animationPlaybackFailed) {
       return false;
     }
-    if (this.msg.isAnimation) {
-      if (this.animationPaused) {
-        return false;
-      }
-      return this.animationForcePlay || (!this.powerSaving && !this.reduceAnim && this.autoplayGif);
+    if (this.animationPaused) {
+      return false;
     }
-    return !this.powerSaving && !this.reduceAnim && this.autoplayVideo;
+    return this.animationForcePlay || (!this.powerSaving && !this.reduceAnim && this.autoplayGif);
   }
 
   private autoplayCategory(): string {
@@ -1145,6 +1305,65 @@ export struct MessageBubble {
     return this.albumMemberIds[index] ?? 0;
   }
 
+  private albumVideoFileIdAt(index: number): number {
+    return this.albumVideoFileIds[index] ?? 0;
+  }
+
+  private albumVideoFileSizeAt(index: number): number {
+    return this.albumVideoFileSizes[index] ?? 0;
+  }
+
+  private albumVideoMimeTypeAt(index: number): string {
+    return this.albumVideoMimeTypes[index] ?? '';
+  }
+
+  // 与 isPlaySlot() 同一道 !isAnimation 兜底：动图不参加竞选（spec §3.3），
+  // 相册格子也不例外，否则相册里的动图会错挂流式播放器。
+  private isAlbumCellPlaySlot(index: number): boolean {
+    return this.playSlotKey !== '' && !this.msg.isAnimation &&
+      this.playSlotKey === slotKey(this.albumMemberIdAt(index), index);
+  }
+
+  // The play slot renders through StreamingVideoPlayer, whose XComponent is
+  // XComponentType.SURFACE (see StreamingVideoPlayer.ets) — that surface is
+  // composited by the platform outside ArkUI's render tree, so
+  // MenuPreviewMode.IMAGE's componentSnapshot cannot capture it (it would show
+  // up as a black/blank rectangle in the lifted preview). When this bubble
+  // currently owns the play slot — main content or an album cell — the
+  // long-press menu falls back to the plain, preview-less presentation instead
+  // of lying about what the frozen snapshot contains.
+  private hasLiveVideoSurface(): boolean {
+    if (this.playSlotKey === '' || this.msg.isAnimation) {
+      return false;
+    }
+    if (this.isPlaySlot(-1) && this.msg.videoFileId !== 0) {
+      return true;
+    }
+    for (let i = 0; i < this.albumMemberIds.length; i++) {
+      if (this.isAlbumCellPlaySlot(i) && this.albumVideoFileIdAt(i) !== 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Same per-corner rounding the bubble itself draws (see the .borderRadius()
+  // call in build()) — reused as the context-menu preview's crop radius so the
+  // lifted snapshot matches the bubble's own configured KEY_BUBBLE_RADIUS
+  // instead of a hardcoded value.
+  private bubbleCornerRadius(): BorderRadiuses {
+    return {
+      topLeft: this.msg.isOutgoing ? this.bubbleRadius :
+        (this.showSenderName ? this.bubbleRadius : this.runCornerRadius()),
+      topRight: this.msg.isOutgoing ?
+        (this.showSenderName ? this.bubbleRadius : this.runCornerRadius()) : this.bubbleRadius,
+      bottomLeft: this.msg.isOutgoing ? this.bubbleRadius :
+        (this.showAvatar ? this.tailCornerRadius() : this.runCornerRadius()),
+      bottomRight: this.msg.isOutgoing ?
+        (this.showAvatar ? this.tailCornerRadius() : this.runCornerRadius()) : this.bubbleRadius
+    };
+  }
+
   @Builder
   albumGrid() {
     Column({ space: 2 }) {
@@ -1152,7 +1371,27 @@ export struct MessageBubble {
         Row({ space: 2 }) {
           ForEach(row, (cell: AlbumCell) => {
             Stack() {
-              if (this.albumPathAt(cell.idx) !== '') {
+              if (this.isAlbumCellPlaySlot(cell.idx) && this.albumVideoFileIdAt(cell.idx) !== 0) {
+                // 播放位选中这一格：挂播放器而不是静态封面。
+                VideoBubbleSurface({
+                  fileId: this.albumVideoFileIdAt(cell.idx),
+                  fileSize: this.albumVideoFileSizeAt(cell.idx),
+                  mimeType: this.albumVideoMimeTypeAt(cell.idx),
+                  posterPath: this.albumPathAt(cell.idx),
+                  muted: this.autoplayMuted,
+                  startPositionMs: this.playSlotStartMs,
+                  onPositionChanged: (positionMs: number): void => {
+                    this.onPlaySlotPositionChanged(this.albumMemberIdAt(cell.idx), cell.idx, positionMs);
+                  },
+                  onEnded: (): void => {
+                    this.onPlaySlotEnded(this.albumMemberIdAt(cell.idx), cell.idx);
+                  }
+                })
+                  .width(cell.width).height(cell.height).clip(true)
+                  .borderRadius(6)
+                  // 同理：交给格子自己的 onClick 打开全屏查看器。
+                  .hitTestBehavior(HitTestMode.None);
+              } else if (this.albumPathAt(cell.idx) !== '') {
                 // No appear transition, for the same reason as the single-media
                 // thumbnail: a row rebuild re-creates this node and would
                 // replay the fade every time.
@@ -1186,6 +1425,7 @@ export struct MessageBubble {
                 }
               }
               if (this.albumIsVideoAt(cell.idx) &&
+                !(this.isAlbumCellPlaySlot(cell.idx) && this.albumVideoFileIdAt(cell.idx) !== 0) &&
                 (this.albumPathAt(cell.idx) !== '' ||
                   (this.albumFileIds[cell.idx] ?? 0) === 0 ||
                   (this.albumFailed[cell.idx] ?? false))) {
@@ -1197,6 +1437,24 @@ export struct MessageBubble {
               ? str('mb_album_item_video', cell.idx + 1)
               : ((this.albumFailed[cell.idx] ?? false)
                 ? str('mb_photo_failed') : str('mb_album_item', cell.idx + 1)))
+            .onVisibleAreaApproximateChange(
+              { ratios: [0.0, PLAY_SLOT_KEEP_RATIO, PLAY_SLOT_ENTER_RATIO, 0.9],
+                expectedUpdateInterval: 200 },
+              (_visible: boolean, ratio: number): void => {
+                if (!this.albumIsVideoAt(cell.idx)) {
+                  return; // 相册竞选只看这一格是不是视频，图片格不上报
+                }
+                const memberId = this.albumMemberIdAt(cell.idx);
+                if (ratio <= 0) {
+                  this.onMediaGone(memberId, cell.idx);
+                } else {
+                  this.onMediaRatio(memberId, cell.idx, ratio, this.albumCellCenterY.get(cell.idx) ?? 0);
+                }
+              })
+            .onAreaChange((_old: Area, area: Area): void => {
+              this.albumCellCenterY.set(cell.idx,
+                (area.globalPosition.y as number) + (area.height as number) / 2);
+            })
             .onClick((e: ClickEvent) => {
               // Same as the single-media case: a failed cell offers retry.
               if (this.albumCellRetryable(cell.idx)) {
@@ -1383,23 +1641,6 @@ export struct MessageBubble {
     return false;
   }
 
-  @Builder
-  menuRow(icon: string, label: string, danger: boolean, onTap: () => void) {
-    Row({ space: 14 }) {
-      SymbolGlyph($r(icon)).fontSize(19).fontColor([danger ? '#FF3B30' : COLOR_BUBBLE_TEXT]);
-      Text(label).fontSize(16).fontColor(danger ? '#FF3B30' : COLOR_BUBBLE_TEXT).layoutWeight(1);
-    }
-    .width('100%').padding({ left: 16, right: 16, top: 11, bottom: 11 })
-    .alignItems(VerticalAlign.Center)
-    .borderRadius(10)
-    .stateStyles({
-      normal: this.menuActionNormalStyle,
-      pressed: this.menuActionPressedStyle
-    })
-    .animation({ duration: this.effectDuration(110), curve: Curve.EaseOut })
-    .onClick(onTap);
-  }
-
   // Long-press context menu: quick-reaction row (tap an emoji to toggle it, the
   // chevron opens the full picker) over the standard message actions.
   @Builder
@@ -1440,40 +1681,41 @@ export struct MessageBubble {
       .width('100%').padding({ left: 12, right: 10, top: 8, bottom: 8 })
       .alignItems(VerticalAlign.Center);
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
-      this.menuRow('sys.symbol.arrowshape_turn_up_left', str('mb_reply'), false, () => { this.onReplyTo(this.msg.id); });
+      actionMenuRow('sys.symbol.arrowshape_turn_up_left', str('mb_reply'), false, () => { this.onReplyTo(this.msg.id); });
       // TDLib 1.8.65 has no can_be_edited on message (it moved to
       // getMessageProperties); gate locally on Telegram's 48h edit window and
       // let the server be the final judge. Media types edit their caption.
       if (this.msg.isOutgoing && this.nowSec - this.msg.date < 172800 &&
         (this.msg.contentType === 'text' ||
           EDITABLE_CAPTION_TYPES.indexOf(this.msg.contentType) >= 0)) {
-        this.menuRow('sys.symbol.square_and_pencil',
+        actionMenuRow('sys.symbol.square_and_pencil',
           this.msg.contentType === 'text' ? str('edit') : str('mb_edit_caption'),
           false, () => { this.onEditMsg(this.msg.id); });
       }
-      this.menuRow('sys.symbol.plus_square_on_square', str('mb_copy_text'), false, () => { this.onCopyText(this.msg.id); });
+      actionMenuRow('sys.symbol.plus_square_on_square', str('mb_copy_text'), false, () => { this.onCopyText(this.msg.id); });
       if (this.msg.text !== '') {
-        this.menuRow('sys.symbol.translate', str('mb_translate'), false, () => { this.onTranslateMsg(this.msg.id); });
+        actionMenuRow('sys.symbol.translate', str('mb_translate'), false, () => { this.onTranslateMsg(this.msg.id); });
       }
-      this.menuRow('sys.symbol.link', str('mb_copy_link'), false, () => { this.onCopyLink(this.msg.id); });
-      this.menuRow('sys.symbol.arrowshape_turn_up_right', str('mb_forward'), false, () => { this.onForwardMsg(this.msg.id); });
-      this.menuRow('sys.symbol.pin', this.isPinnedMsg ? str('ft_unpin') : str('ft_pin'), false,
+      actionMenuRow('sys.symbol.link', str('mb_copy_link'), false, () => { this.onCopyLink(this.msg.id); });
+      actionMenuRow('sys.symbol.arrowshape_turn_up_right', str('mb_forward'), false, () => { this.onForwardMsg(this.msg.id); });
+      actionMenuRow('sys.symbol.pin', this.isPinnedMsg ? str('ft_unpin') : str('ft_pin'), false,
         () => { this.onPinMsg(this.msg.id, this.isPinnedMsg); });
       if (this.msg.isOutgoing && this.nowSec - this.msg.date < 172800 &&
         (this.msg.contentType === 'photo' || this.msg.contentType === 'video')) {
-        this.menuRow('sys.symbol.picture', str('mb_replace_media'), false,
+        actionMenuRow('sys.symbol.picture', str('mb_replace_media'), false,
           () => { this.onReplaceMedia(this.msg.id); });
       }
       if (this.msg.contentType === 'poll' && this.msg.isOutgoing && !this.msg.pollIsClosed) {
-        this.menuRow('sys.symbol.checkmark_circle', str('mb_stop_poll'), false,
+        actionMenuRow('sys.symbol.checkmark_circle', str('mb_stop_poll'), false,
           () => { this.onStopPoll(this.msg.id); });
       }
       if (this.msg.contentType === 'poll' && !this.msg.pollIsAnonymous) {
-        this.menuRow('sys.symbol.person_2', str('mb_view_voters'), false,
+        actionMenuRow('sys.symbol.person_2', str('mb_view_voters'), false,
           () => { this.onPollVoters(this.msg.id); });
       }
-      this.menuRow('sys.symbol.exclamationmark_circle', str('mb_report'), true, () => { this.onReportMsg(this.msg.id); });
-      this.menuRow('sys.symbol.checkmark_circle', str('mb_select'), false, () => { this.onSelectMsg(this.msg.id); });
+      actionMenuRow('sys.symbol.exclamationmark_circle', str('mb_report'), true, () => { this.onReportMsg(this.msg.id); });
+      actionMenuRow('sys.symbol.checkmark_circle', str('mb_select'), false, () => { this.onSelectMsg(this.msg.id); });
+      actionMenuRow('sys.symbol.trash', str('delete'), true, () => { this.onDeleteMsg(this.msg.id); });
     }
     .width(262)
     .padding({ top: 6, bottom: 6 });
@@ -1533,7 +1775,29 @@ export struct MessageBubble {
       this.translationBlock();
     } else if (this.msg.contentType === 'photo' || this.msg.contentType === 'video') {
       Stack() {
-        if (this.autoplayInlineVideo()) {
+        if (this.isPlaySlot(-1) && this.msg.contentType === 'video' && this.msg.videoFileId !== 0) {
+          // 播放位气泡：只有滚动停下、被选中的这一条才挂流式播放器。
+          VideoBubbleSurface({
+            fileId: this.msg.videoFileId,
+            fileSize: this.msg.videoFileSize,
+            mimeType: this.msg.videoMimeType,
+            sourceWidth: this.msg.photoWidth,
+            sourceHeight: this.msg.photoHeight,
+            posterPath: this.msg.photoPath,
+            muted: this.autoplayMuted,
+            startPositionMs: this.playSlotStartMs,
+            onPositionChanged: (positionMs: number): void => {
+              this.onPlaySlotPositionChanged(this.msg.id, -1, positionMs);
+            },
+            onEnded: (): void => {
+              this.onPlaySlotEnded(this.msg.id, -1);
+            }
+          })
+            .width(this.mediaBox().width).height(this.mediaBox().height)
+            // 播放位没有手势层，但底层 XComponent 会默认吃掉点击——和下面
+            // SmartLoopVideo 同理，交给外层 Stack 的 onClick 打开全屏查看器。
+            .hitTestBehavior(HitTestMode.None);
+        } else if (this.autoplayInlineVideo()) {
           SmartLoopVideo({
             videoPath: this.msg.videoPath,
             thumbPath: this.msg.photoPath,
@@ -1587,7 +1851,8 @@ export struct MessageBubble {
             }
           }.width(this.mediaBox().width).height(this.mediaBox().height);
         }
-        if (this.msg.contentType === 'video' && !this.autoplayInlineVideo()) {
+        if (this.msg.contentType === 'video' && !this.autoplayInlineVideo() &&
+          !(this.isPlaySlot(-1) && this.msg.videoFileId !== 0)) {
           // Don't cover the thumbnail's loader with a second center control.
           if (this.msg.photoPath !== '' || this.msg.photoFileId === 0 || this.msg.photoFailed) {
             this.videoActionBadge(
@@ -1605,14 +1870,31 @@ export struct MessageBubble {
       .accessibilityText(this.msg.contentType === 'video'
         ? this.videoAccessibilityText()
         : (this.msg.photoFailed ? str('mb_photo_failed') : str('mb_open_photo')))
-      .onVisibleAreaChange([0.0, 0.08], (visible: boolean, ratio: number): void => {
-        const nextVisible = visible && ratio > 0.02;
-        if (this.mediaVisible !== nextVisible) {
-          this.mediaVisible = nextVisible;
-          if (nextVisible) {
-            this.requestAutoplayDownload();
+      // onVisibleAreaChange 每帧都要重新计算可见比例，聊天列表里挂几十个媒体节点会
+      // 明显拖累功耗（HarmonyOS 文档已载明这点）；onVisibleAreaApproximateChange 按
+      // expectedUpdateInterval 限频上报，正是为这种「列表里大量媒体节点」的场景加的。
+      .onVisibleAreaApproximateChange(
+        { ratios: [0.0, 0.08, PLAY_SLOT_KEEP_RATIO, PLAY_SLOT_ENTER_RATIO, 0.9],
+          expectedUpdateInterval: 200 },
+        (visible: boolean, ratio: number): void => {
+          const nextVisible = visible && ratio > 0.02;
+          if (this.mediaVisible !== nextVisible) {
+            this.mediaVisible = nextVisible;
+            if (nextVisible) {
+              this.requestAutoplayDownload();
+            }
           }
-        }
+          if (this.msg.contentType !== 'video' || this.msg.isAnimation) {
+            return; // 只有普通视频参与播放位竞选：GIF/动图仍走整文件循环播放
+          }
+          if (ratio <= 0) {
+            this.onMediaGone(this.msg.id, -1);
+          } else {
+            this.onMediaRatio(this.msg.id, -1, ratio, this.mediaCenterY);
+          }
+        })
+      .onAreaChange((_old: Area, area: Area): void => {
+        this.mediaCenterY = (area.globalPosition.y as number) + (area.height as number) / 2;
       })
       .onClick((e: ClickEvent) => {
         // When the media shows a retry control, the tap has to retry. It used
@@ -2289,7 +2571,12 @@ export struct MessageBubble {
               if (this.msg.senderIsUser && this.msg.senderId > 0) {
                 this.onAvatarTap(this.msg.senderId);
               }
-            });
+            })
+            .gesture(LongPressGesture().onAction(() => {
+              if (this.msg.senderIsUser && this.msg.senderId > 0) {
+                this.onAvatarLongPress(this.msg.senderId, this.msg.senderName);
+              }
+            }));
         } else {
           // Mid-run row: keep the avatar column's width so bubbles stay aligned.
           Column().width(38);
@@ -2350,16 +2637,7 @@ export struct MessageBubble {
           : COLOR_BUBBLE_IN))
       // Adjacent rows share a restrained 7vp corner. Only the final row gets
       // the tight tail corner; a single-row run keeps the configured top arc.
-      .borderRadius({
-        topLeft: this.msg.isOutgoing ? this.bubbleRadius :
-          (this.showSenderName ? this.bubbleRadius : this.runCornerRadius()),
-        topRight: this.msg.isOutgoing ?
-          (this.showSenderName ? this.bubbleRadius : this.runCornerRadius()) : this.bubbleRadius,
-        bottomLeft: this.msg.isOutgoing ? this.bubbleRadius :
-          (this.showAvatar ? this.tailCornerRadius() : this.runCornerRadius()),
-        bottomRight: this.msg.isOutgoing ?
-          (this.showAvatar ? this.tailCornerRadius() : this.runCornerRadius()) : this.bubbleRadius
-      })
+      .borderRadius(this.bubbleCornerRadius())
       .padding(this.isBareEmoji() ? 0 : 8)
       .shadow(this.isBareEmoji() ? { radius: 0, color: Color.Transparent, offsetX: 0, offsetY: 0 }
         : { radius: 2, color: '#14000000', offsetX: 0, offsetY: 1 })
@@ -2369,7 +2647,62 @@ export struct MessageBubble {
       })
       .animation({ duration: this.effectDuration(110), curve: Curve.EaseOut })
       .onAreaChange((_old: Area, area: Area) => { this.bubbleW = area.width as number; })
-      .bindContextMenu(this.msgContextMenu(), ResponseType.LongPress);
+      // Swipe-to-reply follows the finger while dragging; onSwipeReplyEnd
+      // snaps it back (and fires onReplyTo past the trigger threshold).
+      .translate({ x: this.swipeReplyX })
+      // Controlled mode (mirrors ChatRow.ets bindContextMenu): a manual
+      // LongPressGesture in parallelGesture keeps the chat List's pan
+      // recognizer alive while held (movement still cancels the long press),
+      // and drives the same "lift the bubble" preview animation as a
+      // chat-list row long-press. The swipe-to-reply PanGesture joins the same
+      // group in Exclusive mode (only one of long-press/swipe wins per
+      // gesture), still parallel to the ancestor List so vertical scrolling
+      // is untouched — PanDirection.Horizontal means a vertical drag simply
+      // never satisfies this recognizer and falls through to the List.
+      .parallelGesture(
+        GestureGroup(GestureMode.Exclusive,
+          LongPressGesture({ fingers: 1, repeat: false, duration: 500 })
+            .onAction((): void => { this.msgContextMenuShown = true; }),
+          PanGesture({ fingers: 1, direction: PanDirection.Horizontal, distance: 8 })
+            .onActionUpdate((event: GestureEvent): void => { this.onSwipeReplyUpdate(event.offsetX); })
+            .onActionEnd((): void => { this.onSwipeReplyEnd(); })
+            .onActionCancel((): void => { this.onSwipeReplyEnd(); })
+        )
+      )
+      .bindContextMenu(this.msgContextMenuShown, this.msgContextMenu(), {
+        // A play-slot bubble hosts a XComponentType.SURFACE video surface that
+        // componentSnapshot cannot capture (see hasLiveVideoSurface()) — fall
+        // back to no preview there instead of lifting a black rectangle.
+        preview: this.hasLiveVideoSurface() ? MenuPreviewMode.NONE : MenuPreviewMode.IMAGE,
+        previewBorderRadius: this.bubbleCornerRadius(),
+        previewAnimationOptions: {
+          scale: [0.98, 1.035],
+          transition: TransitionEffect.OPACITY
+            .combine(TransitionEffect.scale({ x: 0.98, y: 0.98 }))
+            .animation({
+              duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+              curve: Curve.FastOutSlowIn
+            })
+        },
+        borderRadius: 16,
+        backgroundColor: Color.Transparent,
+        backgroundBlurStyle: BlurStyle.COMPONENT_ULTRA_THICK,
+        transition: TransitionEffect.OPACITY
+          .combine(TransitionEffect.scale({ x: 0.96, y: 0.96 }))
+          .animation({
+            duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+            curve: Curve.FastOutSlowIn
+          }),
+        mask: {
+          color: '#52000000',
+          backgroundBlurStyle: BlurStyle.BACKGROUND_THIN
+        },
+        modalMode: ModalMode.TARGET_WINDOW,
+        hapticFeedbackMode: HapticFeedbackMode.AUTO,
+        onDisappear: (): void => {
+          this.msgContextMenuShown = false;
+        }
+      });
       if (this.msg.isOutgoing && this.hasBubbleTail()) {
         Polygon({ width: 8, height: 12 })
           .points([[0, 0], [8, 12], [0, 12]])

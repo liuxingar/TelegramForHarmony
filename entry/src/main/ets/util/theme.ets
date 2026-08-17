@@ -1,3 +1,6 @@
+import { common } from '@kit.AbilityKit';
+import { resourceManager } from '@kit.LocalizationKit';
+
 // Shared palette and dimensions for the UI. Colors resolve through the
 // resource system (resources/base|dark/element/color.json), so the whole app
 // follows the system light/dark mode automatically.
@@ -6,6 +9,38 @@
 // built after applyAccentPrimary() pick the new value, already-mounted pages
 // refresh when they rebuild (re-enter). COLOR_TAB_SELECTED follows it.
 export let COLOR_PRIMARY: ResourceColor = $r('app.color.primary');
+
+// Pure: does this colorMode value mean the app is currently in dark mode?
+// Takes a plain number rather than an enum type so the same check works for
+// resourceManager.ColorMode (DARK=0/LIGHT=1 — what
+// getConfigurationSync().colorMode actually returns, and what this is
+// written against) and for anything else numerically compatible, such as
+// ConfigurationConstant.ColorMode (DARK=0/LIGHT=1/NOT_SET=-1, used
+// elsewhere in AppSettings for setColorMode()) — both agree DARK is 0.
+// NOTE: DARK === 0, not 1 — the enum order is the reverse of what most
+// booleans-as-numbers APIs use. Never replace this with a raw `=== 1` check.
+export function isDarkColorMode(colorMode: number): boolean {
+  return colorMode === resourceManager.ColorMode.DARK;
+}
+
+// Whether the app is currently rendering in dark mode. Reads
+// resourceManager's own reported colorMode directly instead of reading a
+// themed color resource ($r('app.color.chat_bg')) and inferring brightness
+// from its RGB via a luminance threshold — that indirect probe was found
+// on-device to disagree with colorMode: getConfigurationSync().colorMode
+// correctly reported dark while getColorSync(chat_bg) on the very same
+// resourceManager still resolved the light-qualifier color. See
+// .superpowers/sdd/background-diagnosis-report.md for the trace that
+// pinned this down. This replaces five copies of the old luminance probe
+// that used to live in ChatPage, MainScreen, ChatThemePage, AccentColorPage
+// and accentTheme.
+export function darkResourceMode(context: common.UIAbilityContext): boolean {
+  try {
+    return isDarkColorMode(context.resourceManager.getConfigurationSync().colorMode);
+  } catch (_error) {
+    return false;
+  }
+}
 
 export function applyAccentPrimary(hex: string): void {
   const next: ResourceColor = hex !== '' ? hex : $r('app.color.primary');

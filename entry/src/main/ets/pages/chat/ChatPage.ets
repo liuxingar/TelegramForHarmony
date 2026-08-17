@@ -64,6 +64,7 @@ import {
   KEY_POWER_EFFECT_BACKGROUND, KEY_POWER_EFFECT_BLUR, KEY_POWER_EFFECT_MENU,
   KEY_POWER_EFFECT_REACTION, KEY_POWER_EFFECT_REPLY, KEY_POWER_PARTICLES,
   KEY_POWER_SMOOTH_TRANSITIONS, KEY_REDUCE_ANIM, KEY_SEND_BY_ENTER, KEY_TRANSLATE_CHATS,
+  KEY_AUTOPLAY_MUTED,
   powerAnimationDuration,
   powerFeatureEnabled, powerGroupAnimationDuration, powerGroupFeatureEnabled, autosaveEnabled,
   translateOptedOut, setTranslateOptedOut
@@ -385,6 +386,20 @@ struct ChatPage {
   private playSlots: PlaySlotRegistry = new PlaySlotRegistry();
   private unsubPlaySlot: (() => void) | null = null;
   @State playSlotKey: string = '';
+  // 缓存设置 → 自动播放静音开关，唯一消费点：下发给气泡播放器的 muted。
+  @StorageProp(KEY_AUTOPLAY_MUTED) autoplayMuted: boolean = true;
+  // 气泡播放位的播放进度，按 messageId 记录。onPlaySlotPositionChanged 是
+  // 350ms 一次的高频回调，故意用普通 Map 而不是 @State/@Link/AppStorage——
+  // 写状态会让消息列表每 350ms 重建一次。打开全屏查看器时读它作为
+  // startPositionMs，关闭查看器时把最终进度写回。整个会话关闭时清空
+  // （见 aboutToDisappear），避免无界增长。
+  private bubblePositionMs: Map<number, number> = new Map<number, number>();
+  // 全屏查看器当前播放进度：只在查看器打开期间被 onPositionChanged 回调更新，
+  // 关闭时读一次写回 bubblePositionMs，同样是普通字段，不驱动渲染。
+  private viewerPositionMs: number = 0;
+  // 打开查看器那一刻从 bubblePositionMs 取到的起播位置，一次性字段，供
+  // MediaViewerOverlay 构造时读取（与 viewerInitIdx 同一模式）。
+  private viewerStartPositionMs: number = 0;
   private slotTickTimer: number = -1;
   private lastMaxId: number = 0;
   @State atBottom: boolean = true;
@@ -1460,6 +1475,9 @@ struct ChatPage {
     this.releasePlaybackRequests();
     this.clearSlotTick();
     this.playSlots.reset();
+    // 进度表只在这一次会话内有意义（交接回全屏查看器/回到播放位），会话
+    // 结束就清空，避免长会话里随刷屏无界增长。
+    this.bubblePositionMs.clear();
     if (this.unsubPlaySlot !== null) {
       this.unsubPlaySlot();
       this.unsubPlaySlot = null;
@@ -2097,6 +2115,12 @@ struct ChatPage {
     }
     this.releasePlaybackRequests();
     this.exitViewerLandscape();
+    // 交接:把查看器最终播放到的位置写回气泡进度表，并把这条 pin 成播放位——
+    // 用户刚看完的这条回到列表后应当继续播。取值/计算都要在 viewerMsgId 被
+    // animateTo 里的回调清零之前完成。
+    const viewerMessageId = this.viewerMsgId;
+    this.bubblePositionMs.set(viewerMessageId, this.viewerPositionMs);
+    this.playSlots.pin(viewerMessageId, this.albumIndexForViewer(viewerMessageId));
     const duration: number = this.chatEffectDuration(KEY_POWER_EFFECT_BLUR, 260);
     this.viewerClosing = true;
     animateTo({ duration, curve: Curve.Friction }, () => {
@@ -2107,7 +2131,8 @@ struct ChatPage {
     // 查看器关掉了，重新喂一次"已停止"把播放位判定跑起来。候选表这一刻
     // 可能还是空的（open 时 reset() 清空过，且几何没变不会自然重新上报），
     // 那就先选不出来——下一次真正的滚动/新消息到达会用同一个幂等方法再补
-    // 一次，不会永久卡住。
+    // 一次，不会永久卡住。pin() 记的目标在候选表补上之前一样选不出来，
+    // 是同一个幂等收敛，不需要额外处理。
     this.armPlaySlotSettle();
     setTimeout((): void => { this.viewerClosing = false; }, Math.max(80, duration));
   }
@@ -3187,6 +3212,11 @@ struct ChatPage {
     if (this.mediaEntryIsPhoto(m)) {
       this.store.requestFullPhoto(messageId);
     }
+    // 交接:取气泡播放位记录的进度，必须在 playSlots.reset() 让气泡播放器
+    // 卸载之前完成——bubblePositionMs 本身不受 reset() 影响，但卸载之后
+    // 气泡播放器不会再有新的 onPositionChanged，读早读晚不影响这一次的值；
+    // 保险起见仍然按“先取、后卸载”的顺序写。
+    this.viewerStartPositionMs = this.bubblePositionMs.get(messageId) ?? 0;
     // 全屏查看器是页内叠层，不是新页面，不会触发 onPageHide——List 和气泡
     // 照样挂着，onVisibleAreaApproximateChange 只算几何不算遮挡，ratio 不
     // 变就不会自己释放播放位。不在这里主动 reset()，播放位气泡的播放器会
@@ -3211,6 +3241,14 @@ struct ChatPage {
       }
     }
     return [messageId];
+  }
+
+  // playSlot 的 albumIndex 语义：整条消息传 -1，相册成员传该格在 memberIds
+  // 里的下标。查看器交接（closeViewer 里的 pin）用这个把 viewerMsgId 换算
+  // 回同一套坐标。
+  private albumIndexForViewer(messageId: number): number {
+    const sib = this.siblingIdsFor(messageId);
+    return sib.length > 1 ? sib.indexOf(messageId) : -1;
   }
 
   private onLanguageEpochChanged(): void {
@@ -7836,6 +7874,10 @@ struct ChatPage {
                 showAvatar: g.showAvatar,
                 showSenderName: g.showSenderName,
                 playSlotKey: this.playSlotKey,
+                autoplayMuted: this.autoplayMuted,
+                onPlaySlotPositionChanged: (msgId: number, albumIndex: number, positionMs: number): void => {
+                  this.bubblePositionMs.set(msgId, positionMs);
+                },
                 onMediaRatio: (msgId: number, albumIndex: number, ratio: number, centerY: number): void => {
                   // 查看器开着/页面不可见时不灌候选表——不然它在不该增长的
                   // 时候被一批陈旧 ratio 填满，查看器一关或页面一恢复就可能
@@ -8283,6 +8325,7 @@ struct ChatPage {
           messages: this.messages,
           groups: this.groups,
           initIdx: this.viewerInitIdx,
+          initStartPositionMs: this.viewerStartPositionMs,
           tapX: this.tapX,
           tapY: this.tapY,
           store: this.store,
@@ -8291,7 +8334,8 @@ struct ChatPage {
           effectDuration: (key: string, ms: number): number => this.chatEffectDuration(key, ms),
           isVideoEntry: (entry: MessageEntry): boolean => this.mediaEntryIsVideo(entry),
           onRequestClose: (): void => { this.closeViewer(); },
-          onSaveMedia: (): void => { this.saveViewerMedia(); }
+          onSaveMedia: (): void => { this.saveViewerMedia(); },
+          onPositionChanged: (positionMs: number): void => { this.viewerPositionMs = positionMs; }
         })
       }
     }

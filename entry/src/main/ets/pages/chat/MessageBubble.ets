@@ -200,10 +200,13 @@ export struct MessageBubble {
     (_messageId: number, _albumIndex: number): void => {};
   // 当前播放位的 key（playSlot.slotKey 的输出），'' 表示没有播放位。
   @Prop playSlotKey: string = '';
+  // 自动播放静音开关（KEY_AUTOPLAY_MUTED，由 ChatPage 用 @StorageProp 下发）。
+  @Prop autoplayMuted: boolean = true;
   // 播放位视频的播放进度：每 350ms 一次的高频回调，故意不接到 @State——接上去
-  // 会让 ChatPage 每 350ms 重建整个消息列表。进度交接是下一个任务的事，这里
-  // 先用普通字段接住，不驱动任何渲染。
-  private playSlotPositionMs: number = 0;
+  // 会让 ChatPage 每 350ms 重建整个消息列表。ChatPage 用普通 Map 接住（按
+  // messageId 记录），供全屏查看器交接时读取。
+  onPlaySlotPositionChanged: (messageId: number, albumIndex: number, positionMs: number) => void =
+    (_messageId: number, _albumIndex: number, _positionMs: number): void => {};
   onAnimationTap: (messageId: number, isPlaying: boolean) => void =
     (_messageId: number, _isPlaying: boolean): void => {};
   onAnimationPlaybackFailed: (messageId: number) => void = (): void => {};
@@ -1271,16 +1274,15 @@ export struct MessageBubble {
           ForEach(row, (cell: AlbumCell) => {
             Stack() {
               if (this.isAlbumCellPlaySlot(cell.idx) && this.albumVideoFileIdAt(cell.idx) !== 0) {
-                // 播放位选中这一格：挂播放器而不是静态封面。静音先固定 true——
-                // KEY_AUTOPLAY_MUTED 的消费是下个任务的事。
+                // 播放位选中这一格：挂播放器而不是静态封面。
                 VideoBubbleSurface({
                   fileId: this.albumVideoFileIdAt(cell.idx),
                   fileSize: this.albumVideoFileSizeAt(cell.idx),
                   mimeType: this.albumVideoMimeTypeAt(cell.idx),
                   posterPath: this.albumPathAt(cell.idx),
-                  muted: true,
+                  muted: this.autoplayMuted,
                   onPositionChanged: (positionMs: number): void => {
-                    this.playSlotPositionMs = positionMs;
+                    this.onPlaySlotPositionChanged(this.albumMemberIdAt(cell.idx), cell.idx, positionMs);
                   }
                 })
                   .width(cell.width).height(cell.height).clip(true)
@@ -1688,8 +1690,7 @@ export struct MessageBubble {
     } else if (this.msg.contentType === 'photo' || this.msg.contentType === 'video') {
       Stack() {
         if (this.isPlaySlot(-1) && this.msg.contentType === 'video' && this.msg.videoFileId !== 0) {
-          // 播放位气泡：只有滚动停下、被选中的这一条才挂流式播放器。静音先
-          // 固定 true——KEY_AUTOPLAY_MUTED 的消费是下个任务的事。
+          // 播放位气泡：只有滚动停下、被选中的这一条才挂流式播放器。
           VideoBubbleSurface({
             fileId: this.msg.videoFileId,
             fileSize: this.msg.videoFileSize,
@@ -1697,9 +1698,9 @@ export struct MessageBubble {
             sourceWidth: this.msg.photoWidth,
             sourceHeight: this.msg.photoHeight,
             posterPath: this.msg.photoPath,
-            muted: true,
+            muted: this.autoplayMuted,
             onPositionChanged: (positionMs: number): void => {
-              this.playSlotPositionMs = positionMs;
+              this.onPlaySlotPositionChanged(this.msg.id, -1, positionMs);
             }
           })
             .width(this.mediaBox().width).height(this.mediaBox().height)

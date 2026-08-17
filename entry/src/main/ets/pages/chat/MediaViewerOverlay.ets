@@ -56,6 +56,12 @@ export struct MediaViewerOverlay {
 
   // Set once at construction by the page (index of the tapped album member).
   initIdx: number = 0;
+  // Bubble→viewer handoff: the play position the page had recorded for the
+  // tapped message (see ChatPage.bubblePositionMs), read once here just like
+  // initIdx. Only applies to that one message — a different album member
+  // reached by swiping starts at 0, since it never had a bubble play slot in
+  // this session.
+  initStartPositionMs: number = 0;
   store: MessageStore | null = null;
   chatTitle: string = '';
   @Prop nowSec: number = 0;
@@ -65,6 +71,14 @@ export struct MediaViewerOverlay {
   isVideoEntry: (entry: MessageEntry) => boolean = (): boolean => false;
   onRequestClose: () => void = (): void => {};
   onSaveMedia: () => void = (): void => {};
+  // Viewer→bubble handoff (the other direction): the page samples this on
+  // every tick and writes it back to bubblePositionMs when the viewer closes.
+  // 350ms-ish cadence from StreamingVideoPlayer, same "plain field, no @State"
+  // reasoning as the bubble side.
+  onPositionChanged: (positionMs: number) => void = (_positionMs: number): void => {};
+  // Captured once in aboutToAppear: which message initStartPositionMs belongs
+  // to, since viewerMsgId itself moves as the user swipes.
+  private initialViewerMsgId: number = 0;
 
   @State pageIdx: number = 0;
   // Landscape stays two-way with the page: its onBackPress must be able to see
@@ -100,6 +114,7 @@ export struct MediaViewerOverlay {
 
   aboutToAppear(): void {
     this.pageIdx = this.initIdx;
+    this.initialViewerMsgId = this.viewerMsgId;
     this.prefetchNeighbours(this.pageIdx);
   }
 
@@ -592,6 +607,10 @@ export struct MediaViewerOverlay {
                 posterPath: this.siblingPath(id),
                 showControls: this.chromeVisible,
                 landscape: this.videoLandscape,
+                // 全屏就该有声音，不受气泡自动播放静音开关影响。
+                muted: false,
+                startPositionMs: id === this.initialViewerMsgId ? this.initStartPositionMs : 0,
+                onPositionChanged: (positionMs: number): void => { this.onPositionChanged(positionMs); },
                 onBackgroundTap: () => { this.toggleChrome(); },
                 onSwipeNext: () => { this.switchViewer(1); },
                 onSwipePrev: () => { this.switchViewer(-1); },

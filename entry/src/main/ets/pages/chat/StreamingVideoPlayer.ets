@@ -825,28 +825,58 @@ export struct StreamingVideoPlayer {
       // Actual prepare/stall state: centered and explicit, while the poster
       // remains visible underneath instead of flashing a featureless black frame.
       if (this.status !== '' && !this.hasError) {
-        Column({ space: 8 }) {
-          if (this.bufferedPercent > 0 && this.bufferedPercent < 100) {
-            Stack() {
-              Progress({ value: this.bufferedPercent, total: 100, type: ProgressType.Ring })
-                .width(44).height(44).color(Color.White);
-              Text(`${this.bufferedPercent}%`).fontSize(10).fontColor(Color.White);
+        if (this.embedded) {
+          // Embedded (chat-bubble) buffering indicator: a thin line hugging the
+          // bottom edge of the video — no text, no dark card, just the bar
+          // riding on top of the poster/surface. Unlike the fullscreen path
+          // below, there's no room (or need) for a status label in-bubble.
+          //
+          // bufferedPercent stays 0 until the first real progress sample
+          // arrives; a fully-empty bar there reads as "nothing is happening"
+          // rather than "buffering", so it floors at a small fixed sliver
+          // instead. ArkUI's Linear progress has no built-in indeterminate/
+          // looping mode (that's Ring/Capsule-only via enableScanEffect on
+          // LinearStyleOptions is scan-highlight-over-a-value, not a true
+          // indeterminate loop at value 0), so the sliver is the honest
+          // choice rather than leaning on undocumented behavior.
+          Progress({
+            value: this.bufferedPercent > 0 ? this.bufferedPercent : 8,
+            total: 100,
+            type: ProgressType.Linear
+          })
+            .width('100%')
+            .height(2.5)
+            .style({ strokeWidth: 2.5, strokeRadius: 0 })
+            .color(Color.White)
+            .backgroundColor('#33FFFFFF')
+            .align(Alignment.Bottom)
+            // Purely decorative — must not steal the tap that opens/toggles
+            // controls on the video underneath.
+            .hitTestBehavior(HitTestMode.Transparent);
+        } else {
+          Column({ space: 8 }) {
+            if (this.bufferedPercent > 0 && this.bufferedPercent < 100) {
+              Stack() {
+                Progress({ value: this.bufferedPercent, total: 100, type: ProgressType.Ring })
+                  .width(44).height(44).color(Color.White);
+                Text(`${this.bufferedPercent}%`).fontSize(10).fontColor(Color.White);
+              }
+            } else {
+              LoadingProgress().width(38).height(38).color(Color.White);
             }
-          } else {
-            LoadingProgress().width(38).height(38).color(Color.White);
+            Text(this.status)
+              .fontSize(13)
+              .fontColor(Color.White)
+              .fontWeight(FontWeight.Medium);
           }
-          Text(this.status)
-            .fontSize(13)
-            .fontColor(Color.White)
-            .fontWeight(FontWeight.Medium);
+          .alignItems(HorizontalAlign.Center)
+          .padding({ left: 18, right: 18, top: 15, bottom: 15 })
+          .backgroundColor('#70000000')
+          .borderRadius(16)
+          .transition(TransitionEffect.OPACITY
+            .combine(TransitionEffect.scale({ x: 0.9, y: 0.9 }))
+            .animation({ duration: 180, curve: Curve.EaseOut }));
         }
-        .alignItems(HorizontalAlign.Center)
-        .padding({ left: 18, right: 18, top: 15, bottom: 15 })
-        .backgroundColor('#70000000')
-        .borderRadius(16)
-        .transition(TransitionEffect.OPACITY
-          .combine(TransitionEffect.scale({ x: 0.9, y: 0.9 }))
-          .animation({ duration: 180, curve: Curve.EaseOut }));
       }
       if (this.hasError) {
         Column({ space: 8 }) {

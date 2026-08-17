@@ -12,6 +12,7 @@ import {
   ParsedSubscription, SUBSCRIPTION_JSON_HINT, WebPushConfig, WebPushValidation,
   deregisterWebPush, parseSubscriptionJson, registerWebPush, validateWebPushConfig
 } from '../../services/WebPushRegistration';
+import { HuaweiPushResult, registerHuaweiPush } from '../../services/HuaweiPushRegistration';
 import { str } from '../../util/strings';
 import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
@@ -42,6 +43,13 @@ struct WebPushPage {
   @State consentShown: boolean = false;
   @State jsonInput: string = '';
   @State jsonExpanded: boolean = false;
+  // 华为 Push Kit 探针：验证 Telegram 服务器能否直接投递到 Push Kit 通道
+  // （而不经过自建 Web Push 中转）。三行分别对应 token / registerDevice 结果 /
+  // 失败时的错误码与文案，见 HuaweiPushRegistration.ets 顶部注释。
+  @State hwBusy: boolean = false;
+  @State hwTokenLine: string = '';
+  @State hwResultLine: string = '';
+  @State hwErrorLine: string = '';
 
   aboutToAppear(): void {
     this.endpoint = this.storedEndpoint;
@@ -182,6 +190,34 @@ struct WebPushPage {
     this.statusText = str('wp_filled');
   }
 
+  private truncateToken(token: string): string {
+    const EDGE_LEN: number = 12;
+    if (token.length <= EDGE_LEN * 2) {
+      return token;
+    }
+    return `${token.substring(0, EDGE_LEN)}...${token.substring(token.length - EDGE_LEN)}`;
+  }
+
+  private runHuaweiPushProbe(): void {
+    if (this.hwBusy) {
+      return;
+    }
+    this.hwBusy = true;
+    this.hwTokenLine = str('wp_registering');
+    this.hwResultLine = '';
+    this.hwErrorLine = '';
+    registerHuaweiPush(getTdClient()).then((result: HuaweiPushResult): void => {
+      this.hwTokenLine = result.token !== ''
+        ? this.truncateToken(result.token)
+        : str('wp_register_failed', `${result.errorCode}`);
+      this.hwResultLine = result.success
+        ? (result.pushReceiverId !== '' ? str('wp_registered_with_id', result.pushReceiverId) : str('wp_registered_no_id'))
+        : (result.token !== '' ? str('wp_register_failed', `${result.errorCode}`) : '');
+      this.hwErrorLine = result.success ? '' : result.errorMessage;
+      this.hwBusy = false;
+    });
+  }
+
   private deregister(): void {
     if (this.busy) {
       return;
@@ -317,6 +353,27 @@ struct WebPushPage {
             // needs to see the sentences whole.
             Text($r('app.string.wp_server_steps'))
               .fontSize(11).fontColor(COLOR_TEXT_SECONDARY).lineHeight(17).width('100%');
+          }
+          .width('100%').padding(14)
+          .backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
+
+          // 探针区块：与上面的自建 Web Push 并存，验证华为 Push Kit 通道是否
+          // 可被 Telegram 服务器直接使用。验证通过前不接入 PushExtensionAbility。
+          Column({ space: 8 }) {
+            Button(this.hwBusy ? $r('app.string.processing') : $r('app.string.px_test'))
+              .fontSize(15).width('100%').height(44)
+              .backgroundColor(COLOR_PAGE_BG).fontColor(COLOR_PRIMARY)
+              .enabled(!this.hwBusy)
+              .onClick((): void => this.runHuaweiPushProbe());
+            if (this.hwTokenLine !== '') {
+              Text(this.hwTokenLine).fontSize(12).lineHeight(17).fontColor(COLOR_TEXT_PRIMARY).width('100%');
+            }
+            if (this.hwResultLine !== '') {
+              Text(this.hwResultLine).fontSize(12).lineHeight(17).fontColor(COLOR_TEXT_SECONDARY).width('100%');
+            }
+            if (this.hwErrorLine !== '') {
+              Text(this.hwErrorLine).fontSize(12).lineHeight(17).fontColor('#FF3B30').width('100%');
+            }
           }
           .width('100%').padding(14)
           .backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);

@@ -57,6 +57,8 @@ import mediaPickTest from './MediaPick.test';
 import chatBackgroundStoreTest from './ChatBackgroundStore.test';
 import chatHeaderPresentationTest from './ChatHeaderPresentation.test';
 import translationServiceTest from './TranslationService.test';
+import mediaPolicyTest from './MediaPolicy.test';
+import mentionDraftTest from './MentionDraft.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -116,6 +118,8 @@ export default function testsuite() {
   mediaPickTest();
   chatBackgroundStoreTest();
   chatHeaderPresentationTest();
+  mentionDraftTest();
+  mediaPolicyTest();
   customEmojiReactionsTest();
   markdownBlocksTest();
 }

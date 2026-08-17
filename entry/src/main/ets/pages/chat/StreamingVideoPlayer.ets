@@ -73,6 +73,12 @@ export struct StreamingVideoPlayer {
   @Prop posterPath: string = '';
   @Prop showControls: boolean = true;
   @Prop landscape: boolean = false;
+  // Embed mode: mounted directly in a chat bubble instead of the fullscreen
+  // viewer. No control bar / gestures / speed / rotate — just poster +
+  // surface + buffering hint. See build() and onPlayingChanged() below.
+  @Prop embedded: boolean = false;
+  @Prop muted: boolean = false;
+  @Prop startPositionMs: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
   onBackgroundTap: () => void = (): void => {};
@@ -80,6 +86,9 @@ export struct StreamingVideoPlayer {
   onSwipePrev: () => void = (): void => {};
   onOrientationChange: (landscape: boolean) => void =
     (_landscape: boolean): void => {};
+  onPositionChanged: (positionMs: number) => void =
+    (_positionMs: number): void => {};
+  onEnded: () => void = (): void => {};
   private player: IjkMediaPlayer | null = null;
   private session: VideoStreamSession | null = null;
   private rangeServer: VideoRangeServer | null = null;
@@ -139,8 +148,13 @@ export struct StreamingVideoPlayer {
   }
 
   // 播放状态变化时同步"视频后台播放"保活（开关关闭则不挂任务，
-  // 切后台由系统正常挂起）。
+  // 切后台由系统正常挂起）。内嵌模式（列表内播放位）从不申请保活——
+  // 划走气泡就该正常息屏/挂起，不能被一段列表预览挡住。
   onPlayingChanged(): void {
+    if (this.embedded) {
+      mediaPlaybackKeepAlive.release('video');
+      return;
+    }
     if (this.isPlaying && (AppStorage.get<boolean>(KEY_BG_PLAY_VIDEO) ?? false)) {
       const context = getUiAbilityContext();
       if (context !== null) {
@@ -302,6 +316,12 @@ export struct StreamingVideoPlayer {
           this.isPrepared = true;
           this.durationMs = Math.max(0, player.getDuration());
           player.setSpeed(SPEEDS[this.speedIdx]);
+          const volume: string = this.muted ? '0.0' : '1.0';
+          player.setVolume(volume, volume);
+          if (this.startPositionMs > 0) {
+            player.seekTo(`${Math.floor(this.startPositionMs)}`);
+            this.currentTimeMs = this.startPositionMs;
+          }
           player.start();
           this.isPlaying = true;
           this.isCompleted = false;
@@ -311,8 +331,14 @@ export struct StreamingVideoPlayer {
       const completionListener: OnCompletionListener = {
         onCompletion: (): void => {
           this.isPlaying = false;
-          this.isCompleted = true;
           this.currentTimeMs = this.durationMs;
+          if (this.embedded) {
+            // No replay affordance in embed mode — the mount point (chat
+            // bubble) decides what happens next (fall back to poster, etc).
+            this.onEnded();
+            return;
+          }
+          this.isCompleted = true;
         }
       };
       // bufferedPercent tracks the actual TDLib download (subscribeProgress
@@ -545,6 +571,7 @@ export struct StreamingVideoPlayer {
       }
       if (!this.dragging) {
         this.currentTimeMs = Math.max(0, this.player.getCurrentPosition());
+        this.onPositionChanged(this.currentTimeMs);
       }
       const duration = this.player.getDuration();
       if (duration > 0) {
@@ -786,7 +813,8 @@ export struct StreamingVideoPlayer {
       this.seekFeedback();
       // Controls hidden → both halves remain interactive. Exclusive recognition
       // delays the single tap just enough to distinguish the double-tap seek.
-      if (!this.showControls) {
+      // Embedded (chat-bubble) mode never renders the gesture layer at all.
+      if (!this.embedded && !this.showControls) {
         Row() {
           this.tapZone(false);
           this.tapZone(true);
@@ -894,7 +922,7 @@ export struct StreamingVideoPlayer {
         .animation({ duration: 120, curve: Curve.EaseOut })
         .onClick(() => { this.replay(); });
       }
-      if (this.showControls && !this.hasError) {
+      if (!this.embedded && this.showControls && !this.hasError) {
         Column() {
           Row() {
             this.tapZone(false);

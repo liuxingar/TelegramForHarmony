@@ -1,31 +1,41 @@
 import {
-  PlaySlotCandidate, pickPlaySlot, slotKey, PLAY_SLOT_KEEP_RATIO
+  PlaySlotCandidate, pickPlaySlot, slotKey, PLAY_SLOT_ENTER_RATIO, PLAY_SLOT_KEEP_RATIO
 } from './playSlot';
 
-// 候选表 + 「视觉停顿才判定」的闸门。
+// 候选表 + 「视觉驻留才判定」的闸门。
 //
-// 判定只在滚动停下后发生：惯性滑动期间画面在动，此时起播既看不清也白费流量，
-// 停下来才是用户「要看这一条」的信号。滚动期间可见比例照常记录，只是不换届。
+// 判定主体是单个候选，不是整个列表：某条视频在视野里自己稳住了就该起播，
+// 与列表是否仍在滚动无关——视觉停留不是滑动停留。每个候选各自维护一个
+// stableSince：从它首次达到入选线（PLAY_SLOT_ENTER_RATIO）的那一刻起计时，
+// 一旦某次上报的 ratio 掉到入选线以下，这个候选的 stableSince 清零重来。
+// 只有连续达标满 PLAY_SLOT_DWELL_MS 的候选才有资格参与竞选新任——现任的
+// 迟滞连任（见 pickPlaySlot）不受驻留门槛约束，否则在播的那条每次 ratio
+// 抖动都要重新攒 400ms。
 //
-// 唯一的例外是释放：已在播的那条一旦滑出保持线，立刻停 —— 停播不需要等停顿，
-// 拖着播才是错的。
+// 400ms 的由来：气泡用 onVisibleAreaApproximateChange({ expectedUpdateInterval:
+// 200 }) 限频上报可见比例，两个上报周期才算「真的稳住了」，一次性的抖动
+// 不算。慢速滑动时某条稳稳占了大半屏数百毫秒 → 起播；快速滑过时某条短暂
+// 全屏可见 → 连续驻留凑不满 400ms → 不起播。「滑动中不乱播」是驻留判据的
+// 自然结果，不需要额外的滚动闸门。
 //
-// 时间由外部注入（tick(now) / setScrolling(scrolling, now)），不在内部读时钟，
-// 这样整套时序都能单测。
-export const PLAY_SLOT_SETTLE_MS: number = 150;
+// 释放不等任何计时：已在播的那条一旦 ratio < PLAY_SLOT_KEEP_RATIO 或从候选
+// 表消失，立刻释放，见 releaseIfGone()。
+//
+// 时间由外部注入（report(..., now) / tick(now)），不在内部读时钟，这样整套
+// 时序都能单测。
+export const PLAY_SLOT_DWELL_MS: number = 400;
 
 export type PlaySlotListener = (key: string) => void;
 
 export class PlaySlotRegistry {
   private candidates: Map<string, PlaySlotCandidate> = new Map();
+  // 候选 key -> 它连续满足入选线的起始时刻；不在这个表里的候选要么从未达标，
+  // 要么上一次上报已经跌破入选线（见 report()）。
+  private stableSince: Map<string, number> = new Map();
   private listeners: PlaySlotListener[] = [];
   private slot: string = '';
   private pinned: string = '';
   private viewportCenterY: number = 0;
-  // 初始视为「未静止」：构造后收到的第一次 setScrolling(false, now) 必须真正
-  // 触发一次状态切换（进而记录 stillSince），不能因为和默认值相同而被短路掉。
-  private scrolling: boolean = true;
-  private stillSince: number = -1;
 
   subscribe(listener: PlaySlotListener): () => void {
     this.listeners.push(listener);
@@ -45,14 +55,25 @@ export class PlaySlotRegistry {
     this.viewportCenterY = centerY;
   }
 
-  report(messageId: number, albumIndex: number, ratio: number, centerY: number): void {
+  report(messageId: number, albumIndex: number, ratio: number, centerY: number, now: number): void {
     const key = slotKey(messageId, albumIndex);
     this.candidates.set(key, { key, messageId, albumIndex, ratio, centerY });
+    if (ratio >= PLAY_SLOT_ENTER_RATIO) {
+      // 只在首次达标时落下计时起点；已经在计时的不重置，否则永远攒不满。
+      if (!this.stableSince.has(key)) {
+        this.stableSince.set(key, now);
+      }
+    } else {
+      this.stableSince.delete(key);
+    }
     this.releaseIfGone();
+    this.elect(now);
   }
 
   drop(messageId: number, albumIndex: number): void {
-    this.candidates.delete(slotKey(messageId, albumIndex));
+    const key = slotKey(messageId, albumIndex);
+    this.candidates.delete(key);
+    this.stableSince.delete(key);
     this.releaseIfGone();
   }
 
@@ -60,43 +81,66 @@ export class PlaySlotRegistry {
     this.pinned = slotKey(messageId, albumIndex);
   }
 
-  setScrolling(scrolling: boolean, now: number): void {
-    if (this.scrolling === scrolling) {
-      return;
-    }
-    this.scrolling = scrolling;
-    this.stillSince = scrolling ? -1 : now;
+  // 外部定时器在「还有候选没攒满驻留」时调用；重新跑一次判定，不依赖任何
+  // 新的可见区回调（onVisibleAreaApproximateChange 只在跨阈值时触发，一条
+  // 视频稳稳停着反而不再有任何回调）。
+  tick(now: number): void {
+    this.elect(now);
   }
 
-  // 每次滚动事件/定时器都可以调；只有静止满 PLAY_SLOT_SETTLE_MS 才真正判定。
-  tick(now: number): void {
-    if (this.scrolling || this.stillSince < 0 || now - this.stillSince < PLAY_SLOT_SETTLE_MS) {
-      return;
-    }
-    this.elect();
+  // 下次值得再检查一次的延时（毫秒）；没有候选正在攒驻留时返回 -1。调用方
+  // （ChatPage）据此安排一次性定时器，时间到了再调 tick(now)。
+  nextCheckDelay(now: number): number {
+    let earliest = -1;
+    this.stableSince.forEach((since: number): void => {
+      const remaining = PLAY_SLOT_DWELL_MS - (now - since);
+      if (remaining > 0 && (earliest < 0 || remaining < earliest)) {
+        earliest = remaining;
+      }
+    });
+    return earliest;
   }
 
   reset(): void {
     this.candidates.clear();
+    this.stableSince.clear();
     this.pinned = '';
-    this.stillSince = -1;
-    // 与构造函数一致：视为「尚未静止」，避免下一次 setScrolling(false, now)
-    // 因为和默认值相等被短路掉，导致 stillSince 永远停在 -1、播放位再也选不出来。
-    this.scrolling = true;
     this.setSlot('');
   }
 
-  private list(): PlaySlotCandidate[] {
+  // 喂给 pickPlaySlot 的候选表：现任与被 pin 的用真实 ratio（迟滞连任 / 手动
+  // 点播都不需要重新攒驻留），其余没攒满 PLAY_SLOT_DWELL_MS 的候选把 ratio
+  // 封顶在入选线以下——让它们在「挑新任」的那段循环里天然出局，但仍然留在
+  // 候选表里（万一它们就是现任，不能凭空消失）。
+  private list(now: number): PlaySlotCandidate[] {
     const out: PlaySlotCandidate[] = [];
-    this.candidates.forEach((c: PlaySlotCandidate): void => { out.push(c); });
+    this.candidates.forEach((c: PlaySlotCandidate): void => {
+      if (c.key === this.slot || c.key === this.pinned || this.hasDwelled(c.key, now)) {
+        out.push(c);
+        return;
+      }
+      const capped: PlaySlotCandidate = {
+        key: c.key,
+        messageId: c.messageId,
+        albumIndex: c.albumIndex,
+        ratio: Math.min(c.ratio, PLAY_SLOT_ENTER_RATIO - 0.0001),
+        centerY: c.centerY
+      };
+      out.push(capped);
+    });
     return out;
   }
 
-  private elect(): void {
-    this.setSlot(pickPlaySlot(this.list(), this.viewportCenterY, this.slot, this.pinned));
+  private hasDwelled(key: string, now: number): boolean {
+    const since = this.stableSince.get(key);
+    return since !== undefined && now - since >= PLAY_SLOT_DWELL_MS;
   }
 
-  // 停播不等停顿：在播的那条划出保持线（或整个消失）就立刻释放。
+  private elect(now: number): void {
+    this.setSlot(pickPlaySlot(this.list(now), this.viewportCenterY, this.slot, this.pinned));
+  }
+
+  // 停播不等驻留：在播的那条划出保持线（或整个消失）就立刻释放。
   private releaseIfGone(): void {
     if (this.slot === '') {
       return;

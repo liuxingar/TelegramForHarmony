@@ -34,7 +34,7 @@ import { MessageEntry, buildMessageEntry } from '../../store/MessageEntry';
 import { ReplyKeyboard, KeyboardBtn, KB_TEXT } from '../../store/ReplyKeyboard';
 import { ChatEntry, computeInitials, isMutedFrom } from '../../store/ChatEntry';
 import { MessageBubble } from './MessageBubble';
-import { PlaySlotRegistry, PLAY_SLOT_SETTLE_MS } from './PlaySlotRegistry';
+import { PlaySlotRegistry } from './PlaySlotRegistry';
 import { MediaViewerOverlay } from './MediaViewerOverlay';
 import { ForwardSheet } from './ForwardSheet';
 import { ScheduledSheet } from './ScheduledSheet';
@@ -1363,14 +1363,19 @@ struct ChatPage {
     });
   }
 
-  // 静止满 PLAY_SLOT_SETTLE_MS 才判定，所以每次"可能静止了"（滚动停止/首屏）
-  // 都要补一个延迟 tick；重复调用只留一个在途，避免定时器堆积。
-  private scheduleSlotTick(): void {
+  // 驻留判定是逐候选的，onVisibleAreaApproximateChange 只在跨阈值时触发——
+  // 一条视频稳稳停着反而不再有任何回调，所以判定不能只靠回调推动。这里用
+  // PlaySlotRegistry.nextCheckDelay() 查询"还有候选没攒满 PLAY_SLOT_DWELL_MS"，
+  // 有就排一个一次性定时器，到点再 tick() 一次；没有就什么也不做。
+  // scheduleSlotTick 只留一个在途定时器，重复调用安全。
+  private scheduleSlotTick(delayMs: number): void {
     this.clearSlotTick();
     this.slotTickTimer = setTimeout((): void => {
       this.slotTickTimer = -1;
-      this.playSlots.tick(Date.now());
-    }, PLAY_SLOT_SETTLE_MS + 10);
+      const now = Date.now();
+      this.playSlots.tick(now);
+      this.maybeScheduleNextSlotCheck(now);
+    }, delayMs + 10);
   }
 
   private clearSlotTick(): void {
@@ -1380,14 +1385,22 @@ struct ChatPage {
     }
   }
 
-  // 幂等的"安排一次判定"：可以随便重复调用，不需要一次性 flag 挡着。
-  // 每次调用都重新喂一次"已停止" + 重排 tick（仍然只留一个在途定时器）。
-  // 调用点见 driveVisibleWork()/onScrollIndex()/onPageShow()/closeViewer()——
-  // 任何一次因为候选表还没填满（消息还没到、ratio 还没上报、被查看器盖住
-  // 清空过）而选不出播放位，都会被下一次自然发生的调用补上，不会永久卡死。
-  // 唯一的风险窗口是主动滚动期间 onScrollIndex 也会调它，但 onDidScroll 几
-  // 乎在下一帧就把 scrolling 重新置回 true，tick() 命中不了 150ms 的静止
-  // 窗口，实际不会在滚动过程中起播。
+  // nextCheckDelay() < 0 表示没有候选正在攒驻留（要么无候选达标，要么都已
+  // 达标或已经是现任/被 pin），此时什么也不用排。
+  private maybeScheduleNextSlotCheck(now: number): void {
+    const delay = this.playSlots.nextCheckDelay(now);
+    if (delay >= 0) {
+      this.scheduleSlotTick(delay);
+    }
+  }
+
+  // 幂等的"补一次判定"：可以随便重复调用，不需要一次性 flag 挡着。立即跑
+  // 一次 tick（用于候选表在此刻已经攒够驻留、只是没有新的可见区回调触发
+  // 判定的情况，比如 onPageShow/closeViewer 这类没有新 ratio 上报的恢复路
+  // 径），再排一次后续检查。调用点见 driveVisibleWork()/onScrollIndex()/
+  // onPageShow()/closeViewer()——任何一次因为候选表还没填满（消息还没到、
+  // ratio 还没上报、被查看器盖住清空过）而选不出播放位，都会被下一次自然
+  // 发生的调用或已排的定时器补上，不会永久卡死。
   //
   // 守卫：查看器开着，或页面本身不可见时，直接不喂——List/气泡全程挂载，
   // 这两种状态下即便候选表被后台悄悄填回来，也绝不能真的选出播放位去挂
@@ -1398,8 +1411,9 @@ struct ChatPage {
     if (this.viewerMsgId !== 0 || !this.pageVisible) {
       return;
     }
-    this.playSlots.setScrolling(false, Date.now());
-    this.scheduleSlotTick();
+    const now = Date.now();
+    this.playSlots.tick(now);
+    this.maybeScheduleNextSlotCheck(now);
   }
 
   onPageHide(): void {
@@ -1415,10 +1429,10 @@ struct ChatPage {
 
   onPageShow(): void {
     this.pageVisible = true;
-    // onPageHide 已经把播放位 reset() 回"未静止"状态；回到这个页面时未必有
-    // 新的滚动事件，跟首屏一样主动补一次。即便候选表这一刻还是空的（没有
-    // 新的可见区回调），后续任何一次滚动/新消息到达都会用同一个幂等方法
-    // 再补一次，不会永久卡住。
+    // onPageHide 已经把播放位 reset() 清空了候选表和 stableSince；回到这个
+    // 页面时未必有新的可见区回调（几何没变，onVisibleAreaApproximateChange
+    // 不会再触发），跟首屏一样主动补一次。即便候选表这一刻还是空的，后续
+    // 任何一次滚动/新消息到达都会用同一个幂等方法再补一次，不会永久卡住。
     this.armPlaySlotSettle();
     // The list changed while this page was hidden. See hiddenListDirty: the
     // framework applies hidden-period notifications incompletely, so rebuild
@@ -7829,7 +7843,12 @@ struct ChatPage {
                   if (this.viewerMsgId !== 0 || !this.pageVisible) {
                     return;
                   }
-                  this.playSlots.report(msgId, albumIndex, ratio, centerY);
+                  const now = Date.now();
+                  // report() 内部已经跑过一次 elect：ratio 已经攒够驻留（或
+                  // 本来就是现任/被 pin）的候选会立即当选。这里只需要为还
+                  // 没攒够的候选补一个"驻留到点后再查一次"的定时器。
+                  this.playSlots.report(msgId, albumIndex, ratio, centerY, now);
+                  this.maybeScheduleNextSlotCheck(now);
                 },
                 onMediaGone: (msgId: number, albumIndex: number): void => {
                   // 移除永远安全，不加守卫——挡住反而会在候选表里留幽灵条目。
@@ -7912,11 +7931,10 @@ struct ChatPage {
         })
         .onScrollIndex((start: number, end: number) => {
           // List 首次布局完成即触发一次（哪怕用户从未滑动），是首屏唯一能可靠
-          // 拿到的"已停止"信号；正常滚动时它也会随可见区间变化反复触发，
-          // 每次都用幂等的 armPlaySlotSettle 补一次——真在滚动的话 onDidScroll
-          // 几乎立刻把 scrolling 重新置回 true，tick() 命中不了 150ms 的静止
-          // 窗口，不会在滚动过程中误起播；一旦真停下来，这里补的这次判定和
-          // onScrollStop 那次是重复但无害的（scheduleSlotTick 只留一个在途）。
+          // 拿到的信号；正常滚动时它也会随可见区间变化反复触发。判定本身现在
+          // 是逐候选驻留（见 PlaySlotRegistry），与列表是否仍在滚动无关，这里
+          // 只是幂等地补一次 tick + 重排后续检查——onScrollStop 那次是重复但
+          // 无害的（scheduleSlotTick 只留一个在途）。
           this.armPlaySlotSettle();
           this.refreshAtBottom();
           this.curStartIdx = start;
@@ -7951,8 +7969,6 @@ struct ChatPage {
         // updates atBottom. onDidScroll fires on every scroll frame — track the
         // true bottom edge here so the glue stops fighting the user.
         .onDidScroll(() => {
-          // 每帧都调，PlaySlotRegistry.setScrolling 内部有相等性短路，代价可忽略。
-          this.playSlots.setScrolling(true, Date.now());
           this.refreshAtBottom();
           if (this.listTouchActive) {
             // A tap alone does not release the initial unread anchor. Only an

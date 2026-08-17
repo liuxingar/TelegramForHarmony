@@ -1,7 +1,7 @@
 import { describe, it, expect } from '@ohos/hypium';
 import {
   buildCacheTrimRequest, shouldTrimCache, CACHE_LIMIT_UNLIMITED,
-  CACHE_LIMIT_DEFAULT, CACHE_LIMIT_OPTIONS
+  CACHE_LIMIT_DEFAULT, CACHE_LIMIT_OPTIONS, shouldTrimNow, CACHE_TRIM_MIN_INTERVAL_MS
 } from '../main/ets/store/CacheLimit';
 
 export default function cacheLimitTest() {
@@ -41,6 +41,27 @@ export default function cacheLimitTest() {
       expect((req['file_types'] as Object[]).length).assertEqual(0);
       expect((req['chat_ids'] as Object[]).length).assertEqual(0);
       expect((req['exclude_chat_ids'] as Object[]).length).assertEqual(0);
+    });
+
+    it('首次启动（lastTrimAt 为 0）总是放行', 0, () => {
+      expect(shouldTrimNow(CACHE_LIMIT_DEFAULT, 0, 1000)).assertTrue();
+    });
+
+    it('间隔内拦截', 0, () => {
+      const now = CACHE_TRIM_MIN_INTERVAL_MS + 100000;
+      const lastTrimAt = now - (CACHE_TRIM_MIN_INTERVAL_MS - 1);
+      expect(shouldTrimNow(CACHE_LIMIT_DEFAULT, lastTrimAt, now)).assertFalse();
+    });
+
+    it('恰好到最小间隔时放行', 0, () => {
+      const now = CACHE_TRIM_MIN_INTERVAL_MS + 100000;
+      const lastTrimAt = now - CACHE_TRIM_MIN_INTERVAL_MS;
+      expect(shouldTrimNow(CACHE_LIMIT_DEFAULT, lastTrimAt, now)).assertTrue();
+    });
+
+    it('上限为不限时无论间隔如何都不触发', 0, () => {
+      expect(shouldTrimNow(CACHE_LIMIT_UNLIMITED, 0, 1000)).assertFalse();
+      expect(shouldTrimNow(CACHE_LIMIT_UNLIMITED, 1, 100000)).assertFalse();
     });
   });
 }

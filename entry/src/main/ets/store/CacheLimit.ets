@@ -15,6 +15,16 @@ export function shouldTrimCache(limitBytes: number): boolean {
   return Number.isFinite(limitBytes) && limitBytes > 0;
 }
 
+// 切前台就收缩一次会让频繁切换的用户反复跑重操作，加最小间隔。
+export const CACHE_TRIM_MIN_INTERVAL_MS: number = 30 * 60 * 1000;
+
+export function shouldTrimNow(limitBytes: number, lastTrimAt: number, now: number): boolean {
+  if (!shouldTrimCache(limitBytes)) {
+    return false;
+  }
+  return lastTrimAt <= 0 || now - lastTrimAt >= CACHE_TRIM_MIN_INTERVAL_MS;
+}
+
 // ttl / count / immunity_delay 传 -1 = 用 TDLib 默认值，只由 size 施加约束。
 export function buildCacheTrimRequest(limitBytes: number): TdObject {
   const request: TdObject = { '@type': 'optimizeStorage' };

@@ -5190,6 +5190,23 @@ struct ChatPage {
     this.deleteDialog.open();
   }
 
+  // 长按菜单里的单条删除：复用 deleteSelected() 的弹窗逻辑，只是目标 id 只有一个。
+  // 不处于多选模式时 doDeleteMessages 内部的 exitSelect() 只是把已经为 false/[]
+  // 的 selecting/selectedIds 再赋一次同样的值，是无害的空操作。
+  private deleteMessage(messageId: number): void {
+    const ids: number[] = [messageId];
+    this.deleteDialog = new CustomDialogController({
+      builder: DeleteMessagesDialog({
+        peerName: this.isGroup || this.isChannel ? '' : this.headerText().titleText,
+        onConfirm: (revoke: boolean): void => { this.doDeleteMessages(ids, revoke); }
+      }),
+      autoCancel: true,
+      customStyle: true,
+      alignment: DialogAlignment.Center
+    });
+    this.deleteDialog.open();
+  }
+
   private doDeleteMessages(ids: number[], revoke: boolean): void {
     const req: TdRequest = { '@type': 'deleteMessages' };
     req['chat_id'] = this.chatId;
@@ -7916,6 +7933,7 @@ struct ChatPage {
                 onForwardMsg: (_id: number): void => { this.openForwardPicker(g.memberIds); },
                 onReportMsg: (id: number): void => { promptAction.showToast({ message: $r('app.string.cp_report_wip'), duration: 1500 }); },
                 onSelectMsg: (id: number): void => { this.enterSelect(id); },
+                onDeleteMsg: (id: number): void => { this.deleteMessage(id); },
                 onOpenReactions: (id: number): void => { this.openReactionSheet(id); },
                 onRecognizeSpeech: (id: number): void => { this.recognizeSpeech(id); },
                 onVideoNoteDownload: (id: number): void => {

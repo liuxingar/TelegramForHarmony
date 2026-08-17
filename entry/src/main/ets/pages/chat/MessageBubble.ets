@@ -239,6 +239,7 @@ export struct MessageBubble {
   onForwardMsg: (messageId: number) => void = (): void => {};
   onReportMsg: (messageId: number) => void = (): void => {};
   onSelectMsg: (messageId: number) => void = (): void => {};
+  onDeleteMsg: (messageId: number) => void = (): void => {};
   // "转发自 X" tapped: (originChatId, originMsgId, originUserId) — chat ids for a
   // channel/chat origin, user id for a user origin.
   onForwardTap: (chatId: number, messageId: number, userId: number) => void = (): void => {};
@@ -1642,6 +1643,7 @@ export struct MessageBubble {
       }
       this.menuRow('sys.symbol.exclamationmark_circle', str('mb_report'), true, () => { this.onReportMsg(this.msg.id); });
       this.menuRow('sys.symbol.checkmark_circle', str('mb_select'), false, () => { this.onSelectMsg(this.msg.id); });
+      this.menuRow('sys.symbol.trash', str('delete'), true, () => { this.onDeleteMsg(this.msg.id); });
     }
     .width(262)
     .padding({ top: 6, bottom: 6 });

@@ -15,7 +15,7 @@ import {
 } from '../../services/WebPushRegistration';
 import {
   MeowDeregisterOutcome, MeowRegisterOutcome, confirmMeowRegistration, deregisterMeowPush,
-  getMeowSubKey, meowRelayEnabled, startMeowRegistration
+  getMeowSubKey, meowRelayEnabled, resolveWebPushMode, startMeowRegistration
 } from '../../services/MeowPushRegistration';
 import { HuaweiPushResult, registerHuaweiPush } from '../../services/HuaweiPushRegistration';
 import { str } from '../../util/strings';
@@ -86,9 +86,9 @@ struct WebPushPage {
       this.statusOk = true;
       this.statusText = str('wp_enabled');
     }
-    // 停留在用户上次用的模式；MeoW 未配置中转地址时永远回落到手工模式。
-    this.mode = (meowRelayEnabled() && this.storedMode === WEBPUSH_MODE_MEOW)
-      ? WEBPUSH_MODE_MEOW : WEBPUSH_MODE_CUSTOM;
+    // 停留在用户上次用的模式；从没选过时默认落到 MeoW，但 MeoW 未配置中转
+    // 地址时永远回落到手工模式（见 resolveWebPushMode 注释）。
+    this.mode = resolveWebPushMode(meowRelayEnabled(), this.storedMode);
     this.meowNickname = this.storedMeowNickname;
     if (this.pushEnabled && this.mode === WEBPUSH_MODE_MEOW && this.storedMeowNickname !== '') {
       this.meowStatusOk = true;
@@ -369,8 +369,8 @@ struct WebPushPage {
   @Builder
   modeSwitcher() {
     Row({ space: 4 }) {
-      this.modeTab(WEBPUSH_MODE_CUSTOM, $r('app.string.meow_mode_custom'));
       this.modeTab(WEBPUSH_MODE_MEOW, $r('app.string.meow_mode_meow'));
+      this.modeTab(WEBPUSH_MODE_CUSTOM, $r('app.string.meow_mode_custom'));
     }
     .width('100%').padding(4)
     .backgroundColor(COLOR_PAGE_BG).borderRadius(12);

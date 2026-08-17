@@ -1,8 +1,9 @@
 import { describe, it, expect } from '@ohos/hypium';
 import {
   buildMeowConfirmBody, buildMeowDeleteBody, buildMeowRegisterStartBody,
-  parseMeowConfirmResponse, parseMeowStartResponse, validateMeowCode, validateMeowNickname
+  parseMeowConfirmResponse, parseMeowStartResponse, resolveWebPushMode, validateMeowCode, validateMeowNickname
 } from '../main/ets/services/MeowPushRegistration';
+import { WEBPUSH_MODE_CUSTOM, WEBPUSH_MODE_MEOW } from '../main/ets/store/AppSettings';
 
 const GOOD_ENDPOINT: string = 'https://push.example.com/webpush/abc123';
 const GOOD_P256DH: string = 'BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkQ';
@@ -112,6 +113,25 @@ export default function meowPushRegistrationTest() {
       }));
       expect(r.config.endpoint).assertEqual(GOOD_ENDPOINT);
       expect(r.secret).assertEqual(GOOD_SECRET);
+    });
+
+    // 首次进入（从没存过偏好）时，relay 配置齐全就该默认停在 MeoW。
+    it('defaults_to_meow_when_relay_enabled_and_no_stored_preference', 0, () => {
+      expect(resolveWebPushMode(true, '')).assertEqual(WEBPUSH_MODE_MEOW);
+    });
+
+    // relay 未配置时不管存过什么都必须回落手工模式，否则默认停在一个界面上
+    // 根本不出现的模式。
+    it('falls_back_to_custom_when_relay_disabled_regardless_of_stored_mode', 0, () => {
+      expect(resolveWebPushMode(false, '')).assertEqual(WEBPUSH_MODE_CUSTOM);
+      expect(resolveWebPushMode(false, WEBPUSH_MODE_MEOW)).assertEqual(WEBPUSH_MODE_CUSTOM);
+      expect(resolveWebPushMode(false, WEBPUSH_MODE_CUSTOM)).assertEqual(WEBPUSH_MODE_CUSTOM);
+    });
+
+    // relay 已配置时尊重用户存过的显式偏好，不管是哪一种。
+    it('honors_explicit_stored_preference_when_relay_enabled', 0, () => {
+      expect(resolveWebPushMode(true, WEBPUSH_MODE_CUSTOM)).assertEqual(WEBPUSH_MODE_CUSTOM);
+      expect(resolveWebPushMode(true, WEBPUSH_MODE_MEOW)).assertEqual(WEBPUSH_MODE_MEOW);
     });
   });
 }

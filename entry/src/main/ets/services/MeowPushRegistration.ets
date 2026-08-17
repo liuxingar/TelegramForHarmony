@@ -4,7 +4,7 @@ import { TdClient } from '../tdkit/TdClient';
 import { str } from '../util/strings';
 import { pushRelayBase, pushRelayToken } from '../tdkit/ApiCredentials';
 import {
-  KEY_MEOW_NICKNAME, KEY_MEOW_SECRET, KEY_MEOW_SUBKEY, setString
+  KEY_MEOW_NICKNAME, KEY_MEOW_SECRET, KEY_MEOW_SUBKEY, WEBPUSH_MODE_CUSTOM, WEBPUSH_MODE_MEOW, setString
 } from '../store/AppSettings';
 import {
   WebPushConfig, deregisterWebPush, registerWebPush, validateWebPushConfig
@@ -42,6 +42,21 @@ const SUBKEY_BYTE_LEN: number = 24; // 48 位十六进制，足够的熵
 
 export function meowRelayEnabled(): boolean {
   return pushRelayBase.trim() !== '' && pushRelayToken.trim() !== '';
+}
+
+// 页面用哪个模式打开：MeoW 是首选默认值，但仅在中转地址配置齐全时才可能出现。
+// relayEnabled 为 false 时无论存过什么偏好都必须回落到手工模式 —— 否则会出现
+// "默认停在一个界面上根本不存在的模式"，页面空白或渲染出错。relayEnabled 为
+// true 时尊重用户存过的显式偏好（无论是哪一种），只有从未选过（storedMode
+// 为空）才落到新默认值 MeoW。
+export function resolveWebPushMode(relayEnabled: boolean, storedMode: string): string {
+  if (!relayEnabled) {
+    return WEBPUSH_MODE_CUSTOM;
+  }
+  if (storedMode === WEBPUSH_MODE_CUSTOM || storedMode === WEBPUSH_MODE_MEOW) {
+    return storedMode;
+  }
+  return WEBPUSH_MODE_MEOW;
 }
 
 export interface MeowValidation {

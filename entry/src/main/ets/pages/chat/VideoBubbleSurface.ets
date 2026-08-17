@@ -1,0 +1,38 @@
+import { StreamingVideoPlayer } from './StreamingVideoPlayer';
+
+// 播放位气泡的薄封装：把一屏播放器的参数收在这一个组件里，MessageBubble 的
+// 视频分支只多一个组件调用，而不是多一屏 StreamingVideoPlayer 的 props。
+// 内嵌模式：无控制条、无手势层、不申请后台保活（见 StreamingVideoPlayer.embedded）。
+@Component
+export struct VideoBubbleSurface {
+  @Prop fileId: number;
+  @Prop fileSize: number;
+  @Prop mimeType: string = '';
+  // Not "width"/"height": those names collide with CustomComponent's own
+  // .width()/.height() chained attribute setters.
+  @Prop sourceWidth: number = 0;
+  @Prop sourceHeight: number = 0;
+  @Prop posterPath: string = '';
+  @Prop muted: boolean = true;
+  @Prop startPositionMs: number = 0;
+  onPositionChanged: (positionMs: number) => void =
+    (_positionMs: number): void => {};
+  onEnded: () => void = (): void => {};
+
+  build() {
+    StreamingVideoPlayer({
+      fileId: this.fileId,
+      fileSize: this.fileSize,
+      mimeType: this.mimeType,
+      videoWidth: this.sourceWidth,
+      videoHeight: this.sourceHeight,
+      posterPath: this.posterPath,
+      embedded: true,
+      showControls: false,
+      muted: this.muted,
+      startPositionMs: this.startPositionMs,
+      onPositionChanged: (positionMs: number): void => { this.onPositionChanged(positionMs); },
+      onEnded: (): void => { this.onEnded(); }
+    });
+  }
+}

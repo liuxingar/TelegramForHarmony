@@ -14,6 +14,12 @@ export interface AlbumGroup {
   photoIsVideo: boolean[]; // parallel to photoPaths — true for video members (play icon overlay)
   photoProgress: number[]; // parallel to photoPaths — thumbnail download progress (0-100)
   photoFailed: boolean[];  // parallel to photoPaths — tap the failed cell to retry
+  // Full-resolution video source, parallel to photoPaths. 0/'' for photo
+  // members. Needed to mount a play-slot player in a grid cell (see
+  // VideoBubbleSurface) — the thumbnail file above is never enough to stream.
+  videoFileIds: number[];
+  videoFileSizes: number[];
+  videoMimeTypes: string[];
   caption: string;         // album caption (from whichever member carries text)
   captionEntities: TdObject[]; // the caption's TDLib entities (links/mentions/hashtags)
   dateLabel: string;       // date pill shown above this row when the day changes ('' = none)
@@ -169,6 +175,9 @@ export function collapseAlbums(list: MessageEntry[]): AlbumGroup[] {
       const photoIsVideo: boolean[] = [];
       const photoProgress: number[] = [];
       const photoFailed: boolean[] = [];
+      const videoFileIds: number[] = [];
+      const videoFileSizes: number[] = [];
+      const videoMimeTypes: string[] = [];
       const albumMembers: MessageEntry[] = [];
       let caption = '';
       let captionEntities: TdObject[] = [];
@@ -182,6 +191,9 @@ export function collapseAlbums(list: MessageEntry[]): AlbumGroup[] {
         photoIsVideo.push(list[j].contentType === 'video');
         photoProgress.push(list[j].photoProgress);
         photoFailed.push(list[j].photoFailed);
+        videoFileIds.push(list[j].videoFileId);
+        videoFileSizes.push(list[j].videoFileSize);
+        videoMimeTypes.push(list[j].videoMimeType);
         if (list[j].text !== '') {
           caption = list[j].text;
           captionEntities = list[j].textEntities;
@@ -199,6 +211,9 @@ export function collapseAlbums(list: MessageEntry[]): AlbumGroup[] {
         photoIsVideo,
         photoProgress,
         photoFailed,
+        videoFileIds,
+        videoFileSizes,
+        videoMimeTypes,
         caption,
         captionEntities,
         dateLabel,
@@ -220,6 +235,9 @@ export function collapseAlbums(list: MessageEntry[]): AlbumGroup[] {
         photoIsVideo: [],
         photoProgress: [],
         photoFailed: [],
+        videoFileIds: [],
+        videoFileSizes: [],
+        videoMimeTypes: [],
         caption: '',
         captionEntities: [],
         dateLabel,

@@ -34,6 +34,7 @@ import { MessageEntry, buildMessageEntry } from '../../store/MessageEntry';
 import { ReplyKeyboard, KeyboardBtn, KB_TEXT } from '../../store/ReplyKeyboard';
 import { ChatEntry, computeInitials, isMutedFrom } from '../../store/ChatEntry';
 import { MessageBubble } from './MessageBubble';
+import { PlaySlotRegistry, PLAY_SLOT_SETTLE_MS } from './PlaySlotRegistry';
 import { MediaViewerOverlay } from './MediaViewerOverlay';
 import { ForwardSheet } from './ForwardSheet';
 import { ScheduledSheet } from './ScheduledSheet';
@@ -380,6 +381,14 @@ struct ChatPage {
   private store: MessageStore | null = null;
   private scroller: Scroller = new Scroller();
   private didInitialScroll: boolean = false;
+  // 播放位竞选：滚动停下后选出唯一播放/下载的视频气泡（见 PlaySlotRegistry）。
+  private playSlots: PlaySlotRegistry = new PlaySlotRegistry();
+  private unsubPlaySlot: (() => void) | null = null;
+  @State playSlotKey: string = '';
+  private slotTickTimer: number = -1;
+  // 首屏没有滚动事件，靠 onScrollIndex 的第一次回调（List 首次布局完成、哪怕
+  // 用户没滑动也会触发一次）主动喂一次"已停止"，否则播放位永远选不出来。
+  private slotFirstSettleDone: boolean = false;
   private lastMaxId: number = 0;
   @State atBottom: boolean = true;
   @State isMuted: boolean = false;
@@ -774,6 +783,9 @@ struct ChatPage {
     // the rows its operations touch, and it has to name them the same way the
     // LazyForEach key generator does.
     this.groupsData.setKeyBuilder(this.rowKeyOf);
+    this.unsubPlaySlot = this.playSlots.subscribe((key: string): void => {
+      this.playSlotKey = key;
+    });
     this.nowSec = Math.floor(Date.now() / 1000);
     const params = router.getParams() as Record<string, Object> | undefined;
     this.chatId = params !== undefined ? (params['chatId'] as number) : 0;
@@ -1354,15 +1366,40 @@ struct ChatPage {
     });
   }
 
+  // 静止满 PLAY_SLOT_SETTLE_MS 才判定，所以每次"可能静止了"（滚动停止/首屏）
+  // 都要补一个延迟 tick；重复调用只留一个在途，避免定时器堆积。
+  private scheduleSlotTick(): void {
+    this.clearSlotTick();
+    this.slotTickTimer = setTimeout((): void => {
+      this.slotTickTimer = -1;
+      this.playSlots.tick(Date.now());
+    }, PLAY_SLOT_SETTLE_MS + 10);
+  }
+
+  private clearSlotTick(): void {
+    if (this.slotTickTimer !== -1) {
+      clearTimeout(this.slotTickTimer);
+      this.slotTickTimer = -1;
+    }
+  }
+
   onPageHide(): void {
     console.info(`[ChatDiag] hide msgs=${this.messages.length} groups=${this.groups.length} ds=${this.groupsData.totalCount()}`);
     this.pageVisible = false;
     // 页面不可见时停表，回来时补一次即时值再续上。
     this.clearNowSecTimer();
+    // 切走（含被查看器等页面盖住）立刻停播放位——不能等 aboutToDisappear，
+    // 那要等到组件真被销毁才会跑，用户已经在别的页面上等了半天下载还在跑。
+    this.clearSlotTick();
+    this.playSlots.reset();
   }
 
   onPageShow(): void {
     this.pageVisible = true;
+    // onPageHide 已经把播放位 reset() 回"未静止"状态；回到这个页面时没有
+    // 新的滚动事件，得跟首屏一样主动喂一次"已停止"，否则播放位再也选不出来。
+    this.playSlots.setScrolling(false, Date.now());
+    this.scheduleSlotTick();
     // The list changed while this page was hidden. See hiddenListDirty: the
     // framework applies hidden-period notifications incompletely, so rebuild
     // its key table from the dataset before the user can see mismatched rows.
@@ -1387,6 +1424,12 @@ struct ChatPage {
     // 退出会话时播放器可能还开着（返回手势不走 closeViewer），为播放拉起的
     // 下载得在这里也停掉，否则回到列表页它还在后台跑。
     this.releasePlaybackRequests();
+    this.clearSlotTick();
+    this.playSlots.reset();
+    if (this.unsubPlaySlot !== null) {
+      this.unsubPlaySlot();
+      this.unsubPlaySlot = null;
+    }
     if (this.cachedCountTimer !== -1) {
       clearTimeout(this.cachedCountTimer);
       this.cachedCountTimer = -1;
@@ -7622,6 +7665,8 @@ struct ChatPage {
                 albumPaths: g.photoPaths, albumFileIds: g.photoFileIds, albumRatios: g.photoRatios,
                 albumMemberIds: g.memberIds, albumIsVideo: g.photoIsVideo,
                 albumProgress: g.photoProgress, albumFailed: g.photoFailed,
+                albumVideoFileIds: g.videoFileIds, albumVideoFileSizes: g.videoFileSizes,
+                albumVideoMimeTypes: g.videoMimeTypes,
                 albumCaption: g.caption,
                 albumCaptionEntities: g.captionEntities,
                 onMediaTap: (id: number, x: number, y: number): void => {
@@ -7742,6 +7787,13 @@ struct ChatPage {
                 onLiveStreamTap: (): void => { this.onLiveStreamTap(); },
                 showAvatar: g.showAvatar,
                 showSenderName: g.showSenderName,
+                playSlotKey: this.playSlotKey,
+                onMediaRatio: (msgId: number, albumIndex: number, ratio: number, centerY: number): void => {
+                  this.playSlots.report(msgId, albumIndex, ratio, centerY);
+                },
+                onMediaGone: (msgId: number, albumIndex: number): void => {
+                  this.playSlots.drop(msgId, albumIndex);
+                },
                 animateIn: this.freshSinceId !== 0 && g.head.id > this.freshSinceId });
               }
               .layoutWeight(1);
@@ -7818,6 +7870,14 @@ struct ChatPage {
           }
         })
         .onScrollIndex((start: number, end: number) => {
+          // List 首次布局完成即触发一次（哪怕用户从未滑动），是首屏唯一能可靠
+          // 拿到的"已停止"信号——不靠它的话不滑就永远选不出播放位。只在第
+          // 一次触发时喂，往后滚动照常走 onDidScroll/onScrollStop。
+          if (!this.slotFirstSettleDone) {
+            this.slotFirstSettleDone = true;
+            this.playSlots.setScrolling(false, Date.now());
+            this.scheduleSlotTick();
+          }
           this.refreshAtBottom();
           this.curStartIdx = start;
           this.curEndIdx = end;
@@ -7851,6 +7911,8 @@ struct ChatPage {
         // updates atBottom. onDidScroll fires on every scroll frame — track the
         // true bottom edge here so the glue stops fighting the user.
         .onDidScroll(() => {
+          // 每帧都调，PlaySlotRegistry.setScrolling 内部有相等性短路，代价可忽略。
+          this.playSlots.setScrolling(true, Date.now());
           this.refreshAtBottom();
           if (this.listTouchActive) {
             // A tap alone does not release the initial unread anchor. Only an
@@ -7865,6 +7927,15 @@ struct ChatPage {
           if (this.listUserScrollActive) {
             this.updateFloatDate(this.curStartIdx);
           }
+        })
+        .onScrollStop(() => {
+          this.playSlots.setScrolling(false, Date.now());
+          this.scheduleSlotTick();
+        })
+        .onAreaChange((_old: Area, area: Area): void => {
+          const y: number = area.globalPosition.y as number;
+          const height: number = area.height as number;
+          this.playSlots.setViewportCenter(y + height / 2);
         });
         if (this.visibleGroupCount === 0) {
           this.messageListStateLayer();

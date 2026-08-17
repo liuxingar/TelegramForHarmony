@@ -1,5 +1,6 @@
 import { MessageEntry, ReactionInfo, InlineBtn } from '../../store/MessageEntry';
-import { PLAY_SLOT_ENTER_RATIO, PLAY_SLOT_KEEP_RATIO } from './playSlot';
+import { PLAY_SLOT_ENTER_RATIO, PLAY_SLOT_KEEP_RATIO, slotKey } from './playSlot';
+import { VideoBubbleSurface } from './VideoBubbleSurface';
 import { TdObject } from '../../tdkit/TdTypes';
 import { getAccentColorStore, getUserStore } from '../../tdkit/Globals';
 import { AvatarView } from '../chatlist/AvatarView';
@@ -133,6 +134,11 @@ export struct MessageBubble {
   @Prop @Watch('onAlbumIsVideoChanged') albumIsVideo: boolean[];
   @Prop albumProgress: number[];
   @Prop albumFailed: boolean[];
+  // 相册视频格子的播放位数据源：缩略图（albumFileIds/albumPaths）不足以起播，
+  // 播放位选中的那一格要挂 VideoBubbleSurface，需要真正的视频文件信息。
+  @Prop albumVideoFileIds: number[];
+  @Prop albumVideoFileSizes: number[];
+  @Prop albumVideoMimeTypes: string[];
   @Prop albumCaption: string;
   albumCaptionEntities: TdObject[] = [];
   @StorageProp('screenWidthVp') screenW: number = 360;
@@ -192,6 +198,12 @@ export struct MessageBubble {
     (_messageId: number, _albumIndex: number, _ratio: number, _centerY: number): void => {};
   onMediaGone: (messageId: number, albumIndex: number) => void =
     (_messageId: number, _albumIndex: number): void => {};
+  // 当前播放位的 key（playSlot.slotKey 的输出），'' 表示没有播放位。
+  @Prop playSlotKey: string = '';
+  // 播放位视频的播放进度：每 350ms 一次的高频回调，故意不接到 @State——接上去
+  // 会让 ChatPage 每 350ms 重建整个消息列表。进度交接是下一个任务的事，这里
+  // 先用普通字段接住，不驱动任何渲染。
+  private playSlotPositionMs: number = 0;
   onAnimationTap: (messageId: number, isPlaying: boolean) => void =
     (_messageId: number, _isPlaying: boolean): void => {};
   onAnimationPlaybackFailed: (messageId: number) => void = (): void => {};
@@ -490,6 +502,12 @@ export struct MessageBubble {
   menuActionPressedStyle() {
     .opacity(0.72)
     .scale({ x: 0.97, y: 0.94 })
+  }
+
+  // albumIndex -1 表示非相册整条消息；相册格子传该格自己在 albumMemberIds
+  // 里的下标（与上报给 PlaySlotRegistry 的 key 一致，见 onMediaRatio）。
+  private isPlaySlot(albumIndex: number): boolean {
+    return this.playSlotKey !== '' && this.playSlotKey === slotKey(this.msg.id, albumIndex);
   }
 
   private autoplayInlineVideo(): boolean {
@@ -1224,6 +1242,23 @@ export struct MessageBubble {
     return this.albumMemberIds[index] ?? 0;
   }
 
+  private albumVideoFileIdAt(index: number): number {
+    return this.albumVideoFileIds[index] ?? 0;
+  }
+
+  private albumVideoFileSizeAt(index: number): number {
+    return this.albumVideoFileSizes[index] ?? 0;
+  }
+
+  private albumVideoMimeTypeAt(index: number): string {
+    return this.albumVideoMimeTypes[index] ?? '';
+  }
+
+  private isAlbumCellPlaySlot(index: number): boolean {
+    return this.playSlotKey !== '' &&
+      this.playSlotKey === slotKey(this.albumMemberIdAt(index), index);
+  }
+
   @Builder
   albumGrid() {
     Column({ space: 2 }) {
@@ -1231,7 +1266,24 @@ export struct MessageBubble {
         Row({ space: 2 }) {
           ForEach(row, (cell: AlbumCell) => {
             Stack() {
-              if (this.albumPathAt(cell.idx) !== '') {
+              if (this.isAlbumCellPlaySlot(cell.idx) && this.albumVideoFileIdAt(cell.idx) !== 0) {
+                // 播放位选中这一格：挂播放器而不是静态封面。静音先固定 true——
+                // KEY_AUTOPLAY_MUTED 的消费是下个任务的事。
+                VideoBubbleSurface({
+                  fileId: this.albumVideoFileIdAt(cell.idx),
+                  fileSize: this.albumVideoFileSizeAt(cell.idx),
+                  mimeType: this.albumVideoMimeTypeAt(cell.idx),
+                  posterPath: this.albumPathAt(cell.idx),
+                  muted: true,
+                  onPositionChanged: (positionMs: number): void => {
+                    this.playSlotPositionMs = positionMs;
+                  }
+                })
+                  .width(cell.width).height(cell.height).clip(true)
+                  .borderRadius(6)
+                  // 同理：交给格子自己的 onClick 打开全屏查看器。
+                  .hitTestBehavior(HitTestMode.None);
+              } else if (this.albumPathAt(cell.idx) !== '') {
                 // No appear transition, for the same reason as the single-media
                 // thumbnail: a row rebuild re-creates this node and would
                 // replay the fade every time.
@@ -1265,6 +1317,7 @@ export struct MessageBubble {
                 }
               }
               if (this.albumIsVideoAt(cell.idx) &&
+                !(this.isAlbumCellPlaySlot(cell.idx) && this.albumVideoFileIdAt(cell.idx) !== 0) &&
                 (this.albumPathAt(cell.idx) !== '' ||
                   (this.albumFileIds[cell.idx] ?? 0) === 0 ||
                   (this.albumFailed[cell.idx] ?? false))) {
@@ -1630,7 +1683,26 @@ export struct MessageBubble {
       this.translationBlock();
     } else if (this.msg.contentType === 'photo' || this.msg.contentType === 'video') {
       Stack() {
-        if (this.autoplayInlineVideo()) {
+        if (this.isPlaySlot(-1) && this.msg.contentType === 'video' && this.msg.videoFileId !== 0) {
+          // 播放位气泡：只有滚动停下、被选中的这一条才挂流式播放器。静音先
+          // 固定 true——KEY_AUTOPLAY_MUTED 的消费是下个任务的事。
+          VideoBubbleSurface({
+            fileId: this.msg.videoFileId,
+            fileSize: this.msg.videoFileSize,
+            mimeType: this.msg.videoMimeType,
+            sourceWidth: this.msg.photoWidth,
+            sourceHeight: this.msg.photoHeight,
+            posterPath: this.msg.photoPath,
+            muted: true,
+            onPositionChanged: (positionMs: number): void => {
+              this.playSlotPositionMs = positionMs;
+            }
+          })
+            .width(this.mediaBox().width).height(this.mediaBox().height)
+            // 播放位没有手势层，但底层 XComponent 会默认吃掉点击——和下面
+            // SmartLoopVideo 同理，交给外层 Stack 的 onClick 打开全屏查看器。
+            .hitTestBehavior(HitTestMode.None);
+        } else if (this.autoplayInlineVideo()) {
           SmartLoopVideo({
             videoPath: this.msg.videoPath,
             thumbPath: this.msg.photoPath,
@@ -1684,7 +1756,8 @@ export struct MessageBubble {
             }
           }.width(this.mediaBox().width).height(this.mediaBox().height);
         }
-        if (this.msg.contentType === 'video' && !this.autoplayInlineVideo()) {
+        if (this.msg.contentType === 'video' && !this.autoplayInlineVideo() &&
+          !(this.isPlaySlot(-1) && this.msg.videoFileId !== 0)) {
           // Don't cover the thumbnail's loader with a second center control.
           if (this.msg.photoPath !== '' || this.msg.photoFileId === 0 || this.msg.photoFailed) {
             this.videoActionBadge(

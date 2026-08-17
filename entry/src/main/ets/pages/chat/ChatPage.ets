@@ -1388,7 +1388,16 @@ struct ChatPage {
   // 唯一的风险窗口是主动滚动期间 onScrollIndex 也会调它，但 onDidScroll 几
   // 乎在下一帧就把 scrolling 重新置回 true，tick() 命中不了 150ms 的静止
   // 窗口，实际不会在滚动过程中起播。
+  //
+  // 守卫：查看器开着，或页面本身不可见时，直接不喂——List/气泡全程挂载，
+  // 这两种状态下即便候选表被后台悄悄填回来，也绝不能真的选出播放位去挂
+  // 播放器/拉下载（分别是 Critical-2 和 Important-3 的核心不变量）。
+  // closeViewer()/onPageShow() 这两条恢复路径都是先把状态改回"已关闭/
+  // 可见"再调这个方法，守卫在它们那次调用里天然放行。
   private armPlaySlotSettle(): void {
+    if (this.viewerMsgId !== 0 || !this.pageVisible) {
+      return;
+    }
     this.playSlots.setScrolling(false, Date.now());
     this.scheduleSlotTick();
   }
@@ -7814,9 +7823,16 @@ struct ChatPage {
                 showSenderName: g.showSenderName,
                 playSlotKey: this.playSlotKey,
                 onMediaRatio: (msgId: number, albumIndex: number, ratio: number, centerY: number): void => {
+                  // 查看器开着/页面不可见时不灌候选表——不然它在不该增长的
+                  // 时候被一批陈旧 ratio 填满，查看器一关或页面一恢复就可能
+                  // 直接 elect 出播放位（同一个根因见 armPlaySlotSettle）。
+                  if (this.viewerMsgId !== 0 || !this.pageVisible) {
+                    return;
+                  }
                   this.playSlots.report(msgId, albumIndex, ratio, centerY);
                 },
                 onMediaGone: (msgId: number, albumIndex: number): void => {
+                  // 移除永远安全，不加守卫——挡住反而会在候选表里留幽灵条目。
                   this.playSlots.drop(msgId, albumIndex);
                 },
                 animateIn: this.freshSinceId !== 0 && g.head.id > this.freshSinceId });

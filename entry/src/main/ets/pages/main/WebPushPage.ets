@@ -23,6 +23,12 @@ import { LANGUAGE_EPOCH } from '../../util/appLanguage';
 
 const CARD_RADIUS: number = 14;
 
+// 华为 Push Kit 探针的可见性开关。结论已定：真机验证 pushService.getToken()
+// 能拿到 token，但 TDLib registerDevice(deviceTokenHuaweiPush) 被 Telegram 服务器
+// 拒绝（400 APP_PUSH_APIKEY_MISSING，见 DeviceTokenManager.cpp:447），这条通道走不通。
+// 代码保留作参考实现，改为 true 即可恢复调试 UI。
+const SHOW_HUAWEI_PROBE: boolean = false;
+
 // 自定义 Web Push 中转通道的配置页。
 //
 // 这个功能默认关闭，且必须先读完风险说明才能启用 —— 它会把消息预览的明文交给
@@ -566,24 +572,27 @@ struct WebPushPage {
 
           // 探针区块：与上面的自建 Web Push 并存，验证华为 Push Kit 通道是否
           // 可被 Telegram 服务器直接使用。验证通过前不接入 PushExtensionAbility。
-          Column({ space: 8 }) {
-            Button(this.hwBusy ? $r('app.string.processing') : $r('app.string.px_test'))
-              .fontSize(15).width('100%').height(44)
-              .backgroundColor(COLOR_PAGE_BG).fontColor(COLOR_PRIMARY)
-              .enabled(!this.hwBusy)
-              .onClick((): void => this.runHuaweiPushProbe());
-            if (this.hwTokenLine !== '') {
-              Text(this.hwTokenLine).fontSize(12).lineHeight(17).fontColor(COLOR_TEXT_PRIMARY).width('100%');
+          // 结论已定（见 SHOW_HUAWEI_PROBE 注释），默认不渲染。
+          if (SHOW_HUAWEI_PROBE) {
+            Column({ space: 8 }) {
+              Button(this.hwBusy ? $r('app.string.processing') : $r('app.string.px_test'))
+                .fontSize(15).width('100%').height(44)
+                .backgroundColor(COLOR_PAGE_BG).fontColor(COLOR_PRIMARY)
+                .enabled(!this.hwBusy)
+                .onClick((): void => this.runHuaweiPushProbe());
+              if (this.hwTokenLine !== '') {
+                Text(this.hwTokenLine).fontSize(12).lineHeight(17).fontColor(COLOR_TEXT_PRIMARY).width('100%');
+              }
+              if (this.hwResultLine !== '') {
+                Text(this.hwResultLine).fontSize(12).lineHeight(17).fontColor(COLOR_TEXT_SECONDARY).width('100%');
+              }
+              if (this.hwErrorLine !== '') {
+                Text(this.hwErrorLine).fontSize(12).lineHeight(17).fontColor('#FF3B30').width('100%');
+              }
             }
-            if (this.hwResultLine !== '') {
-              Text(this.hwResultLine).fontSize(12).lineHeight(17).fontColor(COLOR_TEXT_SECONDARY).width('100%');
-            }
-            if (this.hwErrorLine !== '') {
-              Text(this.hwErrorLine).fontSize(12).lineHeight(17).fontColor('#FF3B30').width('100%');
-            }
+            .width('100%').padding(14)
+            .backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
           }
-          .width('100%').padding(14)
-          .backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
         }
         .width('100%').padding({ left: 12, right: 12, bottom: this.bottomSafe + 16 });
       }

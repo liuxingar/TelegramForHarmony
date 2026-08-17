@@ -202,7 +202,9 @@ export function collapseAlbums(list: MessageEntry[]): AlbumGroup[] {
       }
       const displayHead = albumHead(albumMembers);
       groups.push({
-        key: `a_${m.albumId}_${m.id}_${memberIds.join(',')}_${photoFileIds.join(',')}_${photoPaths.join('|')}_${photoProgress.map(progressBucket).join(',')}_${photoFailed.join(',')}_${albumMembers.map((item: MessageEntry): string => item.sendState).join(',')}_${caption}_${captionEntities.map((entity: TdObject): string => JSON.stringify(entity)).join('|')}_${dateLabel}_${mutableSig(displayHead)}`,
+        // videoFileIds 进 key：视频文件 id 迟到（TDLib 异步补上）时这一格
+        // 得跟着重建，否则播放位选中它也挂不上播放器（videoFileId 还是 0）。
+        key: `a_${m.albumId}_${m.id}_${memberIds.join(',')}_${photoFileIds.join(',')}_${photoPaths.join('|')}_${photoProgress.map(progressBucket).join(',')}_${photoFailed.join(',')}_${videoFileIds.join(',')}_${albumMembers.map((item: MessageEntry): string => item.sendState).join(',')}_${caption}_${captionEntities.map((entity: TdObject): string => JSON.stringify(entity)).join('|')}_${dateLabel}_${mutableSig(displayHead)}`,
         head: displayHead,
         memberIds,
         photoPaths,

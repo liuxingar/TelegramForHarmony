@@ -386,9 +386,6 @@ struct ChatPage {
   private unsubPlaySlot: (() => void) | null = null;
   @State playSlotKey: string = '';
   private slotTickTimer: number = -1;
-  // 首屏没有滚动事件，靠 onScrollIndex 的第一次回调（List 首次布局完成、哪怕
-  // 用户没滑动也会触发一次）主动喂一次"已停止"，否则播放位永远选不出来。
-  private slotFirstSettleDone: boolean = false;
   private lastMaxId: number = 0;
   @State atBottom: boolean = true;
   @State isMuted: boolean = false;
@@ -1383,6 +1380,19 @@ struct ChatPage {
     }
   }
 
+  // 幂等的"安排一次判定"：可以随便重复调用，不需要一次性 flag 挡着。
+  // 每次调用都重新喂一次"已停止" + 重排 tick（仍然只留一个在途定时器）。
+  // 调用点见 driveVisibleWork()/onScrollIndex()/onPageShow()/closeViewer()——
+  // 任何一次因为候选表还没填满（消息还没到、ratio 还没上报、被查看器盖住
+  // 清空过）而选不出播放位，都会被下一次自然发生的调用补上，不会永久卡死。
+  // 唯一的风险窗口是主动滚动期间 onScrollIndex 也会调它，但 onDidScroll 几
+  // 乎在下一帧就把 scrolling 重新置回 true，tick() 命中不了 150ms 的静止
+  // 窗口，实际不会在滚动过程中起播。
+  private armPlaySlotSettle(): void {
+    this.playSlots.setScrolling(false, Date.now());
+    this.scheduleSlotTick();
+  }
+
   onPageHide(): void {
     console.info(`[ChatDiag] hide msgs=${this.messages.length} groups=${this.groups.length} ds=${this.groupsData.totalCount()}`);
     this.pageVisible = false;
@@ -1396,10 +1406,11 @@ struct ChatPage {
 
   onPageShow(): void {
     this.pageVisible = true;
-    // onPageHide 已经把播放位 reset() 回"未静止"状态；回到这个页面时没有
-    // 新的滚动事件，得跟首屏一样主动喂一次"已停止"，否则播放位再也选不出来。
-    this.playSlots.setScrolling(false, Date.now());
-    this.scheduleSlotTick();
+    // onPageHide 已经把播放位 reset() 回"未静止"状态；回到这个页面时未必有
+    // 新的滚动事件，跟首屏一样主动补一次。即便候选表这一刻还是空的（没有
+    // 新的可见区回调），后续任何一次滚动/新消息到达都会用同一个幂等方法
+    // 再补一次，不会永久卡住。
+    this.armPlaySlotSettle();
     // The list changed while this page was hidden. See hiddenListDirty: the
     // framework applies hidden-period notifications incompletely, so rebuild
     // its key table from the dataset before the user can see mismatched rows.
@@ -2070,6 +2081,11 @@ struct ChatPage {
       this.viewerInitIdx = 0;
       this.chromeVisible = true;
     });
+    // 查看器关掉了，重新喂一次"已停止"把播放位判定跑起来。候选表这一刻
+    // 可能还是空的（open 时 reset() 清空过，且几何没变不会自然重新上报），
+    // 那就先选不出来——下一次真正的滚动/新消息到达会用同一个幂等方法再补
+    // 一次，不会永久卡住。
+    this.armPlaySlotSettle();
     setTimeout((): void => { this.viewerClosing = false; }, Math.max(80, duration));
   }
 
@@ -3148,6 +3164,12 @@ struct ChatPage {
     if (this.mediaEntryIsPhoto(m)) {
       this.store.requestFullPhoto(messageId);
     }
+    // 全屏查看器是页内叠层，不是新页面，不会触发 onPageHide——List 和气泡
+    // 照样挂着，onVisibleAreaApproximateChange 只算几何不算遮挡，ratio 不
+    // 变就不会自己释放播放位。不在这里主动 reset()，播放位气泡的播放器会
+    // 和查看器自己的播放器同时跑、同一个文件还可能互抢下载分片。
+    this.clearSlotTick();
+    this.playSlots.reset();
     // Position the viewer Swiper on the tapped album member.
     const sib = this.siblingIdsFor(messageId);
     this.viewerInitIdx = Math.max(0, sib.indexOf(messageId));
@@ -5261,6 +5283,9 @@ struct ChatPage {
     const end: number = hasViewport ? this.curEndIdx : this.groups.length - 1;
     this.driveTranslations(start, end);
     this.syncMediaWindow(start, end);
+    // 同一个道理：数据一变（新消息到达、翻页、被查看器等场景清空候选表后
+    // 恢复）就补一次播放位判定，不指望用户正好在这一刻滚动。
+    this.armPlaySlotSettle();
   }
 
   // 把可见行区间换算成消息 id 区间交给 store。外扩几行做缓冲，滑动时不会
@@ -7871,13 +7896,12 @@ struct ChatPage {
         })
         .onScrollIndex((start: number, end: number) => {
           // List 首次布局完成即触发一次（哪怕用户从未滑动），是首屏唯一能可靠
-          // 拿到的"已停止"信号——不靠它的话不滑就永远选不出播放位。只在第
-          // 一次触发时喂，往后滚动照常走 onDidScroll/onScrollStop。
-          if (!this.slotFirstSettleDone) {
-            this.slotFirstSettleDone = true;
-            this.playSlots.setScrolling(false, Date.now());
-            this.scheduleSlotTick();
-          }
+          // 拿到的"已停止"信号；正常滚动时它也会随可见区间变化反复触发，
+          // 每次都用幂等的 armPlaySlotSettle 补一次——真在滚动的话 onDidScroll
+          // 几乎立刻把 scrolling 重新置回 true，tick() 命中不了 150ms 的静止
+          // 窗口，不会在滚动过程中误起播；一旦真停下来，这里补的这次判定和
+          // onScrollStop 那次是重复但无害的（scheduleSlotTick 只留一个在途）。
+          this.armPlaySlotSettle();
           this.refreshAtBottom();
           this.curStartIdx = start;
           this.curEndIdx = end;
@@ -7929,8 +7953,7 @@ struct ChatPage {
           }
         })
         .onScrollStop(() => {
-          this.playSlots.setScrolling(false, Date.now());
-          this.scheduleSlotTick();
+          this.armPlaySlotSettle();
         })
         .onAreaChange((_old: Area, area: Area): void => {
           const y: number = area.globalPosition.y as number;

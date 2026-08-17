@@ -506,8 +506,12 @@ export struct MessageBubble {
 
   // albumIndex -1 表示非相册整条消息；相册格子传该格自己在 albumMemberIds
   // 里的下标（与上报给 PlaySlotRegistry 的 key 一致，见 onMediaRatio）。
+  // 排除 isAnimation：onVisibleAreaApproximateChange 只在"视频→动图"翻转时
+  // 停止上报新的 ratio，不会追溯撤回已经选中的候选，所以消息对象翻转的那
+  // 一帧 playSlotKey 可能还没跟着变——这里兜一道，不让动图错挂流式播放器。
   private isPlaySlot(albumIndex: number): boolean {
-    return this.playSlotKey !== '' && this.playSlotKey === slotKey(this.msg.id, albumIndex);
+    return this.playSlotKey !== '' && !this.msg.isAnimation &&
+      this.playSlotKey === slotKey(this.msg.id, albumIndex);
   }
 
   private autoplayInlineVideo(): boolean {

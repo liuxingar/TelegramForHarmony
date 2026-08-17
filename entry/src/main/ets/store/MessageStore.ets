@@ -8,8 +8,9 @@ import { formatUserStatus } from '../util/formatUserStatus';
 import { formatPreview } from '../util/formatPreview';
 import { formatMemberCount } from '../util/formatMemberCount';
 import {
-  KEY_POWER_AUTOPLAY_GIF, powerFeatureEnabled, reduceAnimations, shouldAutoDownload
+  KEY_POWER_ACTIVE, KEY_POWER_AUTOPLAY_GIF, KEY_POWER_AUTOPLAY_VIDEO, powerFeatureEnabled
 } from './AppSettings';
+import { decideMedia, subjectOfEntry, MediaContext, MediaIntent } from './MediaPolicy';
 import { PollOptionInfo } from '../util/formatMsgContent';
 import { reactionTypeOf } from '../util/reactions';
 import { str } from '../util/strings';
@@ -2541,6 +2542,27 @@ export class MessageStore {
   // 已进 TDLib 下载管理器（addFileToDownloads）的文件。用户明确要留下来的，
   // 本地不去取消它们。
   private managedFiles: Set<number> = new Set();
+  // 全屏查看器是否打开——decideMedia 只在打开时才升级高清图。
+  private viewerOpen: boolean = false;
+
+  setViewerOpen(open: boolean): void {
+    if (this.viewerOpen === open) {
+      return;
+    }
+    this.viewerOpen = open;
+  }
+
+  private mediaContextFor(entry: MessageEntry): MediaContext {
+    return {
+      inWindow: this.inMediaWindow(entry.id),
+      isPlaySlot: false, // 播放位竞选属二期，一期没有任何条目是播放位
+      viewerOpen: this.viewerOpen,
+      autoplayEnabled: powerFeatureEnabled(
+        entry.isAnimation ? KEY_POWER_AUTOPLAY_GIF : KEY_POWER_AUTOPLAY_VIDEO),
+      powerSaving: AppStorage.get<boolean>(KEY_POWER_ACTIVE) ?? false,
+      networkMetered: false
+    };
+  }
 
   setMediaWindow(fromId: number, toId: number): void {
     if (this.mediaWindowFrom === fromId && this.mediaWindowTo === toId) {
@@ -2621,21 +2643,16 @@ export class MessageStore {
           }
         }
       }
-      // Voice notes are small — download eagerly so tapping plays instantly.
-      // 以下都是"整段媒体"，一律受可见窗口约束：进频道时整页一起下载正是
-      // 列表卡死的来源。缩略图不在此列（小、且是列表要画的东西）。
-      // 语音也要过策略：用户在移动网络关掉了「文件与音乐」就不该下。
-      if (e.contentType === 'voice' && e.videoFileId !== 0 && e.videoPath === '' &&
-        this.inMediaWindow(e.id) && shouldAutoDownload('audio', e.videoFileSize)) {
-        this.requestVideoDownload(e.id); // deduped via videoFileToMsg
-      }
-      // Telegram GIFs are compact muted MP4 loops. Download them eagerly only
-      // while inline autoplay is enabled; normal videos remain tap-to-play.
-      if (e.isAnimation && e.videoFileId !== 0 && e.videoPath === '' &&
-        this.inMediaWindow(e.id) &&
-        powerFeatureEnabled(KEY_POWER_AUTOPLAY_GIF) && !reduceAnimations() &&
-        shouldAutoDownload('animation', e.videoFileSize)) {
-        this.requestVideoDownload(e.id);
+      // 整段媒体（高清图 / 语音 / GIF / 显式整文件下载）统一交给 MediaPolicy
+      // 决策：缩略图已在上文入队（含去重与限速重试），这里只消费
+      // full/explicit —— stream 留给二期的播放位控制器，一期不会产出。
+      const intents: MediaIntent[] = decideMedia(subjectOfEntry(e), this.mediaContextFor(e));
+      for (const intent of intents) {
+        if (intent === 'full') {
+          this.requestFullPhoto(e.id, false, false);
+        } else if (intent === 'explicit') {
+          this.requestVideoDownload(e.id); // deduped via videoFileToMsg
+        }
       }
       // Animated (TGS) sticker source file — small (<64KB), download eagerly so
       // the Lottie animation starts as soon as the message is visible.
@@ -2680,17 +2697,6 @@ export class MessageStore {
             this.linkThumbLastKick.set(e.linkPhotoFileId, now);
             this.downloadLinkPreviewPhoto(e.linkPhotoFileId);
           }
-        }
-      }
-      if (this.liveIncomingMediaIds.indexOf(e.id) >= 0) {
-        if (e.contentType === 'photo' && shouldAutoDownload('photo', 0)) {
-          this.requestFullPhoto(e.id, false, false);
-        } else if (e.contentType === 'video' && !e.isAnimation &&
-          shouldAutoDownload('video', e.videoFileSize)) {
-          this.requestVideoDownload(e.id);
-        } else if ((e.contentType === 'audio' || e.contentType === 'file') &&
-          shouldAutoDownload(e.contentType, e.videoFileSize)) {
-          this.requestVideoDownload(e.id);
         }
       }
     }

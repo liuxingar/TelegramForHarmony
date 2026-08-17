@@ -6,7 +6,7 @@ import { getAccentColorStore, getUserStore } from '../../tdkit/Globals';
 import { AvatarView } from '../chatlist/AvatarView';
 import {
   KEY_TEXT_SIZE, KEY_BUBBLE_RADIUS, KEY_REDUCE_ANIM, TEXT_SIZE_DEFAULT, RADIUS_DEFAULT,
-  KEY_POWER_ACTIVE, KEY_POWER_AUTOPLAY_GIF, KEY_POWER_AUTOPLAY_VIDEO, KEY_POWER_CHAT_EFFECTS,
+  KEY_POWER_ACTIVE, KEY_POWER_AUTOPLAY_GIF, KEY_POWER_CHAT_EFFECTS,
   KEY_POWER_EFFECT_MESSAGE, KEY_POWER_EFFECT_REACTION, KEY_POWER_EMOJI, KEY_POWER_EMOJI_CHAT,
   KEY_POWER_EMOJI_REACTIONS, KEY_POWER_STICKERS, KEY_POWER_STICKER_AUTOPLAY
 } from '../../store/AppSettings';
@@ -265,7 +265,6 @@ export struct MessageBubble {
   @StorageProp(KEY_POWER_STICKERS) stickersEnabled: boolean = true;
   @StorageProp(KEY_POWER_STICKER_AUTOPLAY) stickerAutoplay: boolean = true;
   @StorageProp(KEY_POWER_AUTOPLAY_GIF) @Watch('onPlaybackPolicyChanged') autoplayGif: boolean = true;
-  @StorageProp(KEY_POWER_AUTOPLAY_VIDEO) autoplayVideo: boolean = true;
   @Prop showAvatar: boolean = true;     // last row of a same-sender run
   @Prop showSenderName: boolean = true; // first row of a same-sender run
   @State mediaVisible: boolean = true;
@@ -517,18 +516,18 @@ export struct MessageBubble {
       this.playSlotKey === slotKey(this.msg.id, albumIndex);
   }
 
+  // 普通视频的播放已经交给播放位机制（isPlaySlot → VideoBubbleSurface 分片流
+  // 式播放），这里只剩动图（GIF）走整文件下载 + 循环播放（SmartLoopVideo）。
+  // 圆形视频消息（videoNote）走的是另一条独立分支，不受这里影响。
   private autoplayInlineVideo(): boolean {
-    if (this.msg.contentType !== 'video' || this.msg.videoPath === '' ||
+    if (this.msg.contentType !== 'video' || !this.msg.isAnimation || this.msg.videoPath === '' ||
       !this.mediaVisible || !this.appIsForeground || this.animationPlaybackFailed) {
       return false;
     }
-    if (this.msg.isAnimation) {
-      if (this.animationPaused) {
-        return false;
-      }
-      return this.animationForcePlay || (!this.powerSaving && !this.reduceAnim && this.autoplayGif);
+    if (this.animationPaused) {
+      return false;
     }
-    return !this.powerSaving && !this.reduceAnim && this.autoplayVideo;
+    return this.animationForcePlay || (!this.powerSaving && !this.reduceAnim && this.autoplayGif);
   }
 
   private autoplayCategory(): string {

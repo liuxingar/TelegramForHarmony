@@ -5,10 +5,10 @@ import {
   getNetworkUsage, resetNetworkUsage, clearAllDrafts
 } from '../../store/StorageApi';
 import {
-  KEY_CURRENT_NETWORK_TYPE, KEY_AUTOSAVE_PRIVATE, KEY_AUTOSAVE_GROUP,
-  KEY_AUTOSAVE_CHANNEL, autoDownloadPolicy, powerAnimationDuration,
+  KEY_CACHE_LIMIT, powerAnimationDuration,
   KEY_POWER_SMOOTH_TRANSITIONS
 } from '../../store/AppSettings';
+import { CACHE_LIMIT_UNLIMITED, CACHE_LIMIT_DEFAULT } from '../../store/CacheLimit';
 import {
   COLOR_DIVIDER, COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE,
   COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
@@ -27,10 +27,7 @@ struct DataStoragePage {
   @StorageProp(LANGUAGE_EPOCH) langEpoch: number = 0;
   @StorageProp('topSafeHeight') topSafe: number = 0;
   @StorageProp('bottomSafeHeight') bottomSafe: number = 0;
-  @StorageProp(KEY_CURRENT_NETWORK_TYPE) networkType: string = 'other';
-  @StorageProp(KEY_AUTOSAVE_PRIVATE) autosavePrivate: boolean = false;
-  @StorageProp(KEY_AUTOSAVE_GROUP) autosaveGroup: boolean = false;
-  @StorageProp(KEY_AUTOSAVE_CHANNEL) autosaveChannel: boolean = false;
+  @StorageProp(KEY_CACHE_LIMIT) cacheLimit: number = CACHE_LIMIT_DEFAULT;
   @State storage: StorageUsage | null = null;
   @State network: NetworkUsage | null = null;
   @State storageLoading: boolean = true;
@@ -142,29 +139,8 @@ struct DataStoragePage {
     });
   }
 
-  private networkLabel(): string {
-    if (this.networkType === 'wifi') { return 'Wi‑Fi'; }
-    if (this.networkType === 'mobile') { return str('network_mobile'); }
-    if (this.networkType === 'roaming') { return str('network_roaming'); }
-    if (this.networkType === 'none') { return str('ds_no_network'); }
-    return str('network_other');
-  }
-
-  private autoDownloadSummary(): string {
-    const current = autoDownloadPolicy();
-    const enabled: string[] = [];
-    if (current.photos) { enabled.push(str('storage_photo')); }
-    if (current.videos) { enabled.push(str('storage_video')); }
-    if (current.files) { enabled.push(str('storage_file')); }
-    return str('ds_network_and_kinds', this.networkLabel(), enabled.length > 0 ? enabled.join(str('list_separator')) : str('ds_off'));
-  }
-
-  private autosaveSummary(): string {
-    const enabled: string[] = [];
-    if (this.autosavePrivate) { enabled.push(str('ns_private')); }
-    if (this.autosaveGroup) { enabled.push(str('gn_group')); }
-    if (this.autosaveChannel) { enabled.push(str('gn_channel')); }
-    return enabled.length > 0 ? enabled.join('、') : str('ds_off');
+  private cacheLimitSubtitle(): string {
+    return this.cacheLimit === CACHE_LIMIT_UNLIMITED ? str('ms_cache_unlimited') : formatBytes(this.cacheLimit);
   }
 
   private sinceLabel(): string {
@@ -324,11 +300,8 @@ struct DataStoragePage {
   @Builder
   mediaCard() {
     Column() {
-      this.navRow($r('sys.symbol.arrow_down_circle'), $r('app.string.ds_auto_download'), this.autoDownloadSummary(), '',
-        'pages/main/MediaStorageSettingsPage');
-      Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 62 });
-      this.navRow($r('sys.symbol.camera'), $r('app.string.ms_save_to_gallery'), this.autosaveSummary(), '',
-        'pages/main/MediaStorageSettingsPage');
+      this.navRow($r('sys.symbol.arrow_down_circle'), $r('app.string.ms_cache_title'), this.cacheLimitSubtitle(), '',
+        'pages/main/CacheSettingsPage');
     }.width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS).clip(true);
   }
 

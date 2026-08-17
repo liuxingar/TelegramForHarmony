@@ -22,7 +22,7 @@
     "pages/main/DataStoragePage",
     "pages/main/StorageUsagePage",
     "pages/main/NetworkUsagePage",
-    "pages/main/MediaStorageSettingsPage",
+    "pages/main/CacheSettingsPage",
     "pages/main/ProxyPage",
     "pages/main/AboutPage",
     "pages/main/ChatFoldersPage",

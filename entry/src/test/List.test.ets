@@ -59,6 +59,7 @@ import chatHeaderPresentationTest from './ChatHeaderPresentation.test';
 import translationServiceTest from './TranslationService.test';
 import mediaPolicyTest from './MediaPolicy.test';
 import mentionDraftTest from './MentionDraft.test';
+import cacheLimitTest from './CacheLimit.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -120,6 +121,7 @@ export default function testsuite() {
   chatHeaderPresentationTest();
   mentionDraftTest();
   mediaPolicyTest();
+  cacheLimitTest();
   customEmojiReactionsTest();
   markdownBlocksTest();
 }

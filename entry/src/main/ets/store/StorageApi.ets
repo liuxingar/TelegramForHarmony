@@ -1,7 +1,8 @@
 import { getTdClient } from '../tdkit/Globals';
-import { TdObject, TdRequest } from '../tdkit/TdTypes';
+import { TdObject, TdRequest, TdError } from '../tdkit/TdTypes';
 import { AutoDownloadPolicy } from './AppSettings';
 import { str } from '../util/strings';
+import { buildCacheTrimRequest, shouldTrimCache } from './CacheLimit';
 
 export interface StorageUsage {
   filesSize: number;
@@ -327,4 +328,16 @@ export async function syncAutosaveSettings(scope: string, enabled: boolean,
   request['scope'] = { '@type': scopeType } as TdObject;
   request['settings'] = settings;
   await getTdClient().send(request, 15000);
+}
+
+export async function applyCacheLimit(limitBytes: number): Promise<void> {
+  if (!shouldTrimCache(limitBytes)) {
+    return;
+  }
+  try {
+    await getTdClient().send(buildCacheTrimRequest(limitBytes) as TdRequest, 60000);
+  } catch (e) {
+    const error = e as TdError;
+    console.error(`StorageApi.applyCacheLimit failed: ${error.message}`);
+  }
 }

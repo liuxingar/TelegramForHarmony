@@ -5,8 +5,8 @@ import { TdObject, TdRequest, TdError } from '../tdkit/TdTypes';
 
 // 探针：验证 Telegram 官方服务器能否直接投递到华为 Push Kit 通道。
 //
-// 预期大概率不通 —— Push Token 由本应用的 AGC 身份（app_id
-// 6917613816610405105）签发，而实际发推送的是 Telegram 官方服务器，它只持有
+// 实测确认不通 —— Push Token 由本应用自己的 AGC 应用身份签发，而实际发推送的
+// 是 Telegram 官方服务器，它只持有
 // Telegram 自己的 HMS 凭证，两者的发送方身份对不上。`registerDevice` 也没有
 // 任何字段可以覆盖发送方。这里把 getToken 与 registerDevice 的完整结果
 // （含错误码）都保留下来，用于证实或证伪这个判断，本身就是本次验证的产出。

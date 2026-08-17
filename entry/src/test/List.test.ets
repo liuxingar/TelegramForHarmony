@@ -62,6 +62,7 @@ import mentionDraftTest from './MentionDraft.test';
 import cacheLimitTest from './CacheLimit.test';
 import playSlotTest from './PlaySlot.test';
 import playSlotRegistryTest from './PlaySlotRegistry.test';
+import backgroundBlurTest from './BackgroundBlur.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -128,4 +129,5 @@ export default function testsuite() {
   playSlotRegistryTest();
   customEmojiReactionsTest();
   markdownBlocksTest();
+  backgroundBlurTest();
 }

@@ -29,6 +29,31 @@ export interface BackgroundRasterParams {
   height: number;        // vp
 }
 
+// Blur radii. Only a real photo wallpaper (path set, not a pattern) gets
+// softened — patterns are line art meant to stay crisp, and a pure gradient
+// has no texture to blur. A wallpaper the user (or the sync'd account) marked
+// blurred in the official client gets an extra push on top of the baseline.
+const NO_BLUR_RADIUS: number = 0;
+const WALLPAPER_BLUR_RADIUS: number = 8;
+const WALLPAPER_BLURRED_RADIUS: number = 16;
+
+// Pure function: given the shape of the background, decide how much blur (if
+// any) the composited image should get. Returns a new value only — no
+// mutation of the caller's params.
+export function backgroundBlurRadius(path: string, isPattern: boolean, blurred: boolean): number {
+  if (path === '' || isPattern) {
+    return NO_BLUR_RADIUS;
+  }
+  return blurred ? WALLPAPER_BLURRED_RADIUS : WALLPAPER_BLUR_RADIUS;
+}
+
+// Whether the image needs the overscan that hides the soft edge a blur
+// leaves behind. Tied to the same rule as the radius, not to `blurred` alone
+// — any nonzero radius (the baseline 8 included) needs it.
+function backgroundOverscan(p: BackgroundRasterParams): boolean {
+  return backgroundBlurRadius(p.path, p.isPattern, p.blurred) > NO_BLUR_RADIUS;
+}
+
 // sig -> file path. The file also survives on disk, but the map is what keeps
 // the common case (every chat resolving to the account default) off the disk
 // entirely.
@@ -40,12 +65,15 @@ const inFlight: Set<string> = new Set();
 const SNAPSHOT_DELAY_MS: number = 320;
 
 export function rasterSignature(p: BackgroundRasterParams): string {
-  // v2: full-resolution pattern decode + quality 96. The version token retires
-  // every raster cached by the softer v1 pipeline — without it the map/disk hit
-  // would keep serving the blurry files forever.
-  return `v2_${p.colors.join('-')}_${p.angle}_${p.path}_${p.isPattern ? 'p' : 'w'}` +
+  // v3: photo wallpapers now always carry some blur (8, or 16 when the
+  // account's own is_blurred flag is set) instead of only the blurred ones.
+  // The version token retires every raster cached by the v2 pipeline, which
+  // rendered plain wallpapers fully sharp — without bumping it, the map/disk
+  // hit would keep serving those sharp files forever.
+  const radius: number = backgroundBlurRadius(p.path, p.isPattern, p.blurred);
+  return `v3_${p.colors.join('-')}_${p.angle}_${p.path}_${p.isPattern ? 'p' : 'w'}` +
     `_${Math.round(p.imageOpacity * 100)}_${Math.round(p.dimming * 100)}` +
-    `_${p.blurred ? 'b' : ''}_${Math.round(p.width)}x${Math.round(p.height)}`;
+    `_blur${radius}_${Math.round(p.width)}x${Math.round(p.height)}`;
 }
 
 export function cachedRaster(sig: string): string {
@@ -63,12 +91,14 @@ function backgroundLayer(p: BackgroundRasterParams) {
       Column().width(p.width).height(p.height).backgroundColor($r('app.color.chat_bg'));
     }
     if (p.path !== '') {
+      // Blur softens the edges into the layer underneath, so anything blurred
+      // needs the overscan or a faint rim of the gradient/dimming shows through.
       Image(p.path.startsWith('/') ? `file://${p.path}` : p.path).draggable(false)
         .width(p.width).height(p.height)
         .objectFit(p.isPattern ? ImageFit.Contain : ImageFit.Cover)
         .opacity(p.imageOpacity)
-        .scale({ x: p.blurred ? 1.08 : 1, y: p.blurred ? 1.08 : 1 })
-        .blur(p.blurred ? 12 : 0)
+        .scale(backgroundOverscan(p) ? { x: 1.08, y: 1.08 } : { x: 1, y: 1 })
+        .blur(backgroundBlurRadius(p.path, p.isPattern, p.blurred))
         // 关闭降采样解码：offline 树里 autoResize 会按布局估算把 1157×2560 的
         // 源图解到约一半（实测 652×1443），快照再放大回全屏——用户看到的
         // "背景比实时版糊"就是这个。全分辨率解码 + 高质量插值。

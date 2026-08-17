@@ -10859,6 +10859,26 @@
     {
       "name": "cl_my_story",
       "value": "قصتي"
+    },
+    {
+      "name": "ms_cache_title",
+      "value": "ذاكرة التخزين المؤقت"
+    },
+    {
+      "name": "ms_cache_limit",
+      "value": "حد ذاكرة التخزين المؤقت"
+    },
+    {
+      "name": "ms_cache_limit_sub",
+      "value": "عند تجاوز الحد، يتم حذف الوسائط الأقل استخدامًا مؤخرًا تلقائيًا"
+    },
+    {
+      "name": "ms_cache_unlimited",
+      "value": "غير محدود"
+    },
+    {
+      "name": "ms_autoplay_muted",
+      "value": "تشغيل صامت"
     }
   ]
 }

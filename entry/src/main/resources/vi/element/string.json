@@ -10859,6 +10859,26 @@
     {
       "name": "cl_my_story",
       "value": "Tin của tôi"
+    },
+    {
+      "name": "ms_cache_title",
+      "value": "Bộ nhớ đệm"
+    },
+    {
+      "name": "ms_cache_limit",
+      "value": "Giới hạn bộ nhớ đệm"
+    },
+    {
+      "name": "ms_cache_limit_sub",
+      "value": "Phương tiện lâu chưa dùng nhất sẽ tự động bị xóa khi vượt quá giới hạn"
+    },
+    {
+      "name": "ms_cache_unlimited",
+      "value": "Không giới hạn"
+    },
+    {
+      "name": "ms_autoplay_muted",
+      "value": "Phát không có âm thanh"
     }
   ]
 }

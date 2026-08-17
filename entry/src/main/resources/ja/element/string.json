@@ -10859,6 +10859,26 @@
     {
       "name": "cl_my_story",
       "value": "マイストーリー"
+    },
+    {
+      "name": "ms_cache_title",
+      "value": "キャッシュ"
+    },
+    {
+      "name": "ms_cache_limit",
+      "value": "キャッシュの上限"
+    },
+    {
+      "name": "ms_cache_limit_sub",
+      "value": "上限を超えると、最も長く使用されていないメディアが自動的に削除されます"
+    },
+    {
+      "name": "ms_cache_unlimited",
+      "value": "無制限"
+    },
+    {
+      "name": "ms_autoplay_muted",
+      "value": "ミュート再生"
     }
   ]
 }

@@ -10859,6 +10859,26 @@
     {
       "name": "cl_my_story",
       "value": "我的动态"
+    },
+    {
+      "name": "ms_cache_title",
+      "value": "缓存"
+    },
+    {
+      "name": "ms_cache_limit",
+      "value": "缓存上限"
+    },
+    {
+      "name": "ms_cache_limit_sub",
+      "value": "超出上限时自动清理最久未使用的媒体"
+    },
+    {
+      "name": "ms_cache_unlimited",
+      "value": "不限"
+    },
+    {
+      "name": "ms_autoplay_muted",
+      "value": "静音播放"
     }
   ]
 }

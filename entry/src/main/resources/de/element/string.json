@@ -10859,6 +10859,26 @@
     {
       "name": "cl_my_story",
       "value": "Meine Story"
+    },
+    {
+      "name": "ms_cache_title",
+      "value": "Cache"
+    },
+    {
+      "name": "ms_cache_limit",
+      "value": "Cache-Limit"
+    },
+    {
+      "name": "ms_cache_limit_sub",
+      "value": "Bei Überschreitung des Limits wird das am längsten nicht verwendete Medium automatisch gelöscht"
+    },
+    {
+      "name": "ms_cache_unlimited",
+      "value": "Unbegrenzt"
+    },
+    {
+      "name": "ms_autoplay_muted",
+      "value": "Stumm abspielen"
     }
   ]
 }

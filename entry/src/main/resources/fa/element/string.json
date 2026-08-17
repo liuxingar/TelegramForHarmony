@@ -10859,6 +10859,26 @@
     {
       "name": "cl_my_story",
       "value": "استوری من"
+    },
+    {
+      "name": "ms_cache_title",
+      "value": "حافظه پنهان"
+    },
+    {
+      "name": "ms_cache_limit",
+      "value": "حد حافظه پنهان"
+    },
+    {
+      "name": "ms_cache_limit_sub",
+      "value": "هنگام عبور از حد، رسانه‌هایی که مدت طولانی استفاده نشده‌اند به‌طور خودکار پاک می‌شوند"
+    },
+    {
+      "name": "ms_cache_unlimited",
+      "value": "نامحدود"
+    },
+    {
+      "name": "ms_autoplay_muted",
+      "value": "پخش بی‌صدا"
     }
   ]
 }

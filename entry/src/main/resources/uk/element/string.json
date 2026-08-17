@@ -10859,6 +10859,26 @@
     {
       "name": "cl_my_story",
       "value": "Моя історія"
+    },
+    {
+      "name": "ms_cache_title",
+      "value": "Кеш"
+    },
+    {
+      "name": "ms_cache_limit",
+      "value": "Ліміт кешу"
+    },
+    {
+      "name": "ms_cache_limit_sub",
+      "value": "Коли ліміт перевищено, найдавніше використані медіафайли видаляються автоматично"
+    },
+    {
+      "name": "ms_cache_unlimited",
+      "value": "Без обмежень"
+    },
+    {
+      "name": "ms_autoplay_muted",
+      "value": "Відтворення без звуку"
     }
   ]
 }

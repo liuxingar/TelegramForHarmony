@@ -10859,6 +10859,26 @@
     {
       "name": "cl_my_story",
       "value": "La mia storia"
+    },
+    {
+      "name": "ms_cache_title",
+      "value": "Cache"
+    },
+    {
+      "name": "ms_cache_limit",
+      "value": "Limite cache"
+    },
+    {
+      "name": "ms_cache_limit_sub",
+      "value": "I contenuti multimediali usati meno di recente vengono rimossi automaticamente al superamento del limite"
+    },
+    {
+      "name": "ms_cache_unlimited",
+      "value": "Illimitato"
+    },
+    {
+      "name": "ms_autoplay_muted",
+      "value": "Riproduci senza audio"
     }
   ]
 }

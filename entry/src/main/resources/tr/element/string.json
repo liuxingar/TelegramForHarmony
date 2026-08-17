@@ -10859,6 +10859,26 @@
     {
       "name": "cl_my_story",
       "value": "Hikayem"
+    },
+    {
+      "name": "ms_cache_title",
+      "value": "Önbellek"
+    },
+    {
+      "name": "ms_cache_limit",
+      "value": "Önbellek sınırı"
+    },
+    {
+      "name": "ms_cache_limit_sub",
+      "value": "Sınır aşıldığında en uzun süredir kullanılmayan medya otomatik olarak temizlenir"
+    },
+    {
+      "name": "ms_cache_unlimited",
+      "value": "Sınırsız"
+    },
+    {
+      "name": "ms_autoplay_muted",
+      "value": "Sessiz oynat"
     }
   ]
 }

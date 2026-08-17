@@ -10859,6 +10859,26 @@
     {
       "name": "cl_my_story",
       "value": "내 스토리"
+    },
+    {
+      "name": "ms_cache_title",
+      "value": "캐시"
+    },
+    {
+      "name": "ms_cache_limit",
+      "value": "캐시 제한"
+    },
+    {
+      "name": "ms_cache_limit_sub",
+      "value": "제한을 초과하면 가장 오래 사용하지 않은 미디어가 자동으로 삭제됩니다"
+    },
+    {
+      "name": "ms_cache_unlimited",
+      "value": "무제한"
+    },
+    {
+      "name": "ms_autoplay_muted",
+      "value": "음소거 재생"
     }
   ]
 }

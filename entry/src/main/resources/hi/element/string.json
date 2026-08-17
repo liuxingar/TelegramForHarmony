@@ -10859,6 +10859,26 @@
     {
       "name": "cl_my_story",
       "value": "मेरी स्टोरी"
+    },
+    {
+      "name": "ms_cache_title",
+      "value": "कैश"
+    },
+    {
+      "name": "ms_cache_limit",
+      "value": "कैश सीमा"
+    },
+    {
+      "name": "ms_cache_limit_sub",
+      "value": "सीमा पार होने पर सबसे पुराना बिना उपयोग किया गया मीडिया अपने आप हटा दिया जाता है"
+    },
+    {
+      "name": "ms_cache_unlimited",
+      "value": "असीमित"
+    },
+    {
+      "name": "ms_autoplay_muted",
+      "value": "म्यूट प्ले"
     }
   ]
 }

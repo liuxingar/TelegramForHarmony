@@ -10859,6 +10859,26 @@
     {
       "name": "cl_my_story",
       "value": "สตอรี่ของฉัน"
+    },
+    {
+      "name": "ms_cache_title",
+      "value": "แคช"
+    },
+    {
+      "name": "ms_cache_limit",
+      "value": "ขีดจำกัดแคช"
+    },
+    {
+      "name": "ms_cache_limit_sub",
+      "value": "สื่อที่ไม่ได้ใช้งานนานที่สุดจะถูกล้างโดยอัตโนมัติเมื่อเกินขีดจำกัด"
+    },
+    {
+      "name": "ms_cache_unlimited",
+      "value": "ไม่จำกัด"
+    },
+    {
+      "name": "ms_autoplay_muted",
+      "value": "เล่นแบบปิดเสียง"
     }
   ]
 }

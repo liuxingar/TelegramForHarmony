@@ -10859,6 +10859,26 @@
     {
       "name": "cl_my_story",
       "value": "Cerita saya"
+    },
+    {
+      "name": "ms_cache_title",
+      "value": "Cache"
+    },
+    {
+      "name": "ms_cache_limit",
+      "value": "Had cache"
+    },
+    {
+      "name": "ms_cache_limit_sub",
+      "value": "Media yang paling lama tidak digunakan akan dibuang secara automatik apabila had dilampaui"
+    },
+    {
+      "name": "ms_cache_unlimited",
+      "value": "Tanpa had"
+    },
+    {
+      "name": "ms_autoplay_muted",
+      "value": "Main tanpa bunyi"
     }
   ]
 }

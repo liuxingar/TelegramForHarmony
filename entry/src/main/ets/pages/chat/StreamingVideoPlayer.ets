@@ -853,30 +853,24 @@ export struct StreamingVideoPlayer {
       // remains visible underneath instead of flashing a featureless black frame.
       if (this.status !== '' && !this.hasError) {
         if (this.embedded) {
-          // Embedded (chat-bubble) buffering indicator: a thin line hugging the
-          // bottom edge of the video — no text, no dark card, just the bar
-          // riding on top of the poster/surface. Unlike the fullscreen path
-          // below, there's no room (or need) for a status label in-bubble.
+          // Embedded (chat-bubble) buffering indicator: a plain ring centered
+          // over the video — no percentage text, no dark card behind it, just
+          // the ring riding on top of the poster/surface.
           //
           // bufferedPercent stays 0 until the first real progress sample
-          // arrives; a fully-empty bar there reads as "nothing is happening"
+          // arrives; a fully-empty ring there reads as "nothing is happening"
           // rather than "buffering", so it floors at a small fixed sliver
-          // instead. ArkUI's Linear progress has no built-in indeterminate/
-          // looping mode (that's Ring/Capsule-only via enableScanEffect on
-          // LinearStyleOptions is scan-highlight-over-a-value, not a true
-          // indeterminate loop at value 0), so the sliver is the honest
-          // choice rather than leaning on undocumented behavior.
+          // instead.
           Progress({
             value: this.bufferedPercent > 0 ? this.bufferedPercent : 8,
             total: 100,
-            type: ProgressType.Linear
+            type: ProgressType.Ring
           })
-            .width('100%')
-            .height(2.5)
-            .style({ strokeWidth: 2.5, strokeRadius: 0 })
+            .width(32)
+            .height(32)
             .color(Color.White)
             .backgroundColor('#33FFFFFF')
-            .align(Alignment.Bottom)
+            .align(Alignment.Center)
             // Purely decorative — must not steal the tap that opens/toggles
             // controls on the video underneath.
             .hitTestBehavior(HitTestMode.Transparent);

@@ -108,7 +108,11 @@ struct LiveSenderAvatar {
 
 @Component
 export struct MessageBubble {
-  @Prop msg: MessageEntry;
+  // @Watch fires whenever ChatPage hands down a new msg object (edits, status
+  // changes, "replace media", etc.) — not once per frame — so the transition
+  // check inside onMsgPropChanged is cheap and only fires onMediaGone on an
+  // actual video→non-video flip (see onMsgPropChanged for why this matters).
+  @Prop @Watch('onMsgPropChanged') msg: MessageEntry;
   // Chat-theme outgoing bubble color ('' = the standard theme resource color).
   @Prop themeBubbleOut: string = '';
   @Prop nowSec: number;
@@ -123,7 +127,10 @@ export struct MessageBubble {
   @Prop albumFileIds: number[];
   @Prop albumRatios: number[];
   @Prop albumMemberIds: number[];
-  @Prop albumIsVideo: boolean[];
+  // Same reasoning as msg above: fires on a new albumIsVideo array reference
+  // from ChatPage, not per frame; onAlbumIsVideoChanged only emits when a
+  // specific cell actually flips true→false.
+  @Prop @Watch('onAlbumIsVideoChanged') albumIsVideo: boolean[];
   @Prop albumProgress: number[];
   @Prop albumFailed: boolean[];
   @Prop albumCaption: string;
@@ -254,20 +261,63 @@ export struct MessageBubble {
   private mediaCenterY: number = 0;
   // 相册九宫格每格各自的中心 y，key 为 cell.idx。同样是普通 Map，不驱动刷新。
   private albumCellCenterY: Map<number, number> = new Map<number, number>();
+  // 上一次已知的「整条消息是否参与竞选」状态，供 onMsgPropChanged 判断翻转。
+  // 普通字段而非 @State：只在 @Watch 回调里读写，不参与 build()。
+  private wasCompetingVideo: boolean = false;
+  // 上一次已知的「相册第 idx 格是否参与竞选」状态，key 为 cell.idx。同样是普通 Map。
+  private albumWasCompetingVideo: Map<number, boolean> = new Map<number, boolean>();
+
+  private isCompetingVideo(): boolean {
+    return this.msg.contentType === 'video' && !this.msg.isAnimation;
+  }
 
   aboutToAppear(): void {
     this.requestAutoplayDownload();
+    // 只记录初始状态，不在这里上报——上报的语义是「不再参与竞选」，首次挂载时
+    // 谈不上「不再」。真正的上报发生在 aboutToDisappear（组件销毁）和
+    // onMsgPropChanged / onAlbumIsVideoChanged（同一组件原地翻转）两条路径上。
+    this.wasCompetingVideo = this.isCompetingVideo();
+    for (let i = 0; i < this.albumIsVideo.length; i++) {
+      this.albumWasCompetingVideo.set(i, this.albumIsVideoAt(i));
+    }
   }
 
   aboutToDisappear(): void {
     // LazyForEach 回收组件时若不上报，候选表里会留下永远不消失的幽灵条目。
-    if (this.msg.contentType === 'video' && !this.msg.isAnimation) {
+    if (this.isCompetingVideo()) {
       this.onMediaGone(this.msg.id, -1);
     }
     for (let i = 0; i < this.albumIsVideo.length; i++) {
       if (this.albumIsVideoAt(i)) {
         this.onMediaGone(this.albumMemberIdAt(i), i);
       }
+    }
+  }
+
+  // "替换媒体"（约 1511 行附近的菜单项）能在同一条消息 id 上把 contentType 从
+  // video 改成 photo；组件按 messageId 复用、不会走 aboutToDisappear，所以那次
+  // 上报的「静默停止」不够——候选表里旧的可见比例记录还在，播放位可能锁定一个
+  // 已经不是视频的气泡。这里在 @Prop msg 每次被 ChatPage 换成新对象时（编辑、
+  // 状态变化、替换媒体等，不是每帧）比较一次「参与竞选」状态，只在从 true 翻到
+  // false 的那一次补发 onMediaGone，翻转之外什么也不做。
+  private onMsgPropChanged(): void {
+    const competing = this.isCompetingVideo();
+    if (this.wasCompetingVideo && !competing) {
+      this.onMediaGone(this.msg.id, -1);
+    }
+    this.wasCompetingVideo = competing;
+  }
+
+  // 同样的翻转检测，作用在相册每一格上：某格从「是视频」变成「不是视频」时补发
+  // 一次 onMediaGone，只在那一次触发，不逐帧触发。
+  private onAlbumIsVideoChanged(): void {
+    for (let i = 0; i < this.albumIsVideo.length; i++) {
+      const isVideo = this.albumIsVideoAt(i);
+      const wasVideo = this.albumWasCompetingVideo.get(i) ?? false;
+      if (wasVideo && !isVideo) {
+        this.onMediaGone(this.albumMemberIdAt(i), i);
+      }
+      this.albumWasCompetingVideo.set(i, isVideo);
     }
   }
 

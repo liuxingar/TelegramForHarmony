@@ -920,6 +920,17 @@ struct ChatPage {
       getTdClient(), getChatStore(), getChatThemeStore(),
       (): boolean => darkResourceMode(getContext(this) as common.UIAbilityContext)
     );
+    // Seeds the store's state with the last known account-default background
+    // (captured process-wide by ChatBackgroundStore, warmed at app start by
+    // MainScreen's preload) BEFORE subscribe() below synchronously hands the
+    // listener the store's initial state. Without this, every freshly opened
+    // chat starts on emptyChatBackground() — colors.length === 0 — which
+    // paints the near-white chat_bg resource for however long the real
+    // resolution's TDLib round trip takes. Most chats resolve to the account
+    // default anyway, so this seed is usually the final answer, not a guess
+    // that gets thrown away; a chat with its own background still corrects
+    // itself as soon as refresh()/open() resolves it, same as before.
+    this.bgStore.seedFromDefault();
     this.unsubBg = this.bgStore.subscribe((state: ChatBackgroundState): void => {
       this.chatBg = state;
       this.syncBackgroundRaster();

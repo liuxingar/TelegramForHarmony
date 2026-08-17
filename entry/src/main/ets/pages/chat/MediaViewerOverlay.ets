@@ -6,10 +6,11 @@ import { formatTime } from '../../util/formatTime';
 import { StreamingVideoPlayer } from './StreamingVideoPlayer';
 import { setMediaViewerOrientation } from './LiveViewerUi';
 import {
-  KEY_POWER_EFFECT_BLUR, KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration
+  KEY_CURRENT_NETWORK_TYPE, KEY_POWER_EFFECT_BLUR, KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration
 } from '../../store/AppSettings';
 import { str } from '../../util/strings';
 import { LANGUAGE_EPOCH } from '../../util/appLanguage';
+import { MediaContext, shouldPrefetchNeighbour } from '../../store/MediaPolicy';
 
 const VIEWER_CHROME_BG: string = '#6e3e3e40';
 const VIEWER_MIN_SCALE: number = 1;
@@ -99,12 +100,54 @@ export struct MediaViewerOverlay {
 
   aboutToAppear(): void {
     this.pageIdx = this.initIdx;
+    this.store?.setViewerOpen(true);
+    this.prefetchNeighbours(this.pageIdx);
   }
 
   // Leaving the viewer in landscape would strand the chat page sideways.
   aboutToDisappear(): void {
+    this.store?.setViewerOpen(false);
     if (this.videoLandscape) {
       setMediaViewerOrientation(getContext(this) as common.UIAbilityContext, false);
+    }
+  }
+
+  private networkMetered(): boolean {
+    const type: string = AppStorage.get<string>(KEY_CURRENT_NETWORK_TYPE) ?? 'other';
+    return type === 'mobile' || type === 'roaming';
+  }
+
+  // Prefetches the left/right neighbours' full-resolution photos so paging
+  // to them lands already-sharp. Gated by the shared media policy: off on
+  // metered networks. Videos/GIFs are never prefetched — requestFullPhoto
+  // only ever fetches photoFullFileId, so this filter just avoids wasted
+  // lookups for entries that can't have one.
+  private prefetchNeighbours(index: number): void {
+    if (this.store === null) {
+      return;
+    }
+    const ctx: MediaContext = {
+      inWindow: true,
+      isPlaySlot: false,
+      viewerOpen: true,
+      autoplayEnabled: true,
+      powerSaving: false,
+      networkMetered: this.networkMetered()
+    };
+    if (!shouldPrefetchNeighbour(ctx)) {
+      return;
+    }
+    const ids: number[] = this.siblingIds();
+    const neighbourIndexes: number[] = [index - 1, index + 1];
+    for (const i of neighbourIndexes) {
+      if (i < 0 || i >= ids.length) {
+        continue;
+      }
+      const id: number = ids[i];
+      if (this.siblingIsVideo(id)) {
+        continue;
+      }
+      this.store.requestFullPhoto(id, false, false);
     }
   }
 
@@ -415,6 +458,7 @@ export struct MediaViewerOverlay {
     if (this.store !== null && !this.siblingIsVideo(id)) {
       this.store.requestFullPhoto(id);
     }
+    this.prefetchNeighbours(index);
   }
 
   private isVideo(): boolean {

@@ -4,6 +4,7 @@ import { VideoBubbleSurface } from './VideoBubbleSurface';
 import { TdObject } from '../../tdkit/TdTypes';
 import { getAccentColorStore, getUserStore } from '../../tdkit/Globals';
 import { AvatarView } from '../chatlist/AvatarView';
+import { actionMenuRow } from './ActionMenuRow';
 import {
   KEY_TEXT_SIZE, KEY_BUBBLE_RADIUS, KEY_REDUCE_ANIM, TEXT_SIZE_DEFAULT, RADIUS_DEFAULT,
   KEY_POWER_ACTIVE, KEY_POWER_AUTOPLAY_GIF, KEY_POWER_CHAT_EFFECTS,
@@ -1597,23 +1598,6 @@ export struct MessageBubble {
     return false;
   }
 
-  @Builder
-  menuRow(icon: string, label: string, danger: boolean, onTap: () => void) {
-    Row({ space: 14 }) {
-      SymbolGlyph($r(icon)).fontSize(19).fontColor([danger ? '#FF3B30' : COLOR_BUBBLE_TEXT]);
-      Text(label).fontSize(16).fontColor(danger ? '#FF3B30' : COLOR_BUBBLE_TEXT).layoutWeight(1);
-    }
-    .width('100%').padding({ left: 16, right: 16, top: 11, bottom: 11 })
-    .alignItems(VerticalAlign.Center)
-    .borderRadius(10)
-    .stateStyles({
-      normal: this.menuActionNormalStyle,
-      pressed: this.menuActionPressedStyle
-    })
-    .animation({ duration: this.effectDuration(110), curve: Curve.EaseOut })
-    .onClick(onTap);
-  }
-
   // Long-press context menu: quick-reaction row (tap an emoji to toggle it, the
   // chevron opens the full picker) over the standard message actions.
   @Builder
@@ -1654,41 +1638,41 @@ export struct MessageBubble {
       .width('100%').padding({ left: 12, right: 10, top: 8, bottom: 8 })
       .alignItems(VerticalAlign.Center);
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
-      this.menuRow('sys.symbol.arrowshape_turn_up_left', str('mb_reply'), false, () => { this.onReplyTo(this.msg.id); });
+      actionMenuRow('sys.symbol.arrowshape_turn_up_left', str('mb_reply'), false, () => { this.onReplyTo(this.msg.id); });
       // TDLib 1.8.65 has no can_be_edited on message (it moved to
       // getMessageProperties); gate locally on Telegram's 48h edit window and
       // let the server be the final judge. Media types edit their caption.
       if (this.msg.isOutgoing && this.nowSec - this.msg.date < 172800 &&
         (this.msg.contentType === 'text' ||
           EDITABLE_CAPTION_TYPES.indexOf(this.msg.contentType) >= 0)) {
-        this.menuRow('sys.symbol.square_and_pencil',
+        actionMenuRow('sys.symbol.square_and_pencil',
           this.msg.contentType === 'text' ? str('edit') : str('mb_edit_caption'),
           false, () => { this.onEditMsg(this.msg.id); });
       }
-      this.menuRow('sys.symbol.plus_square_on_square', str('mb_copy_text'), false, () => { this.onCopyText(this.msg.id); });
+      actionMenuRow('sys.symbol.plus_square_on_square', str('mb_copy_text'), false, () => { this.onCopyText(this.msg.id); });
       if (this.msg.text !== '') {
-        this.menuRow('sys.symbol.translate', str('mb_translate'), false, () => { this.onTranslateMsg(this.msg.id); });
+        actionMenuRow('sys.symbol.translate', str('mb_translate'), false, () => { this.onTranslateMsg(this.msg.id); });
       }
-      this.menuRow('sys.symbol.link', str('mb_copy_link'), false, () => { this.onCopyLink(this.msg.id); });
-      this.menuRow('sys.symbol.arrowshape_turn_up_right', str('mb_forward'), false, () => { this.onForwardMsg(this.msg.id); });
-      this.menuRow('sys.symbol.pin', this.isPinnedMsg ? str('ft_unpin') : str('ft_pin'), false,
+      actionMenuRow('sys.symbol.link', str('mb_copy_link'), false, () => { this.onCopyLink(this.msg.id); });
+      actionMenuRow('sys.symbol.arrowshape_turn_up_right', str('mb_forward'), false, () => { this.onForwardMsg(this.msg.id); });
+      actionMenuRow('sys.symbol.pin', this.isPinnedMsg ? str('ft_unpin') : str('ft_pin'), false,
         () => { this.onPinMsg(this.msg.id, this.isPinnedMsg); });
       if (this.msg.isOutgoing && this.nowSec - this.msg.date < 172800 &&
         (this.msg.contentType === 'photo' || this.msg.contentType === 'video')) {
-        this.menuRow('sys.symbol.picture', str('mb_replace_media'), false,
+        actionMenuRow('sys.symbol.picture', str('mb_replace_media'), false,
           () => { this.onReplaceMedia(this.msg.id); });
       }
       if (this.msg.contentType === 'poll' && this.msg.isOutgoing && !this.msg.pollIsClosed) {
-        this.menuRow('sys.symbol.checkmark_circle', str('mb_stop_poll'), false,
+        actionMenuRow('sys.symbol.checkmark_circle', str('mb_stop_poll'), false,
           () => { this.onStopPoll(this.msg.id); });
       }
       if (this.msg.contentType === 'poll' && !this.msg.pollIsAnonymous) {
-        this.menuRow('sys.symbol.person_2', str('mb_view_voters'), false,
+        actionMenuRow('sys.symbol.person_2', str('mb_view_voters'), false,
           () => { this.onPollVoters(this.msg.id); });
       }
-      this.menuRow('sys.symbol.exclamationmark_circle', str('mb_report'), true, () => { this.onReportMsg(this.msg.id); });
-      this.menuRow('sys.symbol.checkmark_circle', str('mb_select'), false, () => { this.onSelectMsg(this.msg.id); });
-      this.menuRow('sys.symbol.trash', str('delete'), true, () => { this.onDeleteMsg(this.msg.id); });
+      actionMenuRow('sys.symbol.exclamationmark_circle', str('mb_report'), true, () => { this.onReportMsg(this.msg.id); });
+      actionMenuRow('sys.symbol.checkmark_circle', str('mb_select'), false, () => { this.onSelectMsg(this.msg.id); });
+      actionMenuRow('sys.symbol.trash', str('delete'), true, () => { this.onDeleteMsg(this.msg.id); });
     }
     .width(262)
     .padding({ top: 6, bottom: 6 });

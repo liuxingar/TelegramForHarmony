@@ -54,6 +54,7 @@ import {
 import { MusicQueue } from '../../services/MusicQueue';
 import { VoiceState } from '../../services/VoicePlayback';
 import { setMediaViewerOrientation } from './LiveViewerUi';
+import { actionMenuRow } from './ActionMenuRow';
 import { AlbumGroupDataSource, contentFingerprint, DataSourceUpdateKind } from './AlbumGroupDataSource';
 import { BasicPrefetcher } from '@kit.ArkUI';
 import { guardKey } from '../../util/keyGuard';
@@ -4243,64 +4244,56 @@ struct ChatPage {
     });
   }
 
-  @Builder
-  headerMenuRow(symbol: string, label: string, danger: boolean, onTap: () => void) {
-    Row({ space: 10 }) {
-      SymbolGlyph($r(symbol)).fontSize(18)
-        .fontColor([danger ? '#FF3B30' : COLOR_TEXT_PRIMARY]);
-      Text(label).fontSize(15).fontColor(danger ? '#FF3B30' : COLOR_TEXT_PRIMARY);
-    }
-    .width('100%').padding({ left: 14, right: 14, top: 11, bottom: 11 })
-    .alignItems(VerticalAlign.Center)
-    .stateStyles({
-      normal: this.headerMenuRowNormalStyle,
-      pressed: this.headerMenuRowPressedStyle
-    })
-    .animation({
-      duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 100),
-      curve: Curve.EaseOut
-    })
-    .onClick(() => {
+  // actionMenuRow's onTap fires directly on click; the header dropdown also
+  // needs to close itself first (unlike the bubble menu, whose bindContextMenu
+  // host closes on its own), so every row action is wrapped through here.
+  private closeHeaderMenuThen(action: () => void): () => void {
+    return (): void => {
       this.headerMenuShow = false;
-      onTap();
-    });
+      action();
+    };
   }
 
   @Builder
   headerMenu() {
     Column() {
-      this.headerMenuRow('sys.symbol.magnifyingglass', str('cp_search'), false, () => { this.enterSearch(); });
+      actionMenuRow('sys.symbol.magnifyingglass', str('cp_search'), false,
+        this.closeHeaderMenuThen((): void => { this.enterSearch(); }));
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
-      this.headerMenuRow('sys.symbol.info_circle', str('cp_profile'), false, () => { this.openProfile(); });
+      actionMenuRow('sys.symbol.info_circle', str('cp_profile'), false,
+        this.closeHeaderMenuThen((): void => { this.openProfile(); }));
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
-      this.headerMenuRow(this.isMuted ? 'sys.symbol.bell' : 'sys.symbol.bell_slash',
+      actionMenuRow(this.isMuted ? 'sys.symbol.bell' : 'sys.symbol.bell_slash',
         this.headerMuteUpdating ? str('cp_updating_notifications') : (this.isMuted ? str('cp_unmute') : str('cp_mute')),
-        false, () => { this.toggleChatMute(); });
+        false, this.closeHeaderMenuThen((): void => { this.toggleChatMute(); }));
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
-      this.headerMenuRow('sys.symbol.clock', str('cp_auto_delete'), false, () => { this.chooseAutoDelete(); });
+      actionMenuRow('sys.symbol.clock', str('cp_auto_delete'), false,
+        this.closeHeaderMenuThen((): void => { this.chooseAutoDelete(); }));
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
-      this.headerMenuRow('sys.symbol.calendar', str('sched_title'), false, () => { this.openScheduledSheet(); });
-      this.headerMenuRow('sys.symbol.calendar_badge_clock', str('cp_jump_to_date'), false,
-        () => { this.pickJumpDate(); });
+      actionMenuRow('sys.symbol.calendar', str('sched_title'), false,
+        this.closeHeaderMenuThen((): void => { this.openScheduledSheet(); }));
+      actionMenuRow('sys.symbol.calendar_badge_clock', str('cp_jump_to_date'), false,
+        this.closeHeaderMenuThen((): void => { this.pickJumpDate(); }));
       if (this.liveLocationActive) {
-        this.headerMenuRow('sys.symbol.stop_circle', str('cp_stop_location'), true,
-          () => { this.confirmStopLiveLocation(); });
+        actionMenuRow('sys.symbol.stop_circle', str('cp_stop_location'), true,
+          this.closeHeaderMenuThen((): void => { this.confirmStopLiveLocation(); }));
       }
       Divider().color($r('app.color.divider')).strokeWidth(0.7);
       // 总开关开着时这个会话默认就在翻，所以这一项显示「关闭翻译」；总开关
       // 关着时它就是"只翻这个会话"的入口。单条消息的翻译不受这里影响。
-      this.headerMenuRow('sys.symbol.translate',
+      actionMenuRow('sys.symbol.translate',
         this.translationActive() ? str('cp_translate_chat_off') : str('cp_translate_chat_on'),
-        false, () => { this.toggleTranslatable(); });
-      this.headerMenuRow('sys.symbol.xmark_circle', str('cp_clear_history'), false, () => { this.confirmClearHistory(); });
+        false, this.closeHeaderMenuThen((): void => { this.toggleTranslatable(); }));
+      actionMenuRow('sys.symbol.xmark_circle', str('cp_clear_history'), false,
+        this.closeHeaderMenuThen((): void => { this.confirmClearHistory(); }));
       if (this.isGroup && this.membershipState === 'writable') {
         Divider().color($r('app.color.divider')).strokeWidth(0.7);
-        this.headerMenuRow('sys.symbol.trash', this.isChannel ? str('cp_leave_channel') : str('cp_leave_group'), true,
-          () => { this.confirmLeaveChat(); });
+        actionMenuRow('sys.symbol.trash', this.isChannel ? str('cp_leave_channel') : str('cp_leave_group'), true,
+          this.closeHeaderMenuThen((): void => { this.confirmLeaveChat(); }));
       }
     }
-    .width(200)
+    .width(262)
     .backgroundColor($r('app.color.surface'))
     .borderRadius(14)
     .shadow({ radius: 10, color: '#26000000', offsetX: 0, offsetY: 4 })

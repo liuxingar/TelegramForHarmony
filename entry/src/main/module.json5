@@ -123,6 +123,12 @@
         "type": "workScheduler",
         "exported": false
       }
+    ],
+    "metadata": [
+      {
+        "name": "client_id",
+        "value": "2018272815454667904"
+      }
     ]
   }
 }

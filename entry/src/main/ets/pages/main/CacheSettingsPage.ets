@@ -125,6 +125,7 @@ struct CacheSettingsPage {
     if (this.cacheLimit === value) { return; }
     setNumber(KEY_CACHE_LIMIT, value);
     applyCacheLimit(value).catch((error: TdError): void => {
+      if (this.active) { this.warning = str('ms_download_sync_failed'); }
       console.error(`CacheSettingsPage.applyCacheLimit failed: ${error.message}`);
     });
   }

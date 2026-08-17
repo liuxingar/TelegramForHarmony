@@ -2,8 +2,6 @@ import { router } from '@kit.ArkUI';
 import {
   KEY_BATTERY_PERCENT,
   KEY_POWER_ACTIVE,
-  KEY_POWER_AUTOPLAY_GIF,
-  KEY_POWER_AUTOPLAY_VIDEO,
   KEY_POWER_CALL_ANIMATIONS,
   KEY_POWER_CHAT_EFFECTS,
   KEY_POWER_EMOJI,
@@ -59,8 +57,6 @@ struct PowerUsagePage {
   @StorageLink(KEY_POWER_EMOJI) animatedEmoji: boolean = true;
   @StorageLink(KEY_POWER_CHAT_EFFECTS) chatEffects: boolean = true;
   @StorageLink(KEY_POWER_CALL_ANIMATIONS) callAnimations: boolean = true;
-  @StorageLink(KEY_POWER_AUTOPLAY_VIDEO) autoplayVideo: boolean = true;
-  @StorageLink(KEY_POWER_AUTOPLAY_GIF) autoplayGif: boolean = true;
   @StorageLink(KEY_POWER_PARTICLES) particles: boolean = true;
   @StorageLink(KEY_POWER_SMOOTH_TRANSITIONS) smoothTransitions: boolean = true;
   @StorageLink(KEY_POWER_STICKER_AUTOPLAY) stickerAutoplay: boolean = true;
@@ -161,8 +157,6 @@ struct PowerUsagePage {
     if (key === KEY_POWER_EMOJI) { return this.animatedEmoji; }
     if (key === KEY_POWER_CHAT_EFFECTS) { return this.chatEffects; }
     if (key === KEY_POWER_CALL_ANIMATIONS) { return this.callAnimations; }
-    if (key === KEY_POWER_AUTOPLAY_VIDEO) { return this.autoplayVideo; }
-    if (key === KEY_POWER_AUTOPLAY_GIF) { return this.autoplayGif; }
     if (key === KEY_POWER_PARTICLES) { return this.particles; }
     return this.smoothTransitions;
   }
@@ -424,10 +418,6 @@ struct PowerUsagePage {
       }
       Divider().strokeWidth(0.7).color($r('app.color.divider')).margin({ left: 58 });
       this.featureRow('sys.symbol.phone', str('power_call_anim'), KEY_POWER_CALL_ANIMATIONS, 0);
-      Divider().strokeWidth(0.7).color($r('app.color.divider')).margin({ left: 58 });
-      this.featureRow('sys.symbol.play_fill', str('power_autoplay_video'), KEY_POWER_AUTOPLAY_VIDEO, 0);
-      Divider().strokeWidth(0.7).color($r('app.color.divider')).margin({ left: 58 });
-      this.featureRow('sys.symbol.video', str('power_autoplay_gif'), KEY_POWER_AUTOPLAY_GIF, 0);
       Divider().strokeWidth(0.7).color($r('app.color.divider')).margin({ left: 58 });
       this.featureRow('sys.symbol.gift', str('power_particles'), KEY_POWER_PARTICLES, 0);
     }

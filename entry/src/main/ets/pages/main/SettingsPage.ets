@@ -87,8 +87,8 @@ function settingGroups(): SettingGroup[] {
         subtitle: str('settings_proxy_sub'), page: 'pages/main/ProxyPage' },
       { icon: 'sys.symbol.battery_100percent', bg: '#FF9500', title: str('settings_power'),
         subtitle: str('settings_power_sub'), page: 'pages/main/PowerUsagePage' },
-      { icon: 'sys.symbol.play_fill', bg: '#30B0C7', title: str('settings_background_playback'),
-        subtitle: str('settings_background_playback_sub'), page: 'pages/main/BackgroundPlaybackPage' }
+      { icon: 'sys.symbol.play_fill', bg: '#30B0C7', title: str('settings_media'),
+        subtitle: str('settings_media_sub'), page: 'pages/main/MediaSettingsPage' }
     ]
   },
   {

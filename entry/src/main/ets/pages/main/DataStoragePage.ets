@@ -2,13 +2,18 @@ import { router, promptAction } from '@kit.ArkUI';
 import { TdError } from '../../tdkit/TdTypes';
 import {
   StorageUsage, NetworkUsage, formatBytes, getStorageUsage, clearCache,
-  getNetworkUsage, resetNetworkUsage, clearAllDrafts
+  getNetworkUsage, resetNetworkUsage, clearAllDrafts,
+  prepareAutosaveSettings, syncAutosaveSettings, applyCacheLimit
 } from '../../store/StorageApi';
 import {
   KEY_CACHE_LIMIT, powerAnimationDuration,
-  KEY_POWER_SMOOTH_TRANSITIONS
+  KEY_POWER_SMOOTH_TRANSITIONS,
+  setBoolean, setNumber,
+  KEY_AUTOSAVE_PRIVATE, KEY_AUTOSAVE_GROUP, KEY_AUTOSAVE_CHANNEL
 } from '../../store/AppSettings';
-import { CACHE_LIMIT_UNLIMITED, CACHE_LIMIT_DEFAULT } from '../../store/CacheLimit';
+import {
+  CACHE_LIMIT_OPTIONS, CACHE_LIMIT_UNLIMITED, CACHE_LIMIT_DEFAULT
+} from '../../store/CacheLimit';
 import {
   COLOR_DIVIDER, COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE,
   COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
@@ -37,10 +42,17 @@ struct DataStoragePage {
   @State syncWarning: string = '';
   @State actionKey: string = '';
   @State skeletonBright: boolean = false;
+  @State autosavePrivate: boolean = false;
+  @State autosaveGroup: boolean = false;
+  @State autosaveChannel: boolean = false;
+  @State autosaveSyncing: boolean = false;
+  @State autosaveWarning: string = '';
   private active: boolean = false;
   private loadSequence: number = 0;
   private lastLoadAt: number = 0;
   private skeletonTimer: number = -1;
+  private autosaveSyncSequence: number = 0;
+  private autosavePrepared: boolean = false;
 
   @Styles
   actionNormalStyle() {
@@ -70,7 +82,16 @@ struct DataStoragePage {
 
   aboutToAppear(): void {
     this.active = true;
+    this.autosavePrivate = AppStorage.get<boolean>(KEY_AUTOSAVE_PRIVATE) ?? false;
+    this.autosaveGroup = AppStorage.get<boolean>(KEY_AUTOSAVE_GROUP) ?? false;
+    this.autosaveChannel = AppStorage.get<boolean>(KEY_AUTOSAVE_CHANNEL) ?? false;
     this.load(true);
+    prepareAutosaveSettings().then((): void => {
+      this.autosavePrepared = true;
+    }).catch((error: TdError): void => {
+      console.warn(`DataStoragePage.prepareAutosave failed: ${error.message}`);
+      if (this.active) { this.autosaveWarning = str('ms_album_sync_failed'); }
+    });
   }
 
   onPageShow(): void {
@@ -80,6 +101,7 @@ struct DataStoragePage {
   aboutToDisappear(): void {
     this.active = false;
     this.loadSequence++;
+    this.autosaveSyncSequence++;
     this.stopSkeleton();
   }
 
@@ -139,8 +161,33 @@ struct DataStoragePage {
     });
   }
 
-  private cacheLimitSubtitle(): string {
-    return this.cacheLimit === CACHE_LIMIT_UNLIMITED ? str('ms_cache_unlimited') : formatBytes(this.cacheLimit);
+  private selectLimit(value: number): void {
+    if (this.cacheLimit === value) { return; }
+    setNumber(KEY_CACHE_LIMIT, value);
+    applyCacheLimit(value).catch((error: TdError): void => {
+      if (this.active) { this.autosaveWarning = str('ms_download_sync_failed'); }
+      console.error(`DataStoragePage.applyCacheLimit failed: ${error.message}`);
+    });
+  }
+
+  private setAutosave(scope: string, value: boolean): void {
+    const key = scope === 'channel' ? KEY_AUTOSAVE_CHANNEL
+      : (scope === 'group' ? KEY_AUTOSAVE_GROUP : KEY_AUTOSAVE_PRIVATE);
+    setBoolean(key, value);
+    if (scope === 'channel') { this.autosaveChannel = value; }
+    else if (scope === 'group') { this.autosaveGroup = value; }
+    else { this.autosavePrivate = value; }
+    if (!this.autosavePrepared) { return; }
+    const current = ++this.autosaveSyncSequence;
+    this.autosaveSyncing = true;
+    syncAutosaveSettings(scope, value).then((): void => {
+      if (this.active && current === this.autosaveSyncSequence) { this.autosaveSyncing = false; }
+    }).catch((error: TdError): void => {
+      if (!this.active || current !== this.autosaveSyncSequence) { return; }
+      this.autosaveSyncing = false;
+      this.autosaveWarning = str('ms_album_cloud_sync_failed');
+      console.error(`DataStoragePage.syncAutosave failed: ${error.message}`);
+    });
   }
 
   private sinceLabel(): string {
@@ -298,11 +345,68 @@ struct DataStoragePage {
   }
 
   @Builder
-  mediaCard() {
+  limitRow(value: number) {
+    Row({ space: 10 }) {
+      Text(value === CACHE_LIMIT_UNLIMITED ? str('ms_cache_unlimited') : formatBytes(value))
+        .fontSize(15).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
+      if (this.cacheLimit === value) {
+        SymbolGlyph($r('sys.symbol.checkmark')).fontSize(18).fontColor([COLOR_PRIMARY]);
+      }
+    }
+    .width('100%').padding({ left: 14, right: 14, top: 12, bottom: 12 })
+    .stateStyles({ normal: this.rowNormalStyle, pressed: this.rowPressedStyle })
+    .onClick((): void => this.selectLimit(value));
+  }
+
+  @Builder
+  limitCard() {
     Column() {
-      this.navRow($r('sys.symbol.arrow_down_circle'), $r('app.string.ms_cache_title'), this.cacheLimitSubtitle(), '',
-        'pages/main/CacheSettingsPage');
+      Text(str('ms_cache_limit')).fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
+        .width('100%').padding({ left: 14, right: 14, top: 12, bottom: 2 });
+      Text(str('ms_cache_limit_sub')).fontSize(11).fontColor(COLOR_TEXT_SECONDARY)
+        .width('100%').padding({ left: 14, right: 14, bottom: 6 });
+      ForEach(CACHE_LIMIT_OPTIONS, (value: number, index: number) => {
+        if (index > 0) { Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 }); }
+        this.limitRow(value);
+      }, (value: number): string => `${value}`);
     }.width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS).clip(true);
+  }
+
+  @Builder
+  toggleRow(title: string, subtitle: string, value: boolean, change: (next: boolean) => void) {
+    Row({ space: 10 }) {
+      Column({ space: 2 }) {
+        Text(title).fontSize(15).fontColor(COLOR_TEXT_PRIMARY);
+        Text(subtitle).fontSize(11).fontColor(COLOR_TEXT_SECONDARY).maxLines(2);
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+      Toggle({ type: ToggleType.Switch, isOn: value }).selectedColor(COLOR_PRIMARY)
+        .onChange((next: boolean): void => change(next));
+    }.width('100%').padding({ left: 14, right: 14, top: 10, bottom: 10 });
+  }
+
+  @Builder
+  autosaveCard() {
+    Column() {
+      this.toggleRow(str('ns_private'), str('ms_save_private_sub'), this.autosavePrivate,
+        (next: boolean): void => this.setAutosave('private', next));
+      Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
+      this.toggleRow(str('gn_group'), str('ms_save_group_sub'), this.autosaveGroup,
+        (next: boolean): void => this.setAutosave('group', next));
+      Divider().strokeWidth(0.5).color(COLOR_DIVIDER).margin({ left: 14 });
+      this.toggleRow(str('gn_channel'), str('ms_save_channel_sub'), this.autosaveChannel,
+        (next: boolean): void => this.setAutosave('channel', next));
+    }.width('100%').backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS).clip(true);
+  }
+
+  @Builder
+  autosaveWarningCard() {
+    if (this.autosaveWarning !== '') {
+      Row({ space: 8 }) {
+        SymbolGlyph($r('sys.symbol.exclamationmark_circle')).fontSize(17).fontColor(['#FF9500']);
+        Text(this.autosaveWarning).fontSize(12).fontColor(COLOR_TEXT_SECONDARY).layoutWeight(1);
+        if (this.autosaveSyncing) { LoadingProgress().width(16).height(16).color(COLOR_PRIMARY); }
+      }.width('100%').padding(11).backgroundColor('#12FF9500').borderRadius(11);
+    }
   }
 
   @Builder
@@ -371,8 +475,12 @@ struct DataStoragePage {
             this.overviewCard();
             this.statsCard();
           }
-          this.mediaCard();
           this.actionsCard();
+          this.limitCard();
+          this.autosaveWarningCard();
+          Text($r('app.string.ms_save_to_gallery')).fontSize(14).fontWeight(FontWeight.Medium).fontColor(COLOR_PRIMARY)
+            .width('100%').padding({ left: 4, top: 4 });
+          this.autosaveCard();
           Text($r('app.string.ds_note'))
             .fontSize(12).fontColor(COLOR_TEXT_SECONDARY).width('100%')
             .padding({ left: 14, right: 14, top: 1 });

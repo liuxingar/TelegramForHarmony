@@ -22,7 +22,7 @@
     "pages/main/DataStoragePage",
     "pages/main/StorageUsagePage",
     "pages/main/NetworkUsagePage",
-    "pages/main/CacheSettingsPage",
+    "pages/main/MediaSettingsPage",
     "pages/main/ProxyPage",
     "pages/main/AboutPage",
     "pages/main/ChatFoldersPage",
@@ -41,7 +41,6 @@
     "pages/main/GroupNotificationsPage",
     "pages/main/WebPushPage",
     "pages/call/CallPage",
-    "pages/main/BackgroundPlaybackPage",
     "pages/chat/ForumTopicsPage",
     "pages/story/StoryViewerPage"
   ]

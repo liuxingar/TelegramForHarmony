@@ -8,7 +8,8 @@ import {
   KEY_TEXT_SIZE, KEY_BUBBLE_RADIUS, KEY_REDUCE_ANIM, TEXT_SIZE_DEFAULT, RADIUS_DEFAULT,
   KEY_POWER_ACTIVE, KEY_POWER_AUTOPLAY_GIF, KEY_POWER_CHAT_EFFECTS,
   KEY_POWER_EFFECT_MESSAGE, KEY_POWER_EFFECT_REACTION, KEY_POWER_EMOJI, KEY_POWER_EMOJI_CHAT,
-  KEY_POWER_EMOJI_REACTIONS, KEY_POWER_STICKERS, KEY_POWER_STICKER_AUTOPLAY
+  KEY_POWER_EMOJI_REACTIONS, KEY_POWER_STICKERS, KEY_POWER_STICKER_AUTOPLAY,
+  KEY_POWER_SMOOTH_TRANSITIONS, powerAnimationDuration
 } from '../../store/AppSettings';
 import { TgsStickerView } from './TgsStickerView';
 import { WebmStickerView } from './WebmStickerView';
@@ -278,6 +279,10 @@ export struct MessageBubble {
   @State mediaVisible: boolean = true;
   @State stickerPlaybackFailed: boolean = false;
   @State linkPreviewOpening: boolean = false;
+  // Controlled context-menu presentation — mirrors ChatRow's bubble-lift preview
+  // (see ChatRow.ets bindContextMenu) so long-pressing a message bubble gets the
+  // same lift/scale animation as long-pressing a chat-list row.
+  @State private msgContextMenuShown: boolean = false;
   // 播放位竞选用的中心 y（vp）。只在 onAreaChange 回调里写、onVisibleAreaApproximateChange
   // 回调里读，不参与 build() —— 用普通字段而非 @State，避免每帧 onAreaChange 触发重建。
   private mediaCenterY: number = 0;
@@ -1273,6 +1278,46 @@ export struct MessageBubble {
   private isAlbumCellPlaySlot(index: number): boolean {
     return this.playSlotKey !== '' && !this.msg.isAnimation &&
       this.playSlotKey === slotKey(this.albumMemberIdAt(index), index);
+  }
+
+  // The play slot renders through StreamingVideoPlayer, whose XComponent is
+  // XComponentType.SURFACE (see StreamingVideoPlayer.ets) — that surface is
+  // composited by the platform outside ArkUI's render tree, so
+  // MenuPreviewMode.IMAGE's componentSnapshot cannot capture it (it would show
+  // up as a black/blank rectangle in the lifted preview). When this bubble
+  // currently owns the play slot — main content or an album cell — the
+  // long-press menu falls back to the plain, preview-less presentation instead
+  // of lying about what the frozen snapshot contains.
+  private hasLiveVideoSurface(): boolean {
+    if (this.playSlotKey === '' || this.msg.isAnimation) {
+      return false;
+    }
+    if (this.isPlaySlot(-1) && this.msg.videoFileId !== 0) {
+      return true;
+    }
+    for (let i = 0; i < this.albumMemberIds.length; i++) {
+      if (this.isAlbumCellPlaySlot(i) && this.albumVideoFileIdAt(i) !== 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Same per-corner rounding the bubble itself draws (see the .borderRadius()
+  // call in build()) — reused as the context-menu preview's crop radius so the
+  // lifted snapshot matches the bubble's own configured KEY_BUBBLE_RADIUS
+  // instead of a hardcoded value.
+  private bubbleCornerRadius(): BorderRadiuses {
+    return {
+      topLeft: this.msg.isOutgoing ? this.bubbleRadius :
+        (this.showSenderName ? this.bubbleRadius : this.runCornerRadius()),
+      topRight: this.msg.isOutgoing ?
+        (this.showSenderName ? this.bubbleRadius : this.runCornerRadius()) : this.bubbleRadius,
+      bottomLeft: this.msg.isOutgoing ? this.bubbleRadius :
+        (this.showAvatar ? this.tailCornerRadius() : this.runCornerRadius()),
+      bottomRight: this.msg.isOutgoing ?
+        (this.showAvatar ? this.tailCornerRadius() : this.runCornerRadius()) : this.bubbleRadius
+    };
   }
 
   @Builder
@@ -2565,16 +2610,7 @@ export struct MessageBubble {
           : COLOR_BUBBLE_IN))
       // Adjacent rows share a restrained 7vp corner. Only the final row gets
       // the tight tail corner; a single-row run keeps the configured top arc.
-      .borderRadius({
-        topLeft: this.msg.isOutgoing ? this.bubbleRadius :
-          (this.showSenderName ? this.bubbleRadius : this.runCornerRadius()),
-        topRight: this.msg.isOutgoing ?
-          (this.showSenderName ? this.bubbleRadius : this.runCornerRadius()) : this.bubbleRadius,
-        bottomLeft: this.msg.isOutgoing ? this.bubbleRadius :
-          (this.showAvatar ? this.tailCornerRadius() : this.runCornerRadius()),
-        bottomRight: this.msg.isOutgoing ?
-          (this.showAvatar ? this.tailCornerRadius() : this.runCornerRadius()) : this.bubbleRadius
-      })
+      .borderRadius(this.bubbleCornerRadius())
       .padding(this.isBareEmoji() ? 0 : 8)
       .shadow(this.isBareEmoji() ? { radius: 0, color: Color.Transparent, offsetX: 0, offsetY: 0 }
         : { radius: 2, color: '#14000000', offsetX: 0, offsetY: 1 })
@@ -2584,7 +2620,49 @@ export struct MessageBubble {
       })
       .animation({ duration: this.effectDuration(110), curve: Curve.EaseOut })
       .onAreaChange((_old: Area, area: Area) => { this.bubbleW = area.width as number; })
-      .bindContextMenu(this.msgContextMenu(), ResponseType.LongPress);
+      // Controlled mode (mirrors ChatRow.ets bindContextMenu): a manual
+      // LongPressGesture in parallelGesture keeps the chat List's pan
+      // recognizer alive while held (movement still cancels the long press),
+      // and drives the same "lift the bubble" preview animation as a
+      // chat-list row long-press.
+      .parallelGesture(
+        LongPressGesture({ fingers: 1, repeat: false, duration: 500 })
+          .onAction((): void => { this.msgContextMenuShown = true; })
+      )
+      .bindContextMenu(this.msgContextMenuShown, this.msgContextMenu(), {
+        // A play-slot bubble hosts a XComponentType.SURFACE video surface that
+        // componentSnapshot cannot capture (see hasLiveVideoSurface()) — fall
+        // back to no preview there instead of lifting a black rectangle.
+        preview: this.hasLiveVideoSurface() ? MenuPreviewMode.NONE : MenuPreviewMode.IMAGE,
+        previewBorderRadius: this.bubbleCornerRadius(),
+        previewAnimationOptions: {
+          scale: [0.98, 1.035],
+          transition: TransitionEffect.OPACITY
+            .combine(TransitionEffect.scale({ x: 0.98, y: 0.98 }))
+            .animation({
+              duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+              curve: Curve.FastOutSlowIn
+            })
+        },
+        borderRadius: 16,
+        backgroundColor: Color.Transparent,
+        backgroundBlurStyle: BlurStyle.COMPONENT_ULTRA_THICK,
+        transition: TransitionEffect.OPACITY
+          .combine(TransitionEffect.scale({ x: 0.96, y: 0.96 }))
+          .animation({
+            duration: powerAnimationDuration(KEY_POWER_SMOOTH_TRANSITIONS, 180),
+            curve: Curve.FastOutSlowIn
+          }),
+        mask: {
+          color: '#52000000',
+          backgroundBlurStyle: BlurStyle.BACKGROUND_THIN
+        },
+        modalMode: ModalMode.TARGET_WINDOW,
+        hapticFeedbackMode: HapticFeedbackMode.AUTO,
+        onDisappear: (): void => {
+          this.msgContextMenuShown = false;
+        }
+      });
       if (this.msg.isOutgoing && this.hasBubbleTail()) {
         Polygon({ width: 8, height: 12 })
           .points([[0, 0], [8, 12], [0, 12]])

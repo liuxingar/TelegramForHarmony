@@ -10895,6 +10895,82 @@
     {
       "name": "cb_blur_amount",
       "value": "블러 정도"
+    },
+    {
+      "name": "meow_mode_custom",
+      "value": "커스텀 WebPush"
+    },
+    {
+      "name": "meow_mode_meow",
+      "value": "MeoW"
+    },
+    {
+      "name": "meow_nickname_label",
+      "value": "MeoW 사용자 이름"
+    },
+    {
+      "name": "meow_nickname_hint",
+      "value": "MeoW 사용자 이름을 입력하세요"
+    },
+    {
+      "name": "meow_register",
+      "value": "등록"
+    },
+    {
+      "name": "meow_privacy_note",
+      "value": "이 모드에서는 중계 서버가 복호화 키를 보유하며 각 메시지의 발신자와 요약을 볼 수 있습니다. 신뢰할 수 있는 서버일 때만 사용하세요."
+    },
+    {
+      "name": "meow_nickname_required",
+      "value": "MeoW 사용자 이름을 입력하세요"
+    },
+    {
+      "name": "meow_bad_response",
+      "value": "중계 서버가 불완전한 데이터를 반환했습니다. 잠시 후 다시 시도해 주세요."
+    },
+    {
+      "name": "meow_network_error",
+      "value": "네트워크 요청에 실패했습니다. 연결을 확인한 후 다시 시도해 주세요."
+    },
+    {
+      "name": "meow_http_error",
+      "value": "중계 서버가 오류를 반환했습니다: %1$s"
+    },
+    {
+      "name": "meow_relay_unconfigured",
+      "value": "이 빌드에는 푸시 중계 주소가 설정되어 있지 않습니다"
+    },
+    {
+      "name": "meow_deregister_relay_failed",
+      "value": "중계 서버에서 구독 취소에 실패했습니다(로컬 전송은 이미 중지됨): %1$s"
+    },
+    {
+      "name": "meow_request_code",
+      "value": "인증 코드 받기"
+    },
+    {
+      "name": "meow_code_label",
+      "value": "인증 코드"
+    },
+    {
+      "name": "meow_code_hint",
+      "value": "받은 코드를 입력하세요"
+    },
+    {
+      "name": "meow_code_sent",
+      "value": "인증 코드가 회원님의 MeoW로 전송되었습니다. 확인 후 아래에 입력하세요."
+    },
+    {
+      "name": "meow_confirm",
+      "value": "등록 완료"
+    },
+    {
+      "name": "meow_code_required",
+      "value": "인증 코드를 입력하세요"
+    },
+    {
+      "name": "meow_code_invalid",
+      "value": "코드가 잘못되었거나 만료되었습니다. 다시 요청해 주세요."
     }
   ]
 }

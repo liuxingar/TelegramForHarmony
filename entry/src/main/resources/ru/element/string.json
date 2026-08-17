@@ -10895,6 +10895,82 @@
     {
       "name": "cb_blur_amount",
       "value": "Степень размытия"
+    },
+    {
+      "name": "meow_mode_custom",
+      "value": "Свой WebPush"
+    },
+    {
+      "name": "meow_mode_meow",
+      "value": "MeoW"
+    },
+    {
+      "name": "meow_nickname_label",
+      "value": "Имя пользователя MeoW"
+    },
+    {
+      "name": "meow_nickname_hint",
+      "value": "Введите ваше имя пользователя MeoW"
+    },
+    {
+      "name": "meow_register",
+      "value": "Зарегистрировать"
+    },
+    {
+      "name": "meow_privacy_note",
+      "value": "В этом режиме сервер-ретранслятор хранит ключ расшифровки и видит отправителя и краткое содержание каждого сообщения. Используйте только если доверяете этому серверу."
+    },
+    {
+      "name": "meow_nickname_required",
+      "value": "Введите имя пользователя MeoW"
+    },
+    {
+      "name": "meow_bad_response",
+      "value": "Сервер-ретранслятор вернул неполные данные. Повторите попытку позже."
+    },
+    {
+      "name": "meow_network_error",
+      "value": "Сетевой запрос не выполнен. Проверьте соединение и повторите попытку."
+    },
+    {
+      "name": "meow_http_error",
+      "value": "Сервер-ретранслятор вернул ошибку: %1$s"
+    },
+    {
+      "name": "meow_relay_unconfigured",
+      "value": "В этой сборке не задан адрес ретранслятора push-уведомлений"
+    },
+    {
+      "name": "meow_deregister_relay_failed",
+      "value": "Серверу-ретранслятору не удалось отменить подписку (локальная доставка уже остановлена): %1$s"
+    },
+    {
+      "name": "meow_request_code",
+      "value": "Получить код подтверждения"
+    },
+    {
+      "name": "meow_code_label",
+      "value": "Код подтверждения"
+    },
+    {
+      "name": "meow_code_hint",
+      "value": "Введите полученный код"
+    },
+    {
+      "name": "meow_code_sent",
+      "value": "Код подтверждения отправлен в ваш MeoW. Проверьте и введите его ниже."
+    },
+    {
+      "name": "meow_confirm",
+      "value": "Завершить регистрацию"
+    },
+    {
+      "name": "meow_code_required",
+      "value": "Введите код подтверждения"
+    },
+    {
+      "name": "meow_code_invalid",
+      "value": "Код неверен или истёк. Запросите новый."
     }
   ]
 }

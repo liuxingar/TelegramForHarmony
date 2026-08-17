@@ -10895,6 +10895,82 @@
     {
       "name": "cb_blur_amount",
       "value": "Tahap kabur"
+    },
+    {
+      "name": "meow_mode_custom",
+      "value": "WebPush Tersuai"
+    },
+    {
+      "name": "meow_mode_meow",
+      "value": "MeoW"
+    },
+    {
+      "name": "meow_nickname_label",
+      "value": "Nama pengguna MeoW"
+    },
+    {
+      "name": "meow_nickname_hint",
+      "value": "Masukkan nama pengguna MeoW anda"
+    },
+    {
+      "name": "meow_register",
+      "value": "Daftar"
+    },
+    {
+      "name": "meow_privacy_note",
+      "value": "Dalam mod ini, pelayan geganti menyimpan kunci nyahsulit dan boleh melihat penghantar serta ringkasan setiap mesej. Gunakan hanya jika anda mempercayai pelayan tersebut."
+    },
+    {
+      "name": "meow_nickname_required",
+      "value": "Masukkan nama pengguna MeoW"
+    },
+    {
+      "name": "meow_bad_response",
+      "value": "Pelayan geganti mengembalikan data yang tidak lengkap. Sila cuba lagi kemudian."
+    },
+    {
+      "name": "meow_network_error",
+      "value": "Permintaan rangkaian gagal. Semak sambungan anda dan cuba lagi."
+    },
+    {
+      "name": "meow_http_error",
+      "value": "Pelayan geganti mengembalikan ralat: %1$s"
+    },
+    {
+      "name": "meow_relay_unconfigured",
+      "value": "Binaan ini tidak mempunyai alamat geganti tolakan yang dikonfigurasi"
+    },
+    {
+      "name": "meow_deregister_relay_failed",
+      "value": "Pelayan geganti gagal membatalkan langganan (penghantaran tempatan telah dihentikan): %1$s"
+    },
+    {
+      "name": "meow_request_code",
+      "value": "Dapatkan kod pengesahan"
+    },
+    {
+      "name": "meow_code_label",
+      "value": "Kod pengesahan"
+    },
+    {
+      "name": "meow_code_hint",
+      "value": "Masukkan kod yang anda terima"
+    },
+    {
+      "name": "meow_code_sent",
+      "value": "Kod pengesahan telah dihantar ke MeoW anda. Semak dan masukkan kod di bawah."
+    },
+    {
+      "name": "meow_confirm",
+      "value": "Selesaikan pendaftaran"
+    },
+    {
+      "name": "meow_code_required",
+      "value": "Masukkan kod pengesahan"
+    },
+    {
+      "name": "meow_code_invalid",
+      "value": "Kod salah atau telah luput tempoh. Minta kod baharu."
     }
   ]
 }

@@ -10895,6 +10895,82 @@
     {
       "name": "cb_blur_amount",
       "value": "模糊度"
+    },
+    {
+      "name": "meow_mode_custom",
+      "value": "自定义 WebPush"
+    },
+    {
+      "name": "meow_mode_meow",
+      "value": "MeoW"
+    },
+    {
+      "name": "meow_nickname_label",
+      "value": "MeoW 用户名"
+    },
+    {
+      "name": "meow_nickname_hint",
+      "value": "输入你的 MeoW 用户名"
+    },
+    {
+      "name": "meow_register",
+      "value": "注册"
+    },
+    {
+      "name": "meow_privacy_note",
+      "value": "此模式下，中转服务器会持有解密私钥，能看到消息发送者与内容摘要。请确认信任该服务器再使用。"
+    },
+    {
+      "name": "meow_nickname_required",
+      "value": "请输入 MeoW 用户名"
+    },
+    {
+      "name": "meow_bad_response",
+      "value": "中转服务器返回的数据不完整，请稍后重试"
+    },
+    {
+      "name": "meow_network_error",
+      "value": "网络请求失败，请检查网络后重试"
+    },
+    {
+      "name": "meow_http_error",
+      "value": "中转服务器返回错误：%1$s"
+    },
+    {
+      "name": "meow_relay_unconfigured",
+      "value": "当前安装包未配置推送中转地址"
+    },
+    {
+      "name": "meow_deregister_relay_failed",
+      "value": "中转服务器取消订阅失败（本地已停止投递）：%1$s"
+    },
+    {
+      "name": "meow_request_code",
+      "value": "获取验证码"
+    },
+    {
+      "name": "meow_code_label",
+      "value": "验证码"
+    },
+    {
+      "name": "meow_code_hint",
+      "value": "输入收到的验证码"
+    },
+    {
+      "name": "meow_code_sent",
+      "value": "验证码已发到你的 MeoW，请查收后填入"
+    },
+    {
+      "name": "meow_confirm",
+      "value": "完成注册"
+    },
+    {
+      "name": "meow_code_required",
+      "value": "请输入验证码"
+    },
+    {
+      "name": "meow_code_invalid",
+      "value": "验证码错误或已过期，请重新获取"
     }
   ]
 }

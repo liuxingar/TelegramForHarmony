@@ -10895,6 +10895,82 @@
     {
       "name": "cb_blur_amount",
       "value": "模糊度"
+    },
+    {
+      "name": "meow_mode_custom",
+      "value": "自訂 WebPush"
+    },
+    {
+      "name": "meow_mode_meow",
+      "value": "MeoW"
+    },
+    {
+      "name": "meow_nickname_label",
+      "value": "MeoW 使用者名稱"
+    },
+    {
+      "name": "meow_nickname_hint",
+      "value": "輸入你的 MeoW 使用者名稱"
+    },
+    {
+      "name": "meow_register",
+      "value": "註冊"
+    },
+    {
+      "name": "meow_privacy_note",
+      "value": "此模式下，中轉伺服器會持有解密私鑰，能看到訊息傳送者與內容摘要。請先確認信任該伺服器再使用。"
+    },
+    {
+      "name": "meow_nickname_required",
+      "value": "請輸入 MeoW 使用者名稱"
+    },
+    {
+      "name": "meow_bad_response",
+      "value": "中轉伺服器回傳的資料不完整，請稍後再試"
+    },
+    {
+      "name": "meow_network_error",
+      "value": "網路請求失敗，請檢查網路後重試"
+    },
+    {
+      "name": "meow_http_error",
+      "value": "中轉伺服器回傳錯誤：%1$s"
+    },
+    {
+      "name": "meow_relay_unconfigured",
+      "value": "目前安裝包未設定推播中轉位址"
+    },
+    {
+      "name": "meow_deregister_relay_failed",
+      "value": "中轉伺服器取消訂閱失敗（本機已停止投遞）：%1$s"
+    },
+    {
+      "name": "meow_request_code",
+      "value": "取得驗證碼"
+    },
+    {
+      "name": "meow_code_label",
+      "value": "驗證碼"
+    },
+    {
+      "name": "meow_code_hint",
+      "value": "輸入收到的驗證碼"
+    },
+    {
+      "name": "meow_code_sent",
+      "value": "驗證碼已傳送到你的 MeoW，請查收後填入"
+    },
+    {
+      "name": "meow_confirm",
+      "value": "完成註冊"
+    },
+    {
+      "name": "meow_code_required",
+      "value": "請輸入驗證碼"
+    },
+    {
+      "name": "meow_code_invalid",
+      "value": "驗證碼錯誤或已過期，請重新取得"
     }
   ]
 }

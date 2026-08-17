@@ -5,13 +5,18 @@ import {
   COLOR_PAGE_BG, COLOR_PRIMARY, COLOR_SURFACE, COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY
 } from '../../util/theme';
 import {
-  KEY_WEBPUSH_ACCEPTED, KEY_WEBPUSH_AUTH, KEY_WEBPUSH_ENABLED, KEY_WEBPUSH_ENDPOINT,
-  KEY_WEBPUSH_P256DH, setBoolean, setString
+  KEY_MEOW_NICKNAME, KEY_MEOW_SECRET, KEY_WEBPUSH_ACCEPTED, KEY_WEBPUSH_AUTH, KEY_WEBPUSH_ENABLED,
+  KEY_WEBPUSH_ENDPOINT, KEY_WEBPUSH_MODE, KEY_WEBPUSH_P256DH, WEBPUSH_MODE_CUSTOM, WEBPUSH_MODE_MEOW,
+  setBoolean, setString
 } from '../../store/AppSettings';
 import {
   ParsedSubscription, SUBSCRIPTION_JSON_HINT, WebPushConfig, WebPushValidation,
   deregisterWebPush, parseSubscriptionJson, registerWebPush, validateWebPushConfig
 } from '../../services/WebPushRegistration';
+import {
+  MeowDeregisterOutcome, MeowRegisterOutcome, confirmMeowRegistration, deregisterMeowPush,
+  getMeowSubKey, meowRelayEnabled, startMeowRegistration
+} from '../../services/MeowPushRegistration';
 import { HuaweiPushResult, registerHuaweiPush } from '../../services/HuaweiPushRegistration';
 import { str } from '../../util/strings';
 import { LANGUAGE_EPOCH } from '../../util/appLanguage';
@@ -33,6 +38,9 @@ struct WebPushPage {
   @StorageProp(KEY_WEBPUSH_ENDPOINT) storedEndpoint: string = '';
   @StorageProp(KEY_WEBPUSH_P256DH) storedP256dh: string = '';
   @StorageProp(KEY_WEBPUSH_AUTH) storedAuth: string = '';
+  @StorageProp(KEY_WEBPUSH_MODE) storedMode: string = '';
+  @StorageProp(KEY_MEOW_NICKNAME) storedMeowNickname: string = '';
+  @StorageProp(KEY_MEOW_SECRET) storedMeowSecret: string = '';
   // 草稿态：编辑中的值不立刻落盘，点「保存并注册」才写入并生效。
   @State endpoint: string = '';
   @State p256dh: string = '';
@@ -43,6 +51,19 @@ struct WebPushPage {
   @State consentShown: boolean = false;
   @State jsonInput: string = '';
   @State jsonExpanded: boolean = false;
+  // 顶部二选一：'custom'（手工三字段）或 'meow'（只填用户名，由中转服务器代填）。
+  // MeoW 入口本身只在这台构建配置了中转地址（meowRelayEnabled()）时才显示，
+  // clone 仓库拿到空地址的人只会看到手工模式，界面上不出现任何相关文案。
+  @State mode: string = WEBPUSH_MODE_CUSTOM;
+  @State meowNickname: string = '';
+  // 两步注册：先拿 pendingId（验证码已发出），再用用户填回来的验证码确认。
+  // pendingId 非空即代表"验证码已发出，等待用户填码"这一步骤状态，5 分钟
+  // 过期不做本地倒计时 —— 过期由 confirm 请求的 400/403 直接反馈。
+  @State meowPendingId: string = '';
+  @State meowCode: string = '';
+  @State meowBusy: boolean = false;
+  @State meowStatusText: string = '';
+  @State meowStatusOk: boolean = false;
   // 华为 Push Kit 探针：验证 Telegram 服务器能否直接投递到 Push Kit 通道
   // （而不经过自建 Web Push 中转）。三行分别对应 token / registerDevice 结果 /
   // 失败时的错误码与文案，见 HuaweiPushRegistration.ets 顶部注释。
@@ -59,6 +80,22 @@ struct WebPushPage {
       this.statusOk = true;
       this.statusText = str('wp_enabled');
     }
+    // 停留在用户上次用的模式；MeoW 未配置中转地址时永远回落到手工模式。
+    this.mode = (meowRelayEnabled() && this.storedMode === WEBPUSH_MODE_MEOW)
+      ? WEBPUSH_MODE_MEOW : WEBPUSH_MODE_CUSTOM;
+    this.meowNickname = this.storedMeowNickname;
+    if (this.pushEnabled && this.mode === WEBPUSH_MODE_MEOW && this.storedMeowNickname !== '') {
+      this.meowStatusOk = true;
+      this.meowStatusText = str('wp_enabled');
+    }
+  }
+
+  private setMode(next: string): void {
+    if (this.mode === next) {
+      return;
+    }
+    this.mode = next;
+    setString(KEY_WEBPUSH_MODE, next);
   }
 
   private currentConfig(): WebPushConfig {
@@ -233,6 +270,106 @@ struct WebPushPage {
     });
   }
 
+  // MeoW 模式：两步注册，带验证码。MeoW 是纯昵称寻址、无鉴权的，不验证的话
+  // 谁都能拿别人的昵称注册、把自己的消息转推过去；验证码证明用户确实拥有
+  // 这个昵称。第一步只拿 pendingId，第二步验证码确认后才拿到三个 Web Push
+  // 字段，复用 registerWebPush 那条已验证过的路径。
+  //
+  // 错误按来源（网络 / HTTP 状态 / 响应缺字段 / 验证码错误或过期）分别落到
+  // 不同的文案上，不做笼统的"失败"提示。
+  private meowRequestCode(): void {
+    if (this.meowBusy) {
+      return;
+    }
+    this.meowBusy = true;
+    this.meowStatusText = str('wp_registering');
+    startMeowRegistration(this.meowNickname).then((pendingId: string): void => {
+      this.meowPendingId = pendingId;
+      this.meowCode = '';
+      this.meowStatusOk = true;
+      this.meowStatusText = str('meow_code_sent');
+      this.meowBusy = false;
+    }).catch((e: Error): void => {
+      this.meowStatusOk = false;
+      this.meowStatusText = str('wp_register_failed', e.message);
+      this.meowBusy = false;
+    });
+  }
+
+  private meowConfirmCode(): void {
+    if (this.meowBusy) {
+      return;
+    }
+    this.meowBusy = true;
+    this.meowStatusText = str('wp_registering');
+    confirmMeowRegistration(getTdClient(), this.meowPendingId, this.meowCode, this.meowNickname)
+      .then((outcome: MeowRegisterOutcome): void => {
+        setBoolean(KEY_WEBPUSH_ENABLED, true);
+        this.meowPendingId = '';
+        this.meowCode = '';
+        this.meowStatusOk = true;
+        this.meowStatusText = outcome.receiverId !== ''
+          ? str('wp_registered_with_id', outcome.receiverId)
+          : str('wp_registered_no_id');
+        this.meowBusy = false;
+      }).catch((e: Error): void => {
+        // 确认失败不打开开关，避免用户误以为通知已生效。验证码错误/过期时
+        // pendingId 保留，用户可以直接重填验证码重试而不用回退到第一步。
+        this.meowStatusOk = false;
+        this.meowStatusText = str('wp_register_failed', e.message);
+        this.meowBusy = false;
+      });
+  }
+
+  private meowCancelCode(): void {
+    this.meowPendingId = '';
+    this.meowCode = '';
+    this.meowStatusText = '';
+  }
+
+  private meowDeregister(): void {
+    if (this.meowBusy) {
+      return;
+    }
+    this.meowBusy = true;
+    const subKey = getMeowSubKey();
+    const secret = this.storedMeowSecret;
+    setBoolean(KEY_WEBPUSH_ENABLED, false);
+    deregisterMeowPush(getTdClient(), subKey, secret).then((outcome: MeowDeregisterOutcome): void => {
+      // 中转端取消订阅失败不影响本地已经停止投递这一事实，但要让用户知道
+      // 服务端那份订阅记录可能还留着。
+      this.meowPendingId = '';
+      this.meowCode = '';
+      this.meowStatusOk = outcome.relayWarning === '';
+      this.meowStatusText = outcome.relayWarning !== '' ? outcome.relayWarning : str('wp_deregistered');
+      this.meowBusy = false;
+    }).catch((e: Error): void => {
+      this.meowStatusOk = false;
+      this.meowStatusText = str('wp_register_failed', e.message);
+      this.meowBusy = false;
+    });
+  }
+
+  @Builder
+  modeTab(target: string, label: ResourceStr) {
+    Text(label).fontSize(14)
+      .fontWeight(this.mode === target ? FontWeight.Medium : FontWeight.Regular)
+      .fontColor(this.mode === target ? Color.White : COLOR_TEXT_SECONDARY)
+      .backgroundColor(this.mode === target ? COLOR_PRIMARY : Color.Transparent)
+      .layoutWeight(1).height(36).textAlign(TextAlign.Center).borderRadius(9)
+      .onClick((): void => this.setMode(target));
+  }
+
+  @Builder
+  modeSwitcher() {
+    Row({ space: 4 }) {
+      this.modeTab(WEBPUSH_MODE_CUSTOM, $r('app.string.meow_mode_custom'));
+      this.modeTab(WEBPUSH_MODE_MEOW, $r('app.string.meow_mode_meow'));
+    }
+    .width('100%').padding(4)
+    .backgroundColor(COLOR_PAGE_BG).borderRadius(12);
+  }
+
   @Builder
   consentSheet() {
     Column({ space: 12 }) {
@@ -274,6 +411,75 @@ struct WebPushPage {
 
       Scroll() {
         Column({ space: 12 }) {
+          // MeoW 入口只在这台构建配置了中转地址时出现；未配置的构建（比如 clone
+          // 仓库、用模板生成 ApiCredentials.ets 的人）永远只看到手工模式，
+          // 不出现任何切换控件。
+          if (meowRelayEnabled()) {
+            this.modeSwitcher();
+          }
+
+          if (this.mode === WEBPUSH_MODE_MEOW) {
+            Column({ space: 10 }) {
+              Text($r('app.string.meow_nickname_label')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
+                .width('100%').padding({ left: 16, right: 16, top: 14 });
+              Row() {
+                TextInput({ text: $$this.meowNickname, placeholder: $r('app.string.meow_nickname_hint') })
+                  .fontSize(15).layoutWeight(1).enabled(!this.meowBusy && this.meowPendingId === '')
+                  .backgroundColor(COLOR_PAGE_BG).borderRadius(10).padding(10);
+              }.width('100%').padding({ left: 16, right: 16 });
+              Text($r('app.string.meow_privacy_note'))
+                .fontSize(11).fontColor(COLOR_TEXT_SECONDARY).lineHeight(16)
+                .width('100%').padding({ left: 16, right: 16, top: 4 });
+
+              // 第二步：拿到 pendingId 后才出现验证码输入框，填完点「完成注册」。
+              if (this.meowPendingId !== '') {
+                Text($r('app.string.meow_code_label')).fontSize(12).fontColor(COLOR_TEXT_SECONDARY)
+                  .width('100%').padding({ left: 16, right: 16, top: 4 });
+                Row() {
+                  TextInput({ text: $$this.meowCode, placeholder: $r('app.string.meow_code_hint') })
+                    .fontSize(15).layoutWeight(1).enabled(!this.meowBusy).type(InputType.Number)
+                    .backgroundColor(COLOR_PAGE_BG).borderRadius(10).padding(10);
+                }.width('100%').padding({ left: 16, right: 16 });
+              }
+
+              Column({ space: 8 }) {
+                if (this.meowPendingId === '') {
+                  Button(this.meowBusy ? $r('app.string.processing') : $r('app.string.meow_request_code'))
+                    .fontSize(15).width('100%').height(44)
+                    .backgroundColor(COLOR_PRIMARY).fontColor(Color.White)
+                    .enabled(!this.meowBusy)
+                    .onClick((): void => this.meowRequestCode());
+                } else {
+                  Button(this.meowBusy ? $r('app.string.processing') : $r('app.string.meow_confirm'))
+                    .fontSize(15).width('100%').height(44)
+                    .backgroundColor(COLOR_PRIMARY).fontColor(Color.White)
+                    .enabled(!this.meowBusy)
+                    .onClick((): void => this.meowConfirmCode());
+                  Button($r('app.string.cancel'))
+                    .fontSize(15).width('100%').height(44)
+                    .backgroundColor(COLOR_PAGE_BG).fontColor(COLOR_TEXT_PRIMARY)
+                    .enabled(!this.meowBusy)
+                    .onClick((): void => this.meowCancelCode());
+                }
+                Button($r('app.string.wp_deregister'))
+                  .fontSize(15).width('100%').height(44)
+                  .backgroundColor(COLOR_PAGE_BG).fontColor('#FF3B30')
+                  .enabled(!this.meowBusy)
+                  .onClick((): void => this.meowDeregister());
+                if (this.meowStatusText !== '') {
+                  Text(this.meowStatusText)
+                    .fontSize(12).lineHeight(17)
+                    .fontColor(this.meowStatusOk ? COLOR_PRIMARY : '#FF3B30')
+                    .width('100%');
+                }
+              }
+              .width('100%').padding({ left: 16, right: 16, top: 4 });
+            }
+            .width('100%').padding({ bottom: 16 })
+            .backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
+          }
+
+          if (this.mode === WEBPUSH_MODE_CUSTOM) {
           Column() {
             Row() {
               Text($r('app.string.wp_enable')).fontSize(15).fontColor(COLOR_TEXT_PRIMARY).layoutWeight(1);
@@ -356,6 +562,7 @@ struct WebPushPage {
           }
           .width('100%').padding(14)
           .backgroundColor(COLOR_SURFACE).borderRadius(CARD_RADIUS);
+          }
 
           // 探针区块：与上面的自建 Web Push 并存，验证华为 Push Kit 通道是否
           // 可被 Telegram 服务器直接使用。验证通过前不接入 PushExtensionAbility。

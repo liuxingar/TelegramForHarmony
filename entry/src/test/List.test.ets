@@ -26,6 +26,7 @@ import storyStoreTest from './StoryStore.test';
 import linkNavTest from './LinkNav.test';
 import deepLinkTest from './DeepLink.test';
 import webPushRegistrationTest from './WebPushRegistration.test';
+import meowPushRegistrationTest from './MeowPushRegistration.test';
 import streamSegmentMathTest from './StreamSegmentMath.test';
 import groupCallApiTest from './GroupCallApi.test';
 import liveStreamStoreTest from './LiveStreamStore.test';
@@ -95,6 +96,7 @@ export default function testsuite() {
   linkNavTest();
   deepLinkTest();
   webPushRegistrationTest();
+  meowPushRegistrationTest();
   streamSegmentMathTest();
   groupCallApiTest();
   liveStreamStoreTest();

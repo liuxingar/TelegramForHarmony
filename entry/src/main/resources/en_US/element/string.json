@@ -10895,6 +10895,82 @@
     {
       "name": "cb_blur_amount",
       "value": "Blur amount"
+    },
+    {
+      "name": "meow_mode_custom",
+      "value": "Custom WebPush"
+    },
+    {
+      "name": "meow_mode_meow",
+      "value": "MeoW"
+    },
+    {
+      "name": "meow_nickname_label",
+      "value": "MeoW username"
+    },
+    {
+      "name": "meow_nickname_hint",
+      "value": "Enter your MeoW username"
+    },
+    {
+      "name": "meow_register",
+      "value": "Register"
+    },
+    {
+      "name": "meow_privacy_note",
+      "value": "In this mode the relay server holds the decryption key and can see the sender and a summary of each message. Only use it if you trust that server."
+    },
+    {
+      "name": "meow_nickname_required",
+      "value": "Enter a MeoW username"
+    },
+    {
+      "name": "meow_bad_response",
+      "value": "The relay server returned incomplete data. Please try again later."
+    },
+    {
+      "name": "meow_network_error",
+      "value": "Network request failed. Check your connection and try again."
+    },
+    {
+      "name": "meow_http_error",
+      "value": "Relay server returned an error: %1$s"
+    },
+    {
+      "name": "meow_relay_unconfigured",
+      "value": "This build has no push relay address configured"
+    },
+    {
+      "name": "meow_deregister_relay_failed",
+      "value": "Relay server failed to cancel the subscription (local delivery already stopped): %1$s"
+    },
+    {
+      "name": "meow_request_code",
+      "value": "Send verification code"
+    },
+    {
+      "name": "meow_code_label",
+      "value": "Verification code"
+    },
+    {
+      "name": "meow_code_hint",
+      "value": "Enter the code you received"
+    },
+    {
+      "name": "meow_code_sent",
+      "value": "A verification code was sent to your MeoW. Check it and enter the code below."
+    },
+    {
+      "name": "meow_confirm",
+      "value": "Finish registration"
+    },
+    {
+      "name": "meow_code_required",
+      "value": "Enter the verification code"
+    },
+    {
+      "name": "meow_code_invalid",
+      "value": "The code is wrong or has expired. Request a new one."
     }
   ]
 }

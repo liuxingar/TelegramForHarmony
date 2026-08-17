@@ -125,6 +125,18 @@ export const KEY_WEBPUSH_ACCEPTED: string = 'webPushAccepted';
 export const KEY_WEBPUSH_ENDPOINT: string = 'webPushEndpoint';
 export const KEY_WEBPUSH_P256DH: string = 'webPushP256dh';
 export const KEY_WEBPUSH_AUTH: string = 'webPushAuth';
+// 页面顶部模式记忆：'custom'（手工三字段）或 'meow'（用户名代填）。
+export const KEY_WEBPUSH_MODE: string = 'webPushMode';
+export const WEBPUSH_MODE_CUSTOM: string = 'custom';
+export const WEBPUSH_MODE_MEOW: string = 'meow';
+// MeoW 模式：中转服务器不认识 Telegram userId —— 主键是客户端自己生成的随机
+// subKey（见 MeowPushRegistration.getOrCreateMeowSubKey，用
+// CryptoArchitectureKit 的安全随机生成，首次用到时才生成并落盘）。secret 在
+// 验证码确认成功那一步返回一次，之后改昵称/注销都要带上它才能生效，不带就
+// 只能读。昵称一并存下来，方便回填输入框。
+export const KEY_MEOW_SUBKEY: string = 'meowSubKey';
+export const KEY_MEOW_SECRET: string = 'meowSecret';
+export const KEY_MEOW_NICKNAME: string = 'meowNickname';
 
 // 翻译。目标语言 '' 表示跟随系统语言；整聊天翻译是总开关，关闭时会话里
 // 不出现整聊天翻译入口（单条翻译不受它控制）。
@@ -139,6 +151,10 @@ const DATA_STRING_KEYS: string[] = [
   KEY_WEBPUSH_ENDPOINT,
   KEY_WEBPUSH_P256DH,
   KEY_WEBPUSH_AUTH,
+  KEY_WEBPUSH_MODE,
+  KEY_MEOW_SUBKEY,
+  KEY_MEOW_SECRET,
+  KEY_MEOW_NICKNAME,
   KEY_TRANSLATE_TARGET,
   KEY_TRANSLATE_OPT_OUT
 ];

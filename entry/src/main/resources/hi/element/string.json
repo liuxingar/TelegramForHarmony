@@ -10895,6 +10895,82 @@
     {
       "name": "cb_blur_amount",
       "value": "धुंधलापन की मात्रा"
+    },
+    {
+      "name": "meow_mode_custom",
+      "value": "कस्टम WebPush"
+    },
+    {
+      "name": "meow_mode_meow",
+      "value": "MeoW"
+    },
+    {
+      "name": "meow_nickname_label",
+      "value": "MeoW उपयोगकर्ता नाम"
+    },
+    {
+      "name": "meow_nickname_hint",
+      "value": "अपना MeoW उपयोगकर्ता नाम दर्ज करें"
+    },
+    {
+      "name": "meow_register",
+      "value": "रजिस्टर करें"
+    },
+    {
+      "name": "meow_privacy_note",
+      "value": "इस मोड में, रिले सर्वर के पास डिक्रिप्शन कुंजी होती है और वह हर संदेश का प्रेषक और सारांश देख सकता है। केवल तभी उपयोग करें जब आपको इस सर्वर पर भरोसा हो।"
+    },
+    {
+      "name": "meow_nickname_required",
+      "value": "कृपया MeoW उपयोगकर्ता नाम दर्ज करें"
+    },
+    {
+      "name": "meow_bad_response",
+      "value": "रिले सर्वर ने अधूरा डेटा लौटाया। कृपया बाद में पुनः प्रयास करें।"
+    },
+    {
+      "name": "meow_network_error",
+      "value": "नेटवर्क अनुरोध विफल रहा। अपना कनेक्शन जांचें और पुनः प्रयास करें।"
+    },
+    {
+      "name": "meow_http_error",
+      "value": "रिले सर्वर ने त्रुटि लौटाई: %1$s"
+    },
+    {
+      "name": "meow_relay_unconfigured",
+      "value": "इस बिल्ड में कोई पुश रिले पता कॉन्फ़िगर नहीं है"
+    },
+    {
+      "name": "meow_deregister_relay_failed",
+      "value": "रिले सर्वर सदस्यता रद्द करने में विफल रहा (स्थानीय डिलीवरी पहले ही रोक दी गई है): %1$s"
+    },
+    {
+      "name": "meow_request_code",
+      "value": "सत्यापन कोड प्राप्त करें"
+    },
+    {
+      "name": "meow_code_label",
+      "value": "सत्यापन कोड"
+    },
+    {
+      "name": "meow_code_hint",
+      "value": "प्राप्त कोड दर्ज करें"
+    },
+    {
+      "name": "meow_code_sent",
+      "value": "आपके MeoW पर एक सत्यापन कोड भेजा गया है। इसे देखकर नीचे दर्ज करें।"
+    },
+    {
+      "name": "meow_confirm",
+      "value": "पंजीकरण पूरा करें"
+    },
+    {
+      "name": "meow_code_required",
+      "value": "कृपया सत्यापन कोड दर्ज करें"
+    },
+    {
+      "name": "meow_code_invalid",
+      "value": "कोड गलत है या समाप्त हो गया है। नया कोड प्राप्त करें।"
     }
   ]
 }

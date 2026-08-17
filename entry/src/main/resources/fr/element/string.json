@@ -10895,6 +10895,82 @@
     {
       "name": "cb_blur_amount",
       "value": "Intensité du flou"
+    },
+    {
+      "name": "meow_mode_custom",
+      "value": "WebPush personnalisé"
+    },
+    {
+      "name": "meow_mode_meow",
+      "value": "MeoW"
+    },
+    {
+      "name": "meow_nickname_label",
+      "value": "Nom d'utilisateur MeoW"
+    },
+    {
+      "name": "meow_nickname_hint",
+      "value": "Entrez votre nom d'utilisateur MeoW"
+    },
+    {
+      "name": "meow_register",
+      "value": "S'inscrire"
+    },
+    {
+      "name": "meow_privacy_note",
+      "value": "Dans ce mode, le serveur relais détient la clé de déchiffrement et peut voir l'expéditeur et un résumé de chaque message. N'utilisez ce mode que si vous faites confiance à ce serveur."
+    },
+    {
+      "name": "meow_nickname_required",
+      "value": "Entrez un nom d'utilisateur MeoW"
+    },
+    {
+      "name": "meow_bad_response",
+      "value": "Le serveur relais a renvoyé des données incomplètes. Veuillez réessayer plus tard."
+    },
+    {
+      "name": "meow_network_error",
+      "value": "Échec de la requête réseau. Vérifiez votre connexion et réessayez."
+    },
+    {
+      "name": "meow_http_error",
+      "value": "Le serveur relais a renvoyé une erreur : %1$s"
+    },
+    {
+      "name": "meow_relay_unconfigured",
+      "value": "Cette version n'a pas d'adresse de relais push configurée"
+    },
+    {
+      "name": "meow_deregister_relay_failed",
+      "value": "Le serveur relais n'a pas pu annuler l'abonnement (la distribution locale est déjà arrêtée) : %1$s"
+    },
+    {
+      "name": "meow_request_code",
+      "value": "Recevoir le code de vérification"
+    },
+    {
+      "name": "meow_code_label",
+      "value": "Code de vérification"
+    },
+    {
+      "name": "meow_code_hint",
+      "value": "Entrez le code reçu"
+    },
+    {
+      "name": "meow_code_sent",
+      "value": "Un code de vérification a été envoyé à votre MeoW. Vérifiez-le et saisissez-le ci-dessous."
+    },
+    {
+      "name": "meow_confirm",
+      "value": "Terminer l'inscription"
+    },
+    {
+      "name": "meow_code_required",
+      "value": "Entrez le code de vérification"
+    },
+    {
+      "name": "meow_code_invalid",
+      "value": "Le code est incorrect ou a expiré. Demandez-en un nouveau."
     }
   ]
 }
